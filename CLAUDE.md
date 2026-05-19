@@ -31,6 +31,7 @@
 
 ## Git
 
+- **Trunk-Based Development.** Alle Änderungen laufen direkt auf `main` (bzw. dem Default-Branch) — keine Long-Running-Feature-Branches. Verbindlicher Ablauf für jede Änderung: **Pull → Read → Changes → Commit → Push.** `pull` zuerst, damit lokal mit dem Remote synchron ist. `read` heisst aktuellen Stand der betroffenen Dateien sichten (kein Blind-Edit auf Annahmen). Erst dann `changes` machen, sofort danach `commit` mit aussagekräftiger Message, abschliessend `push`. Niemals länger als nötig uncommittet liegen lassen.
 - **History-Rewrite (z.B. `git filter-repo`):** lokale Dateien IMMER behalten. Vor dem Rewrite betroffene Dateien nach `/tmp/git-backup/` kopieren. Lokale Kopien erst nach User-Bestätigung löschen.
 
 ## Datei-Caching
