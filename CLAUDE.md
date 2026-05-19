@@ -28,6 +28,7 @@
 - **Bei Unsicherheit fragen.** Lieber eine kurze Rückfrage als eine falsche Annahme — besonders bei Scope, Pfaden, destruktiven Aktionen und Architektur-Entscheidungen.
 - **Keine Duplikation.** Vor neuem Code prüfen, ob Konstante/Helfer/Klasse/Pattern bereits existiert. Wenn die bestehende Lösung nicht exakt passt: leicht abstrahieren und wiederverwenden statt kopieren und anpassen.
 - **Desired-State / Idempotenz.** Setup-Skripte müssen beliebig oft ausführbar sein, ohne Seiteneffekte zu produzieren.
+- **Verbesserungs-Loop nach jedem Run.** Nach jeder Ausführung eines Skills, MCP-Servers oder Skripts werden aus den gemachten Erfahrungen automatisch konkrete Verbesserungsvorschläge generiert — Reibung, Fehlerfälle, Edge-Cases, Effizienz-Gewinne, Bugs, missverständliche Defaults, fehlende Idempotenz, schlechte Help-Texte. Jeder Vorschlag mit Zielort (welches Skript/welche Skill-Definition/welcher Tool-Code), kurzer Begründung, und falls möglich konkretem Diff/Patch-Vorschlag. Ausgabe direkt im Anschluss an den Run, nicht erst auf Nachfrage.
 
 ## Git
 
