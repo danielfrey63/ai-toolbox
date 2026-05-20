@@ -18,7 +18,7 @@
 #
 # Always exits 0 — a non-artifact edit is a silent no-op, so it is hook-safe.
 
-APP_VERSION='0.0.2'
+APP_VERSION='0.0.3'
 set -u
 
 INIT_VERSION='0.0.1'
@@ -203,10 +203,14 @@ case "$TYPE" in
 esac
 
 # --- report -------------------------------------------------------------------
+# When a skill sub-file triggered the bump, FILE (the edited file) differs from
+# TARGET (the SKILL.md whose version moved) — log both so the trigger is traceable.
+VIA=''
+[ "$FILE" != "$TARGET" ] && VIA=" (via $FILE)"
 repo=$(git -C "$(dirname "$TARGET")" rev-parse --show-toplevel 2>/dev/null || true)
 if [ -n "$repo" ] && [ -d "$repo/.claude" ]; then
-    printf '[%s] %-7s %s :: %s\n' "$(date '+%F %T')" "$TYPE" "$TARGET" "$RESULT" \
+    printf '[%s] %-7s %s%s :: %s\n' "$(date '+%F %T')" "$TYPE" "$TARGET" "$VIA" "$RESULT" \
         >> "$repo/.claude/hook-log.txt" 2>/dev/null || true
 fi
-printf 'bump-version: %s %s :: %s\n' "$TYPE" "$TARGET" "$RESULT"
+printf 'bump-version: %s %s%s :: %s\n' "$TYPE" "$TARGET" "$VIA" "$RESULT"
 exit 0

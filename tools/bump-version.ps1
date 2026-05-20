@@ -10,7 +10,7 @@
 # Dual mode: `bump-version.ps1 <file>` as a CLI, or a Codex / Claude Code
 # PostToolUse hook JSON payload on stdin. Always exits 0.
 
-$APP_VERSION = '0.0.2'
+$APP_VERSION = '0.0.3'
 $ErrorActionPreference = 'Stop'
 
 $InitVersion = '0.0.1'
@@ -174,12 +174,15 @@ switch ($type) {
 }
 
 # --- report -------------------------------------------------------------------
+# When a skill sub-file triggered the bump, $file (the edited file) differs from
+# $target (the SKILL.md whose version moved) — log both so the trigger is traceable.
+$via = if ($file -ne $target) { " (via $file)" } else { '' }
 try {
     $repo = (git -C (Split-Path -Parent $target) rev-parse --show-toplevel 2>$null)
     if ($repo -and (Test-Path -LiteralPath "$repo/.claude")) {
         $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-        Add-Content -LiteralPath "$repo/.claude/hook-log.txt" -Value "[$stamp] $type $target :: $($script:Result)"
+        Add-Content -LiteralPath "$repo/.claude/hook-log.txt" -Value "[$stamp] $type $target$via :: $($script:Result)"
     }
 } catch { }
-Write-Output "bump-version: $type $target :: $($script:Result)"
+Write-Output "bump-version: $type $target$via :: $($script:Result)"
 exit 0
