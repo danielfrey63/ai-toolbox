@@ -23,7 +23,7 @@
 # Idempotent: build re-links cleanly, clean removes only our own symlinks,
 # a foreign file/dir at the target is never clobbered.
 
-APP_VERSION='0.5.22'
+APP_VERSION='0.6.28'
 set -u
 
 SELF_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -36,6 +36,11 @@ install — install AI-Toolbox tools from the catalog (tools/catalog.json).
 
 Usage:
   install.sh <build|status|clean> --target <claude|codex|agents> [options]
+  install.sh list
+
+Commands:
+  build | status | clean  Install / report / remove the selected tools.
+  list                    Print the installable tools from the catalog.
 
 Options:
   --target   claude | codex | agents     Required, except when only hook tools are selected.
@@ -52,12 +57,23 @@ Tool types: skill, hook, plugin.
 EOF
 }
 
+# Print the catalog as a readable table — answers "what can I install?".
+print_catalog_list() {
+    printf 'install — available tools (%s):\n\n' "$CATALOG"
+    printf '  %-20s %-7s %s\n' NAME TYPE DESCRIPTION
+    jq -r '.tools[] | [.name, .type, .description] | @tsv' "$CATALOG" \
+        | while IFS=$(printf '\t') read -r n t d; do
+            printf '  %-20s %-7s %s\n' "$n" "$t" "$d"
+        done
+    printf '\nSelect one with --what <name> or a group with --what <type>; default is all.\n'
+}
+
 # --- command ------------------------------------------------------------------
 CMD=${1:-}
 case "$CMD" in
-    build|status|clean) shift ;;
+    build|status|clean|list) shift ;;
     -h|--help) usage; exit 0 ;;
-    '') printf 'install: missing command (build|status|clean)\n' >&2; exit 2 ;;
+    '') printf 'install: missing command (build|status|clean|list)\n' >&2; exit 2 ;;
     *)  printf 'install: unknown command: %s\n' "$CMD" >&2; exit 2 ;;
 esac
 
@@ -108,6 +124,12 @@ esac
 [ -f "$CATALOG" ] || { printf 'install: catalog not found: %s\n' "$CATALOG" >&2; exit 1; }
 command -v jq >/dev/null 2>&1 \
     || { printf 'install: jq is required to read the catalog\n' >&2; exit 1; }
+
+# "list" just prints the catalog — no scope/target/selection needed.
+if [ "$CMD" = list ]; then
+    print_catalog_list
+    exit 0
+fi
 
 # --- skill handler ------------------------------------------------------------
 skill_destdir() {
@@ -305,7 +327,8 @@ printf 'install %s — scope=%s target=%s what=%s\n' "$CMD" "$SCOPE" "$TARGET" "
 selected=$(jq -c --arg what "$WHAT" \
     '.tools[] | select($what == "all" or .name == $what or .type == $what)' "$CATALOG")
 if [ -z "$selected" ]; then
-    printf 'install: nothing in the catalog matches --what %s\n' "$WHAT" >&2
+    printf 'install: nothing in the catalog matches --what %s\n\n' "$WHAT" >&2
+    print_catalog_list >&2
     exit 1
 fi
 

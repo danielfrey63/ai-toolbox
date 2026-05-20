@@ -17,7 +17,7 @@
 # Idempotent: build re-links cleanly, clean removes only our own links,
 # a foreign file/dir at the target is never clobbered.
 
-$APP_VERSION = '0.5.21'
+$APP_VERSION = '0.6.26'
 $ErrorActionPreference = 'Stop'
 
 $SelfDir  = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -30,6 +30,11 @@ install — install AI-Toolbox tools from the catalog (tools/catalog.json).
 
 Usage:
   install.ps1 <build|status|clean> --target <claude|codex|agents> [options]
+  install.ps1 list
+
+Commands:
+  build | status | clean  Install / report / remove the selected tools.
+  list                    Print the installable tools from the catalog.
 
 Options:
   --target   claude | codex | agents     Required, except when only hook tools are selected.
@@ -46,11 +51,21 @@ Tool types: skill, hook, plugin.
 '@
 }
 
+# Print the catalog as a readable table — answers "what can I install?".
+function Show-CatalogList {
+    Write-Output "install — available tools ($Catalog):`n"
+    Write-Output ('  {0,-20} {1,-7} {2}' -f 'NAME', 'TYPE', 'DESCRIPTION')
+    foreach ($t in (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools) {
+        Write-Output ('  {0,-20} {1,-7} {2}' -f $t.name, $t.type, $t.description)
+    }
+    Write-Output "`nSelect one with --what <name> or a group with --what <type>; default is all."
+}
+
 # --- command ------------------------------------------------------------------
 $Cmd = if ($args.Count -ge 1) { [string]$args[0] } else { '' }
 if ($Cmd -in @('-h', '--help')) { Show-Usage; exit 0 }
-if ($Cmd -notin @('build', 'status', 'clean')) {
-    [Console]::Error.WriteLine("install: missing or unknown command (build|status|clean)")
+if ($Cmd -notin @('build', 'status', 'clean', 'list')) {
+    [Console]::Error.WriteLine("install: missing or unknown command (build|status|clean|list)")
     exit 2
 }
 
@@ -102,6 +117,9 @@ if ($Scope -eq 'project') {
 if (-not (Test-Path -LiteralPath $Catalog)) {
     [Console]::Error.WriteLine("install: catalog not found: $Catalog"); exit 1
 }
+
+# "list" just prints the catalog — no scope/target/selection needed.
+if ($Cmd -eq 'list') { Show-CatalogList; exit 0 }
 
 # --- skill handler ------------------------------------------------------------
 function Get-SkillDestDir {
@@ -300,7 +318,9 @@ $selected = $tools | Where-Object {
     $What -eq 'all' -or $_.name -eq $What -or $_.type -eq $What
 }
 if (-not $selected) {
-    [Console]::Error.WriteLine("install: nothing in the catalog matches --what $What"); exit 1
+    [Console]::Error.WriteLine("install: nothing in the catalog matches --what $What")
+    Show-CatalogList
+    exit 1
 }
 
 # --target is required unless every selected tool is a hook (hooks ignore it).
