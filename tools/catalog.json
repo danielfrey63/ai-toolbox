@@ -1,0 +1,31 @@
+{
+  "_comment": "AI-Toolbox tool catalog — consumed by tools/install.{sh,ps1}. Each entry is an installable tool with a type that selects the install handler.",
+  "tools": [
+    {
+      "name": "component-audit",
+      "type": "skill",
+      "path": ".agents/skills/component-audit",
+      "description": "Audit a codebase for component-orientation drift."
+    },
+    {
+      "name": "discover",
+      "type": "skill",
+      "path": ".agents/skills/discover",
+      "description": "Discover interesting recent videos across AI and dev topics."
+    },
+    {
+      "name": "watch",
+      "type": "plugin",
+      "path": ".agents/skills/watch",
+      "description": "Let Claude watch a video — frames, transcript, diarization.",
+      "marketplace": "watch",
+      "plugin": "watch"
+    },
+    {
+      "name": "versioning-hooks",
+      "type": "hook",
+      "path": "tools/githooks",
+      "description": "Per-artifact version-bump git hooks (pre-commit + post-commit)."
+    }
+  ]
+}
