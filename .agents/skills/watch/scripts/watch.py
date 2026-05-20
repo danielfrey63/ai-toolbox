@@ -211,7 +211,7 @@ from frames import (  # noqa: E402
 )
 from resources import collect as collect_resources, format_section as format_resources  # noqa: E402
 from transcribe import filter_range, format_transcript, parse_vtt  # noqa: E402
-from stt import extract_audio, load_api_key, transcribe_video  # noqa: E402
+from stt import extract_audio, select_backend, transcribe_video  # noqa: E402
 
 
 def main() -> int:
@@ -233,9 +233,10 @@ def main() -> int:
     )
     ap.add_argument(
         "--whisper",
-        choices=["groq", "openai"],
+        choices=["azure-diarize", "groq", "openai"],
         default=None,
-        help="Force a specific Whisper backend. Default: prefer Groq, fall back to OpenAI.",
+        help="Force a specific transcription backend. Default: prefer "
+             "azure-diarize (private, when configured), then Groq, then OpenAI.",
     )
     ap.add_argument(
         "--whisper-workers",
@@ -375,7 +376,6 @@ def main() -> int:
     # the user can see what's actually running and override if needed.
     from frames import _default_workers as _frame_default
     from stt import WHISPER_PARALLEL_UPLOADS as _whisper_default
-    from stt import load_api_key as _load_whisper_key
     from diarize import _load_env_value as _load_diarize_env
     frame_workers = args.frame_workers if args.frame_workers is not None else _frame_default()
     whisper_workers = args.whisper_workers if args.whisper_workers is not None else _whisper_default
@@ -389,8 +389,14 @@ def main() -> int:
     )
     # Transcript + diarization availability summary - flags missing keys
     # before they bite mid-run.
-    _wb, _wk = _load_whisper_key(args.whisper)
-    whisper_status = f"whisper={_wb}" if _wb and _wk else "whisper=NONE (no GROQ/OPENAI key)"
+    try:
+        _stt = select_backend(args.whisper or None)
+    except SystemExit:
+        _stt = None
+    stt_status = (
+        f"stt={_stt.name}" if _stt
+        else "stt=NONE (no transcription backend configured)"
+    )
     diarize_avail = []
     if _load_diarize_env("ASSEMBLYAI_API_KEY"):
         diarize_avail.append("assemblyai")
@@ -406,7 +412,7 @@ def main() -> int:
         f"diarize requested: {args.diarize}"
         if args.diarize else "diarize: off (--diarize to enable)"
     )
-    print(f"[watch] transcript: {whisper_status} | {diarize_active}", file=sys.stderr)
+    print(f"[watch] transcript: {stt_status} | {diarize_active}", file=sys.stderr)
     if args.diarize:
         print(f"[watch] {diarize_status}", file=sys.stderr)
 
@@ -636,33 +642,33 @@ def main() -> int:
             diarize_backend = None
 
     if not transcript_segments and not args.no_whisper:
-        backend, api_key = load_api_key(args.whisper)
-        if backend and api_key:
+        stt_backend = None
+        try:
+            stt_backend = select_backend(args.whisper or None)
+        except SystemExit as exc:
+            # --whisper X was set explicitly but X is not configured.
+            print(f"[watch] {exc}", file=sys.stderr)
+        if stt_backend is None and args.whisper is None:
+            setup_py = SCRIPT_DIR / "setup.py"
+            print(
+                "[watch] no subtitles and no transcription backend configured - "
+                f"run `python3 {setup_py}` to enable transcription",
+                file=sys.stderr,
+            )
+        if stt_backend is not None:
             try:
                 all_segments, used_backend = transcribe_video(
                     video_path,
                     work / "audio.mp3",
-                    backend=backend,
-                    api_key=api_key,
+                    backend=stt_backend.name,
                     parallel_uploads=args.whisper_workers,
                 )
                 transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
-                transcript_source = f"whisper ({used_backend})"
-                # Whisper extracted the audio as a side effect - reuse for pyannote.
+                transcript_source = f"transcript ({used_backend})"
+                # Transcription extracted the audio as a side effect - reuse it.
                 audio_path = work / "audio.mp3"
             except SystemExit as exc:
-                print(f"[watch] whisper fallback failed: {exc}", file=sys.stderr)
-        else:
-            hint = (
-                f"--whisper {args.whisper} was set but the matching API key is missing"
-                if args.whisper else
-                "no subtitles and no Whisper API key found"
-            )
-            setup_py = SCRIPT_DIR / "setup.py"
-            print(
-                f"[watch] {hint} - run `python3 {setup_py}` to enable the Whisper fallback",
-                file=sys.stderr,
-            )
+                print(f"[watch] transcription failed: {exc}", file=sys.stderr)
 
     # Pyannote runs alongside Whisper and aligns to the transcript;
     # AssemblyAI already delivered speakers above.
@@ -884,9 +890,9 @@ def main() -> int:
         setup_py = SCRIPT_DIR / "setup.py"
         emit_t(
             "_No transcript available - proceed with frames only. "
-            "Captions were missing and the Whisper fallback was unavailable "
-            "(no API key set, or `--no-whisper` was used). "
-            f"Run `python3 {setup_py}` to enable Whisper, then re-run._"
+            "Captions were missing and no transcription backend was available "
+            "(none configured, or `--no-whisper` was used). "
+            f"Run `python3 {setup_py}` to enable transcription, then re-run._"
         )
 
     resources_grouped = collect_resources(

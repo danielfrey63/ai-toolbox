@@ -42,7 +42,7 @@ Claude is great at reading and synthesizing — but until now, video was the one
 3. **`ffmpeg` runs an `scdet` pass to find scene cuts.** Every frame's pixel-difference score is recorded; a knee-point heuristic on the score distribution picks a per-video threshold (no static cut-off). Each surviving cut becomes one extracted frame, with a configurable settle-delay (default 1.0 s) so UI transitions / launchers / dialogs finish rendering before capture — no more black mid-transition pixels. Disable scene detection with `--no-scene`, override the threshold with `--scene-threshold F`.
 4. **`ffmpeg` extracts the regular frame budget gap-filled around the cuts.** The frame budget is duration-aware (≤30s gets ~30 frames, 30-60s gets ~40, 1-3min gets ~60, 3-10min gets ~80). Instead of sampling at uniform intervals, the script distributes those frames into the gaps between cuts proportional to gap length — cut-dense regions don't waste regular budget; long uncovered spans get more attention. JPEGs at 512px wide by default — bump with `--resolution 1024` if Claude needs to read on-screen text.
 5. **Long videos auto-chunk by default.** Videos longer than 10 min without an explicit `--start`/`--end` window split into `ceil(duration / 10min)` evenly-sized chunks; each chunk gets the focused-mode dense frame budget (default 80 per chunk) and per-chunk gap-fill against the cuts that fall in it. A 60-min video yields ~480 regular frames instead of 100 sparse ones — proportionally more image tokens, but per-chunk coverage comparable to dedicated focused runs. Pass `--no-chunk` to revert to single-pass sparse, or `--start`/`--end` to focus on one section.
-6. **The transcript comes from one of three places.** First: `yt-dlp` pulls native captions (manual or auto-generated). Second: extract mono 16 kHz audio and ship to Whisper — Groq's `whisper-large-v3` (preferred — cheaper and faster) or OpenAI's `whisper-1`. Third (opt-in via `--diarize`): speaker diarization with one of three backends — AssemblyAI (cloud, transcription + speaker labels in one call), pyannote.ai (cloud, diarization-only, aligned to Whisper), or pyannote.audio local (free, runs on your machine, heavy install). Output transcript lines become `[12:34] [<speaker>] text`; speaker letters get substituted with canonical first names (`[A]` → `[Urs]`) by Claude during the analysis based on address-pattern + frame-avatar evidence.
+6. **The transcript comes from captions or a pluggable speech-to-text backend.** First: `yt-dlp` pulls native captions (manual or auto-generated) — free, covers most public videos. Otherwise the skill extracts mono 16 kHz audio and sends it to an STT backend: **Azure `gpt-4o-transcribe-diarize`** (preferred when configured — runs on your own Azure tenant and transcribes *and* diarizes in one call, so private content never touches a public API), or Groq's `whisper-large-v3` (preferred public — cheaper and faster) / OpenAI's `whisper-1`. Long audio is chunked automatically — by file size for Whisper, by duration for Azure — and stitched back onto a single timeline; for the Azure backend each chunk is diarized independently and a `claude-opus-4-7` pass reconciles the per-chunk speaker labels into consistent global speakers. On top of that, `--diarize` adds a dedicated diarization step for the Whisper path — AssemblyAI (cloud, transcription + speaker labels in one call), pyannote.ai (cloud, diarization-only, aligned to Whisper), or pyannote.audio local (free, runs on your machine, heavy install). Output transcript lines become `[12:34] [<speaker>] text`; speaker letters get substituted with canonical first names (`[A]` → `[Urs]`) by Claude during the analysis based on address-pattern + frame-avatar evidence.
 7. **A `## Resources` section aggregates URLs.** Every `https://` link in the video description (yt-dlp's `description` field) plus URLs that appear in the transcript get deduped, normalized (tracking params stripped), and grouped — Projects (GitHub/GitLab/Bitbucket/Codeberg/sr.ht repos, npm/PyPI/crates/RubyGems/Go/Packagist/NuGet, Hugging Face), Docs, Articles (incl. arxiv/openreview), Videos, Social, Other. Each entry is annotated with where it came from (`description` or `transcript@MM:SS`).
 8. **Frames + transcript + resources are handed to Claude.** Each entry in the merged frame list is tagged `[REG]` (regular gap-filled) or `[CUT]` (scdet-detected). Claude `Read`s every frame path in parallel — JPEGs render directly as images in its context.
 9. **Claude answers grounded in what's actually on screen and in the audio.** Not "based on the description" or "according to the title." It saw the frames. It heard the transcript. It surfaces the relevant URLs from `## Resources` so you can click through. It answers the way someone who watched the video would.
@@ -122,7 +122,7 @@ On the first `/watch` call, the skill runs `scripts/setup.py --check`. If `ffmpe
 - **macOS** — auto-runs `brew install ffmpeg yt-dlp`.
 - **Linux** — prints the exact `apt` / `dnf` / `pipx` commands.
 - **Windows** — prints the `winget` / `pip` commands.
-- **API key** — scaffolds `~/.config/watch/.env` (mode `0600`) with commented placeholders for `GROQ_API_KEY` (preferred) and `OPENAI_API_KEY`.
+- **API keys** — scaffolds `~/.config/watch/.env` (mode `0600`) from `.env.example` with commented placeholders for every backend: `GROQ_API_KEY` (preferred Whisper) / `OPENAI_API_KEY`, the private Azure `gpt-4o-transcribe-diarize` + `claude-opus-4-7` endpoints, and the speaker-diarization backends.
 
 After setup, preflight is silent and `/watch` just works. The check is a sub-100ms lookup, so it doesn't slow you down on subsequent runs.
 
@@ -135,7 +135,9 @@ Captions cover the majority of public videos for free. The Whisper fallback only
 | Download + native captions | `yt-dlp` + `ffmpeg` | Free |
 | Whisper fallback (preferred) | [Groq API key](https://console.groq.com/keys) — `whisper-large-v3` | Cheap, fast |
 | Whisper fallback (alt) | [OpenAI API key](https://platform.openai.com/api-keys) — `whisper-1` | Standard pricing |
-| Disable Whisper entirely | `--no-whisper` | Free, frames-only when no captions |
+| Transcription + diarization, private (`--whisper azure-diarize`) | Azure `gpt-4o-transcribe-diarize` deployment URL + key | Your Azure tenant — audio never leaves it |
+| Speaker reconciliation for long private audio | Azure `claude-opus-4-7` endpoint URL + key | Your Azure tenant |
+| Disable transcription entirely | `--no-whisper` | Free, frames-only when no captions |
 | Speaker diarization — AssemblyAI (`--diarize assemblyai`) | [AssemblyAI key](https://www.assemblyai.com/dashboard/api-keys) — `universal-3-pro` + speaker labels | ~$0.37/h, replaces Whisper |
 | Speaker diarization — pyannote.ai (`--diarize pyannote-api`) | [pyannote.ai key](https://www.pyannote.ai/) — cloud diarization, aligned to Whisper | Cheaper than AssemblyAI, two API calls |
 | Speaker diarization — local (`--diarize pyannote-local`) | `pip install pyannote.audio` + [HF_TOKEN](https://huggingface.co/pyannote/speaker-diarization-3.1) + license accept | Free, slow on CPU, fast on GPU |
@@ -175,7 +177,7 @@ Other knobs (passed to `scripts/watch.py`):
 - `--scene-min-gap S` — minimum seconds between consecutive cut frames (default 2.0; de-clusters animation/B-roll bursts).
 - `--scene-max-frames N` — cap on additional cut frames (default 80, applied separately from `--max-frames`).
 - `--scene-settle-seconds S` — seconds after a detected cut to wait before extracting (default 1.0). Lets UI transitions render so cut frames don't land on loading-state pixels. Set to 0 for the old just-before-cut behavior.
-- `--whisper groq|openai` — force a specific Whisper backend.
+- `--whisper azure-diarize|groq|openai` — force a specific transcription backend. Default: prefer `azure-diarize` when its keys are set, then Groq, then OpenAI.
 - `--no-whisper` — disable transcription entirely; frames only.
 - `--out-dir DIR` — keep working files somewhere specific (default: auto-generated tmp dir).
 - `--save-md PATH` — override the auto-save location (defaults: `<video-stem>.md` next to local sources; `./watch/<YYYY-MM-DD>-<slug>/<slug>.md` for URL sources).
@@ -185,7 +187,7 @@ Other knobs (passed to `scripts/watch.py`):
 
 - **Best per-second accuracy: under 10 minutes.** For longer videos, auto-chunking gives you per-chunk dense coverage (~80 frames each), but image-token cost grows proportionally. Pass `--start`/`--end` to focus on a section, or `--no-chunk` to fall back to sparse single-pass.
 - **Per-chunk cap: 2 fps, 100 frames.** Frame count drives token cost; the script enforces this even when the auto-fps math would imply higher.
-- **Whisper upload limit: handled internally.** Long audio auto-splits into 20 MB chunks with 20 s overlap (transparent to you); no hard limit on duration.
+- **Transcription length limits: handled internally.** Long audio auto-splits transparently — Whisper by file size (20 MB chunks), the Azure backend by duration (~600 s chunks; the model caps a single call at ~1500 s) — both with 20 s overlap, stitched back onto one timeline.
 - **AssemblyAI upload limit: 5 GB / 10 h per file.** Effectively unlimited for normal use.
 - **No private platforms.** This skill doesn't log into anything. Public URLs and local files only. If yt-dlp can't reach it without auth, neither can `/watch`.
 
@@ -199,7 +201,7 @@ Other knobs (passed to `scripts/watch.py`):
 │   ├── download.py          # yt-dlp wrapper
 │   ├── frames.py            # ffmpeg frame extraction + scdet + auto-fps + auto-chunk
 │   ├── transcribe.py        # VTT parsing + dedupe + segment formatting
-│   ├── stt.py               # speech-to-text module - Groq / OpenAI Whisper clients (pure stdlib, audio auto-split)
+│   ├── stt.py               # speech-to-text — pluggable backends (Azure transcribe-diarize, Groq/OpenAI Whisper), auto-split + stitch + speaker reconcile
 │   ├── diarize.py           # AssemblyAI / pyannote.ai / pyannote.audio local backends
 │   ├── resources.py         # URL extraction from description + transcript, categorized
 │   ├── setup.py             # preflight + installer + .env scaffolding
