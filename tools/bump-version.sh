@@ -1,41 +1,59 @@
 #!/usr/bin/env bash
 # bump-version.sh — generic per-artifact version bumper for the AI-Toolbox.
 #
-# Bumps the PATCH segment of a MAJOR.MINOR.PATCH version. The storage location
-# is chosen by artifact type:
+# Bumps one segment of a MAJOR.MINOR.BUILD version. The storage location is
+# chosen by artifact type:
 #   skill   — file under .agents/skills/<name>/  -> <name>/SKILL.md frontmatter metadata.version
 #   claude  — CLAUDE.md                          -> trailing <!-- APP_VERSION: x.y.z --> marker
 #   agent   — *.md whose parent directory is "agents" -> frontmatter top-level version
 #   script  — *.sh/.ps1/.js/.mjs/.cjs/.py/.html  -> APP_VERSION constant (only if already present)
 #
+# Segment (default: build):
+#   --build   bump BUILD (3rd) — driven by the per-edit PostToolUse hook
+#   --minor   bump MINOR (2nd), BUILD untouched — driven by the pre-commit hook
+#   --target  print the resolved artifact file without bumping (for dedup)
+#
 # A missing version is initialised to 0.0.1. The structural step (inserting the
 # version field) is idempotent; once a version exists, a run only bumps it.
 #
 # Dual mode:
-#   bump-version.sh <file>          — CLI: bump the artifact owning <file>
-#   <hook-json> | bump-version.sh   — hook: reads tool_input.file_path from a
-#                                     Claude Code / Codex PostToolUse payload
+#   bump-version.sh [--minor|--build|--target] <file>   — CLI
+#   <hook-json> | bump-version.sh [--minor|--build]      — hook: reads
+#                  tool_input.file_path from a Claude Code / Codex payload
 #
-# Always exits 0 — a non-artifact edit is a silent no-op, so it is hook-safe.
+# Always exits 0 (except on a usage error) — a non-artifact edit is a silent
+# no-op, so it is hook-safe.
 
-APP_VERSION='0.0.3'
+APP_VERSION='0.0.4'
 set -u
 
 INIT_VERSION='0.0.1'
 RESULT=''
+SEGMENT=build
+MODE=bump
 
-case "${1:-}" in
-    -h|--help)
-        cat <<'EOF'
+# --- parse arguments ----------------------------------------------------------
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help)
+            cat <<'EOF'
 bump-version — generic per-artifact version bumper for the AI-Toolbox.
 
 Usage:
-  bump-version.sh <file>        Bump the version of the artifact owning <file>.
-  bump-version.sh -h|--help     Show this help.
-  <hook-json> | bump-version.sh Hook mode: read the edited path from a Claude
-                                Code / Codex PostToolUse JSON payload on stdin.
+  bump-version.sh [--minor|--build|--target] <file>
+  bump-version.sh -h|--help
+  <hook-json> | bump-version.sh [--minor|--build]
 
-Artifact types (MAJOR.MINOR.PATCH version; the PATCH segment is bumped):
+Options:
+  --build   Bump the BUILD segment (3rd). Default. Used by the per-edit hook.
+  --minor   Bump the MINOR segment (2nd), leaving BUILD. Used by the pre-commit hook.
+  --target  Print the resolved artifact file without bumping anything.
+  -h|--help Show this help.
+
+Hook mode: with no <file>, the edited path is read from a Claude Code / Codex
+PostToolUse JSON payload on stdin.
+
+Artifact types (MAJOR.MINOR.BUILD version):
   skill   file under .agents/skills/<name>/  -> <name>/SKILL.md metadata.version
   claude  CLAUDE.md                          -> trailing <!-- APP_VERSION --> marker
   agent   *.md whose parent dir is "agents"   -> frontmatter version
@@ -43,8 +61,15 @@ Artifact types (MAJOR.MINOR.PATCH version; the PATCH segment is bumped):
 
 A missing version is initialised to 0.0.1. A non-artifact file is a no-op.
 EOF
-        exit 0 ;;
-esac
+            exit 0 ;;
+        --build)  SEGMENT=build; shift ;;
+        --minor)  SEGMENT=minor; shift ;;
+        --target) MODE=target; shift ;;
+        --)       shift; break ;;
+        -*)       printf 'bump-version: unknown option: %s\n' "$1" >&2; exit 2 ;;
+        *)        break ;;
+    esac
+done
 
 # --- resolve target file ------------------------------------------------------
 FILE=${1:-}
@@ -62,13 +87,18 @@ fi
 FILE="$(cd "$(dirname "$FILE")" && pwd)/$(basename "$FILE")"
 
 # --- helpers ------------------------------------------------------------------
-bump_patch() {
-    local major minor patch
-    IFS='.' read -r major minor patch <<< "$1"
-    case "${major}-${minor}-${patch}" in
+bump_version() {
+    # $1 = current version; bumps the segment named by the global $SEGMENT.
+    local major minor build
+    IFS='.' read -r major minor build <<< "$1"
+    case "${major}-${minor}-${build}" in
         *[!0-9-]*|*--*|-*|*-) printf '%s' "$INIT_VERSION"; return ;;
     esac
-    printf '%s.%s.%s' "$major" "$minor" "$((patch + 1))"
+    if [ "$SEGMENT" = minor ]; then
+        printf '%s.%s.%s' "$major" "$((minor + 1))" "$build"
+    else
+        printf '%s.%s.%s' "$major" "$minor" "$((build + 1))"
+    fi
 }
 
 re_escape() {
@@ -78,7 +108,7 @@ re_escape() {
 }
 
 fm_version() {
-    # Echo the first MAJOR.MINOR.PATCH on a "version:" key inside the YAML
+    # Echo the first MAJOR.MINOR.BUILD on a "version:" key inside the YAML
     # frontmatter, or nothing.
     awk '
         NR==1 && $0=="---" { fm=1; next }
@@ -125,13 +155,19 @@ fi
 
 [ -n "$TYPE" ] || exit 0
 
+# In --target mode, report the resolved artifact file and stop (no mutation).
+if [ "$MODE" = target ]; then
+    printf '%s\n' "$TARGET"
+    exit 0
+fi
+
 # --- bump implementations -----------------------------------------------------
 bump_frontmatter() {
     local f=$1 mode=$2 cur new tmp
     cur=$(fm_version "$f")
     tmp=$(mktemp)
     if [ -n "$cur" ]; then
-        new=$(bump_patch "$cur")
+        new=$(bump_version "$cur")
         awk -v cur="$cur" -v cur_re="$(re_escape "$cur")" -v new="$new" '
             NR==1 && $0=="---" { fm=1; print; next }
             fm && $0=="---"     { fm=0; print; next }
@@ -180,7 +216,7 @@ bump_marker() {
         RESULT="(init) $INIT_VERSION"
         return
     fi
-    new=$(bump_patch "$cur")
+    new=$(bump_version "$cur")
     sed -i "/APP_VERSION:/ s/$(re_escape "$cur")/$new/" "$f"
     RESULT="$cur -> $new"
 }
@@ -190,7 +226,7 @@ bump_script() {
     cur=$(grep -oE "APP_VERSION[^0-9]*['\"][0-9]+\.[0-9]+\.[0-9]+['\"]" "$f" \
           | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
     [ -n "$cur" ] || exit 0
-    new=$(bump_patch "$cur")
+    new=$(bump_version "$cur")
     sed -i "/APP_VERSION/ s/$(re_escape "$cur")/$new/" "$f"
     RESULT="$cur -> $new"
 }
@@ -209,8 +245,8 @@ VIA=''
 [ "$FILE" != "$TARGET" ] && VIA=" (via $FILE)"
 repo=$(git -C "$(dirname "$TARGET")" rev-parse --show-toplevel 2>/dev/null || true)
 if [ -n "$repo" ] && [ -d "$repo/.claude" ]; then
-    printf '[%s] %-7s %s%s :: %s\n' "$(date '+%F %T')" "$TYPE" "$TARGET" "$VIA" "$RESULT" \
+    printf '[%s] %-7s %-6s %s%s :: %s\n' "$(date '+%F %T')" "$TYPE" "$SEGMENT" "$TARGET" "$VIA" "$RESULT" \
         >> "$repo/.claude/hook-log.txt" 2>/dev/null || true
 fi
-printf 'bump-version: %s %s%s :: %s\n' "$TYPE" "$TARGET" "$VIA" "$RESULT"
+printf 'bump-version: %s %s %s%s :: %s\n' "$TYPE" "$SEGMENT" "$TARGET" "$VIA" "$RESULT"
 exit 0

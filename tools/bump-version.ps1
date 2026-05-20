@@ -1,32 +1,40 @@
 # bump-version.ps1 — generic per-artifact version bumper for the AI-Toolbox.
 #
 # PowerShell port of tools/bump-version.sh for Codex / Windows. See that file
-# for the full description of artifact types and version-storage rules:
-#   skill -> SKILL.md frontmatter metadata.version
-#   claude -> CLAUDE.md trailing <!-- APP_VERSION: x.y.z --> marker
-#   agent -> *.md (parent dir "agents") frontmatter top-level version
-#   script -> *.sh/.ps1/.js/.mjs/.cjs/.py/.html APP_VERSION constant
+# for the full description of artifact types and version-storage rules.
 #
-# Dual mode: `bump-version.ps1 <file>` as a CLI, or a Codex / Claude Code
-# PostToolUse hook JSON payload on stdin. Always exits 0.
+# Segment (default: build):
+#   --build   bump BUILD (3rd) — driven by the per-edit PostToolUse hook
+#   --minor   bump MINOR (2nd), BUILD untouched — driven by the pre-commit hook
+#   --target  print the resolved artifact file without bumping (for dedup)
+#
+# Dual mode: `bump-version.ps1 [--minor|--build|--target] <file>` as a CLI, or a
+# Codex / Claude Code PostToolUse hook JSON payload on stdin. Always exits 0
+# (except on a usage error).
 
-$APP_VERSION = '0.0.3'
+$APP_VERSION = '0.0.5'
 $ErrorActionPreference = 'Stop'
 
 $InitVersion = '0.0.1'
 $script:Result = ''
+$script:Segment = 'build'
 
-if ($args.Count -ge 1 -and ($args[0] -in @('-h', '--help', '-Help', '/?'))) {
+if ($args | Where-Object { $_ -in @('-h', '--help', '-Help', '/?') }) {
     Write-Output @'
 bump-version — generic per-artifact version bumper for the AI-Toolbox.
 
 Usage:
-  bump-version.ps1 <file>         Bump the version of the artifact owning <file>.
-  bump-version.ps1 -h|--help      Show this help.
-  <hook-json> | bump-version.ps1  Hook mode: read the edited path from a Codex /
-                                  Claude Code PostToolUse JSON payload on stdin.
+  bump-version.ps1 [--minor|--build|--target] <file>
+  bump-version.ps1 -h|--help
+  <hook-json> | bump-version.ps1 [--minor|--build]
 
-Artifact types (MAJOR.MINOR.PATCH version; the PATCH segment is bumped):
+Options:
+  --build   Bump the BUILD segment (3rd). Default. Used by the per-edit hook.
+  --minor   Bump the MINOR segment (2nd), leaving BUILD. Used by the pre-commit hook.
+  --target  Print the resolved artifact file without bumping anything.
+  -h|--help Show this help.
+
+Artifact types (MAJOR.MINOR.BUILD version):
   skill   file under .agents/skills/<name>/  -> <name>/SKILL.md metadata.version
   claude  CLAUDE.md                          -> trailing <!-- APP_VERSION --> marker
   agent   *.md whose parent dir is "agents"   -> frontmatter version
@@ -37,9 +45,28 @@ A missing version is initialised to 0.0.1. A non-artifact file is a no-op.
     exit 0
 }
 
-function Bump-Patch([string]$v) {
+# --- parse arguments ----------------------------------------------------------
+$mode = 'bump'
+$positional = @()
+foreach ($a in $args) {
+    # switch -Regex falls through without break — every branch must break so a
+    # matched flag like "--build" does not also hit the "^-." unknown-option rule.
+    switch -Regex ([string]$a) {
+        '^--build$'  { $script:Segment = 'build'; break }
+        '^--minor$'  { $script:Segment = 'minor'; break }
+        '^--target$' { $mode = 'target'; break }
+        '^--$'       { break }
+        '^-.'        { [Console]::Error.WriteLine("bump-version: unknown option: $a"); exit 2 }
+        default      { $positional += $a; break }
+    }
+}
+
+function Bump-Version([string]$v) {
     $p = $v -split '\.'
     if ($p.Count -ne 3 -or ($p | Where-Object { $_ -notmatch '^\d+$' })) { return $InitVersion }
+    if ($script:Segment -eq 'minor') {
+        return '{0}.{1}.{2}' -f $p[0], ([int]$p[1] + 1), $p[2]
+    }
     return '{0}.{1}.{2}' -f $p[0], $p[1], ([int]$p[2] + 1)
 }
 
@@ -56,12 +83,12 @@ function Get-FmVersion([string[]]$lines) {
     return $null
 }
 
-function Bump-Frontmatter([string]$f, [string]$mode) {
+function Bump-Frontmatter([string]$f, [string]$fmode) {
     $lines = @(Get-Content -LiteralPath $f)
     $cur = Get-FmVersion $lines
     $out = New-Object System.Collections.Generic.List[string]
     if ($cur) {
-        $new = Bump-Patch $cur
+        $new = Bump-Version $cur
         $fm = $false; $done = $false
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $ln = $lines[$i]
@@ -80,12 +107,12 @@ function Bump-Frontmatter([string]$f, [string]$mode) {
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $ln = $lines[$i]
             if ($i -eq 0 -and $ln -eq '---') { $fm = $true; $out.Add($ln); continue }
-            if ($fm -and $mode -eq 'skill' -and $ln -match '^metadata:\s*$') {
+            if ($fm -and $fmode -eq 'skill' -and $ln -match '^metadata:\s*$') {
                 $out.Add($ln); $out.Add("  version: `"$new`""); $ins = $true; continue
             }
             if ($fm -and $ln -eq '---') {
                 if (-not $ins) {
-                    if ($mode -eq 'skill') { $out.Add('metadata:'); $out.Add("  version: `"$new`"") }
+                    if ($fmode -eq 'skill') { $out.Add('metadata:'); $out.Add("  version: `"$new`"") }
                     else { $out.Add("version: `"$new`"") }
                 }
                 $fm = $false; $out.Add($ln); continue
@@ -107,7 +134,7 @@ function Bump-Marker([string]$f) {
         return
     }
     $cur = $m.Groups[1].Value
-    $new = Bump-Patch $cur
+    $new = Bump-Version $cur
     $content = [regex]::Replace($content, 'APP_VERSION:\s*' + [regex]::Escape($cur), "APP_VERSION: $new", 1)
     [System.IO.File]::WriteAllText($f, $content)
     $script:Result = "$cur -> $new"
@@ -118,7 +145,7 @@ function Bump-Script([string]$f) {
     $m = [regex]::Match($content, "APP_VERSION[^0-9]*['`"](\d+\.\d+\.\d+)['`"]")
     if (-not $m.Success) { exit 0 }
     $cur = $m.Groups[1].Value
-    $new = Bump-Patch $cur
+    $new = Bump-Version $cur
     $content = [regex]::Replace($content, "(APP_VERSION[^0-9]*['`"])" + [regex]::Escape($cur), "`${1}$new", 1)
     [System.IO.File]::WriteAllText($f, $content)
     $script:Result = "$cur -> $new"
@@ -126,8 +153,8 @@ function Bump-Script([string]$f) {
 
 # --- resolve target file ------------------------------------------------------
 $file = $null
-if ($args.Count -ge 1 -and $args[0]) {
-    $file = [string]$args[0]
+if ($positional.Count -ge 1 -and $positional[0]) {
+    $file = [string]$positional[0]
 } else {
     $raw = [Console]::In.ReadToEnd()
     if ($raw) {
@@ -165,6 +192,12 @@ if (-not $type) {
 }
 if (-not $type) { exit 0 }
 
+# In --target mode, report the resolved artifact file and stop (no mutation).
+if ($mode -eq 'target') {
+    Write-Output $target
+    exit 0
+}
+
 # --- bump ---------------------------------------------------------------------
 switch ($type) {
     'skill'  { Bump-Frontmatter $target 'skill' }
@@ -181,8 +214,8 @@ try {
     $repo = (git -C (Split-Path -Parent $target) rev-parse --show-toplevel 2>$null)
     if ($repo -and (Test-Path -LiteralPath "$repo/.claude")) {
         $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-        Add-Content -LiteralPath "$repo/.claude/hook-log.txt" -Value "[$stamp] $type $target$via :: $($script:Result)"
+        Add-Content -LiteralPath "$repo/.claude/hook-log.txt" -Value "[$stamp] $type $($script:Segment) $target$via :: $($script:Result)"
     }
 } catch { }
-Write-Output "bump-version: $type $target$via :: $($script:Result)"
+Write-Output "bump-version: $type $($script:Segment) $target$via :: $($script:Result)"
 exit 0
