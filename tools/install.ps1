@@ -13,7 +13,7 @@
 # Idempotent: build re-links cleanly, clean removes only our own links,
 # a foreign file/dir at the target is never clobbered.
 
-$APP_VERSION = '0.3.10'
+$APP_VERSION = '0.4.15'
 $ErrorActionPreference = 'Stop'
 
 $SelfDir  = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -28,7 +28,7 @@ Usage:
   install.ps1 <build|status|clean> --target <claude|codex|agents> [options]
 
 Options:
-  --target  claude | codex | agents     Required. Which CLI/agent to install for.
+  --target  claude | codex | agents     Required, except when only hook tools are selected.
   --scope   global | project            Default: global ($HOME). project needs --project.
   --project PATH                        Project root; required when --scope project.
   --what    all | <tool-name> | <type>  Default: all. Select catalog entries.
@@ -73,8 +73,10 @@ while ($i -lt $args.Count) {
 }
 
 # --- validate -----------------------------------------------------------------
-if ($Target -notin @('claude', 'codex', 'agents')) {
-    [Console]::Error.WriteLine("install: --target is required (claude|codex|agents)"); exit 2
+# An empty --target is allowed here; whether it is required depends on the
+# selected tool types and is checked once the catalog selection is known.
+if ($Target -and $Target -notin @('claude', 'codex', 'agents')) {
+    [Console]::Error.WriteLine("install: invalid --target: $Target"); exit 2
 }
 if ($Scope -eq 'project') {
     if (-not $Project) {
@@ -156,6 +158,22 @@ function Handle-Skill([string]$name, [string]$path) {
 # --- hook handler -------------------------------------------------------------
 # Installs the versioning git-hooks into a repo by pointing its core.hooksPath
 # at the toolbox hook directory. Per-repo: needs --scope project, ignores --target.
+
+# Printed after a fresh hook install — a README snippet for the target repo so
+# contributors know to activate the hooks too (git hooks are never cloned).
+function Show-ReadmeHint {
+    Write-Output @'
+      -> Add a setup note to this repo's README — git hooks are never cloned,
+         so every clone must activate them once:
+
+         ## Versioning
+         Artifacts here are version-bumped by the AI-Toolbox git hooks.
+         Once per clone, from this repo's root:
+           git clone https://github.com/danielfrey63/ai-toolbox.git   # if needed
+           <ai-toolbox>/tools/install.ps1 build --what versioning-hooks --scope project --project .
+'@
+}
+
 function Handle-Hook([string]$name, [string]$path) {
     $hooksdir = Join-Path $RepoRoot $path
     if ($Scope -ne 'project') {
@@ -175,6 +193,7 @@ function Handle-Hook([string]$name, [string]$path) {
             }
             git -C $prepo config --local core.hooksPath $hooksdir
             Write-Output "  [+] $name  core.hooksPath -> $hooksdir"
+            Show-ReadmeHint
         }
         'status' {
             if ($cur -eq $hooksdir) { Write-Output "  [ok] $name  $prepo" }
@@ -253,6 +272,15 @@ $selected = $tools | Where-Object {
 }
 if (-not $selected) {
     [Console]::Error.WriteLine("install: nothing in the catalog matches --what $What"); exit 1
+}
+
+# --target is required unless every selected tool is a hook (hooks ignore it).
+if (-not $Target) {
+    $needsTarget = $selected | Where-Object { $_.type -ne 'hook' } | Select-Object -First 1
+    if ($needsTarget) {
+        [Console]::Error.WriteLine("install: --target is required (claude|codex|agents) — `"$($needsTarget.name)`" needs it")
+        exit 2
+    }
 }
 
 foreach ($tool in $selected) {

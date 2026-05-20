@@ -13,13 +13,13 @@
 #
 # Parameter families:
 #   scope   global (default; base = $HOME) | project (base = --project PATH)
-#   target  claude | codex | agents  — required, no default
+#   target  claude | codex | agents  — required unless the selection is hook-only
 #   what    all (default) | a tool name | a tool type
 #
 # Idempotent: build re-links cleanly, clean removes only our own symlinks,
 # a foreign file/dir at the target is never clobbered.
 
-APP_VERSION='0.3.10'
+APP_VERSION='0.4.16'
 set -u
 
 SELF_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -34,7 +34,7 @@ Usage:
   install.sh <build|status|clean> --target <claude|codex|agents> [options]
 
 Options:
-  --target  claude | codex | agents     Required. Which CLI/agent to install for.
+  --target  claude | codex | agents     Required, except when only hook tools are selected.
   --scope   global | project            Default: global ($HOME). project needs --project.
   --project PATH                        Project root; required when --scope project.
   --what    all | <tool-name> | <type>  Default: all. Select catalog entries.
@@ -78,10 +78,11 @@ while [ $# -gt 0 ]; do
 done
 
 # --- validate -----------------------------------------------------------------
+# An empty --target is allowed here; whether it is actually required depends on
+# the selected tool types and is checked once the catalog selection is known.
 case "$TARGET" in
-    claude|codex|agents) ;;
-    '') printf 'install: --target is required (claude|codex|agents)\n' >&2; exit 2 ;;
-    *)  printf 'install: invalid --target: %s\n' "$TARGET" >&2; exit 2 ;;
+    ''|claude|codex|agents) ;;
+    *) printf 'install: invalid --target: %s\n' "$TARGET" >&2; exit 2 ;;
 esac
 case "$SCOPE" in
     global) ;;
@@ -161,6 +162,23 @@ handle_skill() {
 # --- hook handler -------------------------------------------------------------
 # Installs the versioning git-hooks into a repo by pointing its core.hooksPath
 # at the toolbox hook directory. Per-repo: needs --scope project, ignores --target.
+
+# Printed after a fresh hook install — a README snippet for the target repo so
+# contributors know to activate the hooks too (git hooks are never cloned).
+print_readme_hint() {
+    cat <<'EOF'
+      -> Add a setup note to this repo's README — git hooks are never cloned,
+         so every clone must activate them once:
+
+         ## Versioning
+         Artifacts here are version-bumped by the AI-Toolbox git hooks.
+         Once per clone, from this repo's root:
+           git clone https://github.com/danielfrey63/ai-toolbox.git   # if needed
+           <ai-toolbox>/tools/install.sh build --what versioning-hooks \
+             --scope project --project .
+EOF
+}
+
 handle_hook() {
     local name=$1 path=$2
     local hooksdir="$REPO_ROOT/$path"
@@ -185,6 +203,7 @@ handle_hook() {
             fi
             git -C "$prepo" config --local core.hooksPath "$hooksdir"
             printf '  [+] %-18s core.hooksPath -> %s\n' "$name" "$hooksdir"
+            print_readme_hint
             ;;
         status)
             if [ "$cur" = "$hooksdir" ]; then
@@ -263,6 +282,16 @@ selected=$(jq -c --arg what "$WHAT" \
 if [ -z "$selected" ]; then
     printf 'install: nothing in the catalog matches --what %s\n' "$WHAT" >&2
     exit 1
+fi
+
+# --target is required unless every selected tool is a hook (hooks ignore it).
+if [ -z "$TARGET" ]; then
+    needs_target=$(printf '%s\n' "$selected" | jq -r 'select(.type != "hook") | .name' | head -1)
+    if [ -n "$needs_target" ]; then
+        printf 'install: --target is required (claude|codex|agents) — "%s" needs it\n' \
+            "$needs_target" >&2
+        exit 2
+    fi
 fi
 
 printf '%s\n' "$selected" | while IFS= read -r tool; do
