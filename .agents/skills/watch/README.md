@@ -2,18 +2,10 @@
 
 **Give Claude the ability to watch any video.**
 
-Claude Code:
-```
-/plugin marketplace add danielfrey63/claude-video
-/plugin install watch@claude-video
-```
-
-claude.ai (web): [download `watch.skill`](https://github.com/danielfrey63/claude-video/releases/latest) and drop it into Settings → Capabilities → Skills.
-
-Codex / generic skills:
-```bash
-git clone https://github.com/danielfrey63/claude-video.git ~/.codex/skills/watch
-```
+`/watch` is a skill + Claude Code plugin maintained as part of the
+[AI-Toolbox](https://github.com/danielfrey63/ai-toolbox), at
+`.agents/skills/watch/`. See [Install](#install) below for Claude Code,
+Codex and claude.ai (web).
 
 Zero config to start — `yt-dlp` and `ffmpeg` install on first run via `brew` on macOS (Linux/Windows print exact commands). Captions cover most public videos for free. Whisper API key is only needed when a video has no captions.
 
@@ -21,7 +13,7 @@ Zero config to start — `yt-dlp` and `ffmpeg` install on first run via `brew` o
 
 Claude can read a webpage, run a script, browse a repo. What it can't do, out of the box, is *watch a video*. You paste a YouTube link and it has to either guess from the title or pull a transcript that's missing 90% of what's on screen.
 
-With Claude Video `/watch` you can paste a URL or a local path, ask a question, and Claude downloads the video, extracts frames at an auto-scaled rate, pulls a timestamped transcript (free captions when available, Whisper API as fallback), and `Read`s every frame as an image. By the time it answers, it has *seen* the video and *heard* the audio.
+With `/watch` you can paste a URL or a local path, ask a question, and Claude downloads the video, extracts frames at an auto-scaled rate, pulls a timestamped transcript (free captions when available, Whisper API as fallback), and `Read`s every frame as an image. By the time it answers, it has *seen* the video and *heard* the audio.
 
 ```
 /watch https://youtu.be/dQw4w9WgXcQ what happens at the 30 second mark?
@@ -77,41 +69,51 @@ When the user names a moment ("around 2:30", "the last 30 seconds", "from 0:45 t
 
 ## Install
 
+`/watch` lives in the [AI-Toolbox](https://github.com/danielfrey63/ai-toolbox)
+at `.agents/skills/watch/`. Clone the toolbox first:
+
+```bash
+git clone https://github.com/danielfrey63/ai-toolbox.git
+```
+
+`<ai-toolbox>` below is the absolute path to that clone.
+
 | Surface | Install |
 |---------|---------|
-| **Claude Code** | `/plugin marketplace add danielfrey63/claude-video` then `/plugin install watch@claude-video` |
-| **claude.ai** (web) | [Download `watch.skill`](https://github.com/danielfrey63/claude-video/releases/latest) → Settings → Capabilities → Skills → `+` |
-| **Codex** | `git clone https://github.com/danielfrey63/claude-video.git ~/.codex/skills/watch` |
-| **Manual / dev** | `git clone https://github.com/danielfrey63/claude-video.git ~/.claude/skills/watch` |
+| **Claude Code** | `/plugin marketplace add <ai-toolbox>/.agents/skills/watch` then `/plugin install watch@watch` |
+| **Codex** | Symlink the skill into `~/.codex/skills/watch` (see below) |
+| **claude.ai** (web) | Build `dist/watch.skill` with `scripts/build-skill.sh`, upload it under Settings → Capabilities → Skills |
+| **Other skill clients** | The skill sits on the cross-client `.agents/skills/` path — point the client at it or symlink it |
 
 ### Claude Code
 
+`watch/` is its own single-plugin marketplace. Register it as a local
+marketplace and install:
+
 ```
-/plugin marketplace add danielfrey63/claude-video
-/plugin install watch@claude-video
+/plugin marketplace add <ai-toolbox>/.agents/skills/watch
+/plugin install watch@watch
 ```
 
-Update later with `/plugin update watch@claude-video`.
+After editing the skill, refresh the installed copy with
+`/plugin marketplace update watch` then `/plugin update watch@watch`.
+
+### Codex
+
+Codex discovers skills under `~/.codex/skills/`. Symlink the toolbox copy so
+it stays in sync:
+
+```bash
+ln -s <ai-toolbox>/.agents/skills/watch ~/.codex/skills/watch
+```
 
 ### claude.ai (web)
 
-1. [Download `watch.skill`](https://github.com/danielfrey63/claude-video/releases/latest) from the latest release.
+1. Build the upload bundle: `bash scripts/build-skill.sh` → `dist/watch.skill`.
 2. Go to Settings → Capabilities → Skills.
 3. Click `+` and drop the file in.
 
 Enable "Code execution and file creation" under Capabilities first — the skill shells out to `ffmpeg` and `yt-dlp`, so it won't run without it.
-
-### Codex
-
-```bash
-git clone https://github.com/danielfrey63/claude-video.git ~/.codex/skills/watch
-```
-
-### Manual (developer)
-
-```bash
-git clone https://github.com/danielfrey63/claude-video.git ~/.claude/skills/watch
-```
 
 ## First run
 
@@ -215,16 +217,21 @@ Other knobs (passed to `scripts/watch.py`):
 bash scripts/build-skill.sh      # → dist/watch.skill
 ```
 
-Releasing: tag `vX.Y.Z`, push the tag. The workflow builds `dist/watch.skill` and attaches it to the GitHub release.
+Versioning is handled by the AI-Toolbox: `plugin.json`'s `version` is the
+source of truth, bumped automatically by the toolbox's per-edit and
+pre-commit hooks. See `git log` for history.
 
-See `git log` for version history.
-
-## Open source
+## Credits & license
 
 MIT license.
+
+`/watch` began as [**claude-video**](https://github.com/bradautomates/claude-video)
+by **Bradley Bonanno** ([bradautomates](https://github.com/bradautomates)) — full
+credit and thanks for the original work. It is now maintained as a fork inside
+the AI-Toolbox.
 
 Built on `yt-dlp`, `ffmpeg`, and Claude's multimodal `Read` tool. Whisper transcription via [Groq](https://groq.com) or [OpenAI](https://openai.com).
 
 ---
 
-[github.com/danielfrey63/claude-video](https://github.com/danielfrey63/claude-video) · [LICENSE](LICENSE)
+Part of [github.com/danielfrey63/ai-toolbox](https://github.com/danielfrey63/ai-toolbox) · [LICENSE](LICENSE)
