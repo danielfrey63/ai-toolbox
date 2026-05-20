@@ -2,9 +2,11 @@
 
 ## Sprache und Stil
 
-- **Sprache:** Deutsch (Schweiz) — `ss` statt `ß`, vollständige Umlaute (ä, ö, ü, é).
-- **Umlaute IMMER echt schreiben** — in ALLEN Dateien (Code, Markdown, Kommentare, CLAUDE.md, README.md, …). NIEMALS `ae`, `oe`, `ue` als Ersatz.
-- **Commit-Messages:** IMMER auf Englisch — abweichend von der Deutsch-Regel. Gilt für alle Repos.
+Zwei strikt getrennte Sprach-Domänen:
+
+- **Englisch — Code & Commits.** Jegliche Skripte, Quellcode, Programmierung, Kommentare *im Code* und Commit-Messages sind **immer** auf Englisch. Ausnahmslos, in allen Repos.
+- **Deutsch (Schweiz) — Kommunikation.** Konversation, Zusammenfassungen und Markdown-Dateien, die dem Austausch zwischen Mensch und Maschine dienen (Hand-offs, Notizen, Pläne, CLAUDE.md, …), sind auf Deutsch.
+- **Umlaute & ss.** Wo Deutsch geschrieben wird: IMMER echte Umlaute (ä, ö, ü, é) und `ss` statt `ß` — NIEMALS `ae`, `oe`, `ue` als Ersatz.
 
 ## Umgebungen
 
@@ -39,4 +41,4 @@
 
 - Claude Code cached Dateien lokal — gecachte Versionen können veraltet sein. Falls Änderungen nicht berücksichtigt werden: explizit auf aktuelle Version hinweisen oder Neuladen anfordern.
 
-<!-- APP_VERSION: 0.0.1 -->
+<!-- APP_VERSION: 0.1.2 -->
