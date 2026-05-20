@@ -38,3 +38,5 @@
 ## Datei-Caching
 
 - Claude Code cached Dateien lokal — gecachte Versionen können veraltet sein. Falls Änderungen nicht berücksichtigt werden: explizit auf aktuelle Version hinweisen oder Neuladen anfordern.
+
+<!-- APP_VERSION: 0.0.1 -->

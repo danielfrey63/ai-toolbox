@@ -1,6 +1,8 @@
 ---
 name: component-audit
 description: Audit a codebase for component-orientation drift — finds DOM/UI-construction bypasses, hand-rolled patterns that should go through shared factories, and refactor opportunities, then routes them through the right component. Use after any UI-touching change, or when the user asks to "verify component consistency", "check for duplication", "audit the components". Works on any project — reads the project's component inventory from `.claude/component-inventory.md` (or a path passed as argument).
+metadata:
+  version: "0.0.1"
 ---
 
 # Component-Audit Skill
