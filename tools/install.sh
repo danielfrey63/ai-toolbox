@@ -3,7 +3,7 @@
 #
 # Reads tools/catalog.json and dispatches per tool TYPE to a handler:
 #   skill  — symlink the tool into <scope>/.{claude,codex,agents}/skills/
-#   hook   — git-hook shims into a repo's .git/hooks/   (handler: pending)
+#   hook   — point a repo's core.hooksPath at the toolbox hook directory
 #   plugin — claude plugin marketplace add + install     (handler: pending)
 #
 # Usage:
@@ -18,7 +18,7 @@
 # Idempotent: build re-links cleanly, clean removes only our own symlinks,
 # a foreign file/dir at the target is never clobbered.
 
-APP_VERSION='0.1.2'
+APP_VERSION='0.2.6'
 set -u
 
 SELF_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -39,7 +39,9 @@ Options:
   --what    all | <tool-name> | <type>  Default: all. Select catalog entries.
   -h|--help                             Show this help.
 
-Tool types: skill (implemented); hook and plugin handlers are pending.
+Tool types: skill, hook (implemented); the plugin handler is pending.
+hook tools install per-repo — they need --scope project --project PATH and
+ignore --target.
 EOF
 }
 
@@ -155,6 +157,54 @@ handle_skill() {
     esac
 }
 
+# --- hook handler -------------------------------------------------------------
+# Installs the versioning git-hooks into a repo by pointing its core.hooksPath
+# at the toolbox hook directory. Per-repo: needs --scope project, ignores --target.
+handle_hook() {
+    local name=$1 path=$2
+    local hooksdir="$REPO_ROOT/$path"
+    if [ "$SCOPE" != project ]; then
+        printf '  [.] %-18s hooks are per-repo — pass --scope project --project PATH\n' "$name"
+        return
+    fi
+    local prepo cur
+    prepo=$(git -C "$PROJECT" rev-parse --show-toplevel 2>/dev/null) || {
+        printf '  [!] %-18s --project is not a git repo: %s\n' "$name" "$PROJECT" >&2
+        return
+    }
+    cur=$(git -C "$prepo" config --local core.hooksPath 2>/dev/null || true)
+    case "$CMD" in
+        build)
+            if [ "$cur" = "$hooksdir" ]; then
+                printf '  [=] %-18s core.hooksPath already set\n' "$name"; return
+            fi
+            if [ -n "$cur" ]; then
+                printf '  [!] %-18s core.hooksPath already set to %s — skipped\n' "$name" "$cur" >&2
+                return
+            fi
+            git -C "$prepo" config --local core.hooksPath "$hooksdir"
+            printf '  [+] %-18s core.hooksPath -> %s\n' "$name" "$hooksdir"
+            ;;
+        status)
+            if [ "$cur" = "$hooksdir" ]; then
+                printf '  [ok] %-18s %s\n' "$name" "$prepo"
+            elif [ -n "$cur" ]; then
+                printf '  [? ] %-18s core.hooksPath = %s (not ours)\n' "$name" "$cur"
+            else
+                printf '  [  ] %-18s not installed in %s\n' "$name" "$prepo"
+            fi
+            ;;
+        clean)
+            if [ "$cur" = "$hooksdir" ]; then
+                git -C "$prepo" config --local --unset core.hooksPath
+                printf '  [-] %-18s core.hooksPath unset (%s)\n' "$name" "$prepo"
+            else
+                printf '  [.] %-18s nothing to remove\n' "$name"
+            fi
+            ;;
+    esac
+}
+
 # --- dispatch -----------------------------------------------------------------
 printf 'install %s — scope=%s target=%s what=%s\n' "$CMD" "$SCOPE" "$TARGET" "$WHAT"
 
@@ -172,7 +222,8 @@ printf '%s\n' "$selected" | while IFS= read -r tool; do
     path=$(printf '%s' "$tool" | jq -r '.path')
     case "$type" in
         skill)  handle_skill "$name" "$path" ;;
-        hook|plugin)
+        hook)   handle_hook "$name" "$path" ;;
+        plugin)
             printf '  [.] %-18s type "%s" — handler not yet implemented\n' "$name" "$type"
             ;;
         *)

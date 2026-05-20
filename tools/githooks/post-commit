@@ -8,13 +8,16 @@
 # never re-tagged. Tags are annotated and local; push them with
 # `git push --follow-tags` (or set `git config push.followTags true`).
 #
-# Logic lives here (version-controlled). .git/hooks/post-commit is a thin shim
-# pointing at this file, installed by tools/install-hooks.sh.
+# Installed by pointing a repo's core.hooksPath at this directory — see
+# tools/install.sh ("versioning-hooks" tool). The hook resolves the AI-Toolbox
+# from its own path, so it works inside any repo.
 
-APP_VERSION='0.2.3'
+APP_VERSION='0.3.4'
 
 repo=$(git rev-parse --show-toplevel) || exit 0
-bump="$repo/tools/bump-version.sh"
+# Resolve bump-version.sh from this hook's own path (see pre-commit).
+toolbox=$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd) || exit 0
+bump="$toolbox/tools/bump-version.sh"
 [ -x "$bump" ] || exit 0
 
 # Files changed in the just-created commit -> unique artifact targets.

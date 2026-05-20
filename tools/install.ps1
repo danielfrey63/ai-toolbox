@@ -3,7 +3,7 @@
 # PowerShell port of tools/install.sh for Codex / Windows. See that file for
 # the full description. Reads tools/catalog.json and dispatches per tool TYPE:
 #   skill  — junction (Windows) / symlink (Linux/macOS) into a skills/ dir
-#   hook   — git-hook shims                              (handler: pending)
+#   hook   — point a repo's core.hooksPath at the toolbox hook directory
 #   plugin — claude plugin marketplace add + install      (handler: pending)
 #
 # Usage:
@@ -13,7 +13,7 @@
 # Idempotent: build re-links cleanly, clean removes only our own links,
 # a foreign file/dir at the target is never clobbered.
 
-$APP_VERSION = '0.1.2'
+$APP_VERSION = '0.2.6'
 $ErrorActionPreference = 'Stop'
 
 $SelfDir  = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -34,7 +34,9 @@ Options:
   --what    all | <tool-name> | <type>  Default: all. Select catalog entries.
   -h|--help                             Show this help.
 
-Tool types: skill (implemented); hook and plugin handlers are pending.
+Tool types: skill, hook (implemented); the plugin handler is pending.
+hook tools install per-repo — they need --scope project --project PATH and
+ignore --target.
 '@
 }
 
@@ -151,6 +153,43 @@ function Handle-Skill([string]$name, [string]$path) {
     }
 }
 
+# --- hook handler -------------------------------------------------------------
+# Installs the versioning git-hooks into a repo by pointing its core.hooksPath
+# at the toolbox hook directory. Per-repo: needs --scope project, ignores --target.
+function Handle-Hook([string]$name, [string]$path) {
+    $hooksdir = Join-Path $RepoRoot $path
+    if ($Scope -ne 'project') {
+        Write-Output "  [.] $name  hooks are per-repo — pass --scope project --project PATH"
+        return
+    }
+    $prepo = (git -C $Project rev-parse --show-toplevel 2>$null)
+    if (-not $prepo) {
+        [Console]::Error.WriteLine("  [!] $name  --project is not a git repo: $Project"); return
+    }
+    $cur = (git -C $prepo config --local core.hooksPath 2>$null)
+    switch ($Cmd) {
+        'build' {
+            if ($cur -eq $hooksdir) { Write-Output "  [=] $name  core.hooksPath already set"; return }
+            if ($cur) {
+                [Console]::Error.WriteLine("  [!] $name  core.hooksPath already set to $cur — skipped"); return
+            }
+            git -C $prepo config --local core.hooksPath $hooksdir
+            Write-Output "  [+] $name  core.hooksPath -> $hooksdir"
+        }
+        'status' {
+            if ($cur -eq $hooksdir) { Write-Output "  [ok] $name  $prepo" }
+            elseif ($cur) { Write-Output "  [? ] $name  core.hooksPath = $cur (not ours)" }
+            else { Write-Output "  [  ] $name  not installed in $prepo" }
+        }
+        'clean' {
+            if ($cur -eq $hooksdir) {
+                git -C $prepo config --local --unset core.hooksPath
+                Write-Output "  [-] $name  core.hooksPath unset ($prepo)"
+            } else { Write-Output "  [.] $name  nothing to remove" }
+        }
+    }
+}
+
 # --- dispatch -----------------------------------------------------------------
 Write-Output "install $Cmd — scope=$Scope target=$Target what=$What"
 
@@ -165,7 +204,8 @@ if (-not $selected) {
 foreach ($tool in $selected) {
     switch ($tool.type) {
         'skill' { Handle-Skill $tool.name $tool.path }
-        { $_ -in 'hook', 'plugin' } {
+        'hook'  { Handle-Hook $tool.name $tool.path }
+        'plugin' {
             Write-Output "  [.] $($tool.name)  type `"$($tool.type)`" — handler not yet implemented"
         }
         default {
