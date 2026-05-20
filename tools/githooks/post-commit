@@ -4,21 +4,27 @@
 #
 # Part of the AI-Toolbox versioning system. After a commit, every artifact
 # touched by that commit is tagged <name>/v<version> (e.g. component-audit/
-# v1.3.0). Only tags that do not yet exist are created — existing versions are
-# never re-tagged. Tags are annotated and local; push them with
+# v1.3.0). A single-artifact repo can drop the <name>/ namespace and tag a
+# plain v<version> with:  git config bumpversion.tagstyle plain
+# Only tags that do not yet exist are created — existing versions are never
+# re-tagged. Tags are annotated and local; push them with
 # `git push --follow-tags` (or set `git config push.followTags true`).
 #
 # Installed by pointing a repo's core.hooksPath at this directory — see
 # tools/install.sh ("versioning-hooks" tool). The hook resolves the AI-Toolbox
 # from its own path, so it works inside any repo.
 
-APP_VERSION='0.3.4'
+APP_VERSION='0.4.8'
 
 repo=$(git rev-parse --show-toplevel) || exit 0
 # Resolve bump-version.sh from this hook's own path (see pre-commit).
 toolbox=$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd) || exit 0
 bump="$toolbox/tools/bump-version.sh"
 [ -x "$bump" ] || exit 0
+
+# Tag style — a single-artifact repo opts out of the <name>/ namespace
+# (git config bumpversion.tagstyle plain). Default: namespaced.
+tagstyle=$(git config --local bumpversion.tagstyle 2>/dev/null || true)
 
 # Files changed in the just-created commit -> unique artifact targets.
 targets=$(
@@ -38,7 +44,11 @@ printf '%s\n' "$targets" | while IFS= read -r t; do
         */.agents/skills/*) name=${t#*/.agents/skills/}; name=${name%%/*} ;;
         *)                  name=$(basename "$t") ;;
     esac
-    tag="$name/v$ver"
+    # plain tagstyle drops the <name>/ namespace (single-artifact repos).
+    case "$tagstyle" in
+        plain) tag="v$ver" ;;
+        *)     tag="$name/v$ver" ;;
+    esac
 
     # Only new versions get tagged — never re-tag an existing version.
     if git rev-parse -q --verify "refs/tags/$tag" >/dev/null 2>&1; then

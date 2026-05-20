@@ -9,11 +9,15 @@
 # Usage:
 #   install.ps1 <build|status|clean> --target <claude|codex|agents>
 #               [--scope global|project] [--project PATH] [--what all|<name>|<type>]
+#               [--tagstyle plain|namespaced]
+#
+# --tagstyle applies only to hook installs — it sets the repo's
+# bumpversion.tagstyle (plain = v<version> tags for a single-artifact repo).
 #
 # Idempotent: build re-links cleanly, clean removes only our own links,
 # a foreign file/dir at the target is never clobbered.
 
-$APP_VERSION = '0.4.15'
+$APP_VERSION = '0.5.21'
 $ErrorActionPreference = 'Stop'
 
 $SelfDir  = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -28,14 +32,16 @@ Usage:
   install.ps1 <build|status|clean> --target <claude|codex|agents> [options]
 
 Options:
-  --target  claude | codex | agents     Required, except when only hook tools are selected.
-  --scope   global | project            Default: global ($HOME). project needs --project.
-  --project PATH                        Project root; required when --scope project.
-  --what    all | <tool-name> | <type>  Default: all. Select catalog entries.
-  -h|--help                             Show this help.
+  --target   claude | codex | agents     Required, except when only hook tools are selected.
+  --scope    global | project            Default: global ($HOME). project needs --project.
+  --project  PATH                        Project root; required when --scope project.
+  --what     all | <tool-name> | <type>  Default: all. Select catalog entries.
+  --tagstyle plain | namespaced          Hook installs only: the repo's tag style.
+  -h|--help                              Show this help.
 
 Tool types: skill, hook, plugin.
   hook   — per-repo: needs --scope project --project PATH, ignores --target.
+           --tagstyle plain tags v<version> (single-artifact repo); default namespaced.
   plugin — --target claude does a real plugin install; codex/agents skill-link it.
 '@
 }
@@ -49,21 +55,22 @@ if ($Cmd -notin @('build', 'status', 'clean')) {
 }
 
 # --- options ------------------------------------------------------------------
-$Scope = 'global'; $Target = ''; $Project = ''; $What = 'all'
+$Scope = 'global'; $Target = ''; $Project = ''; $What = 'all'; $TagStyle = ''
 $i = 1
 while ($i -lt $args.Count) {
     $opt = [string]$args[$i]
     switch ($opt) {
-        { $_ -in '--scope', '--target', '--project', '--what' } {
+        { $_ -in '--scope', '--target', '--project', '--what', '--tagstyle' } {
             if ($i + 1 -ge $args.Count) {
                 [Console]::Error.WriteLine("install: $opt needs a value"); exit 2
             }
             $val = [string]$args[$i + 1]
             switch ($opt) {
-                '--scope'   { $Scope = $val }
-                '--target'  { $Target = $val }
-                '--project' { $Project = $val }
-                '--what'    { $What = $val }
+                '--scope'    { $Scope = $val }
+                '--target'   { $Target = $val }
+                '--project'  { $Project = $val }
+                '--what'     { $What = $val }
+                '--tagstyle' { $TagStyle = $val }
             }
             $i += 2
         }
@@ -77,6 +84,9 @@ while ($i -lt $args.Count) {
 # selected tool types and is checked once the catalog selection is known.
 if ($Target -and $Target -notin @('claude', 'codex', 'agents')) {
     [Console]::Error.WriteLine("install: invalid --target: $Target"); exit 2
+}
+if ($TagStyle -and $TagStyle -notin @('plain', 'namespaced')) {
+    [Console]::Error.WriteLine("install: invalid --tagstyle: $TagStyle"); exit 2
 }
 if ($Scope -eq 'project') {
     if (-not $Project) {
@@ -187,16 +197,34 @@ function Handle-Hook([string]$name, [string]$path) {
     $cur = (git -C $prepo config --local core.hooksPath 2>$null)
     switch ($Cmd) {
         'build' {
-            if ($cur -eq $hooksdir) { Write-Output "  [=] $name  core.hooksPath already set"; return }
-            if ($cur) {
+            if ($cur -and $cur -ne $hooksdir) {
                 [Console]::Error.WriteLine("  [!] $name  core.hooksPath already set to $cur — skipped"); return
             }
-            git -C $prepo config --local core.hooksPath $hooksdir
-            Write-Output "  [+] $name  core.hooksPath -> $hooksdir"
-            Show-ReadmeHint
+            $fresh = $false
+            if ($cur -eq $hooksdir) {
+                Write-Output "  [=] $name  core.hooksPath already set"
+            } else {
+                git -C $prepo config --local core.hooksPath $hooksdir
+                Write-Output "  [+] $name  core.hooksPath -> $hooksdir"
+                $fresh = $true
+            }
+            if ($TagStyle) {
+                $curts = (git -C $prepo config --local bumpversion.tagstyle 2>$null)
+                if ($curts -eq $TagStyle) {
+                    Write-Output "  [=] $name  bumpversion.tagstyle already $TagStyle"
+                } else {
+                    git -C $prepo config --local bumpversion.tagstyle $TagStyle
+                    Write-Output "  [+] $name  bumpversion.tagstyle -> $TagStyle"
+                }
+            }
+            if ($fresh) { Show-ReadmeHint }
         }
         'status' {
-            if ($cur -eq $hooksdir) { Write-Output "  [ok] $name  $prepo" }
+            if ($cur -eq $hooksdir) {
+                $curts = (git -C $prepo config --local bumpversion.tagstyle 2>$null)
+                if (-not $curts) { $curts = 'namespaced' }
+                Write-Output "  [ok] $name  $prepo (tagstyle=$curts)"
+            }
             elseif ($cur) { Write-Output "  [? ] $name  core.hooksPath = $cur (not ours)" }
             else { Write-Output "  [  ] $name  not installed in $prepo" }
         }
@@ -205,6 +233,7 @@ function Handle-Hook([string]$name, [string]$path) {
                 git -C $prepo config --local --unset core.hooksPath
                 Write-Output "  [-] $name  core.hooksPath unset ($prepo)"
             } else { Write-Output "  [.] $name  nothing to remove" }
+            git -C $prepo config --local --unset bumpversion.tagstyle 2>$null
         }
     }
 }

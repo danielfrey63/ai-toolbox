@@ -1,12 +1,12 @@
 #!/bin/sh
-# pre-commit — bump the MINOR segment of every staged artifact.
+# pre-commit — bump MINOR+BUILD of every staged artifact.
 #
 # Part of the AI-Toolbox versioning system. The per-edit PostToolUse hook bumps
-# BUILD; this hook bumps MINOR once per commit. Build and minor are different
-# segments, so the two bumps never collide.
+# BUILD on every edit; this hook bumps MINOR and BUILD once per commit — so
+# MINOR counts commits while BUILD counts every iteration.
 #
 # Every staged file is resolved to its artifact (bump-version.sh --target),
-# duplicates are collapsed, each artifact's minor is bumped once, and the
+# duplicates are collapsed, each artifact is bumped once (--commit), and the
 # bumped files are re-staged so the change joins this commit. The staged file
 # list is git's own record of what changed — no version comparison needed.
 #
@@ -15,7 +15,7 @@
 # resolves the AI-Toolbox from its own path, so bump-version.sh is found even
 # when this runs inside a foreign repo.
 
-APP_VERSION='0.3.4'
+APP_VERSION='0.4.7'
 
 repo=$(git rev-parse --show-toplevel) || exit 0
 # This hook lives in <ai-toolbox>/tools/githooks/ — resolve bump-version.sh
@@ -33,10 +33,10 @@ targets=$(
 )
 [ -n "$targets" ] || exit 0
 
-# Bump each artifact's minor once and re-stage it.
+# Bump each artifact's minor+build once and re-stage it.
 printf '%s\n' "$targets" | while IFS= read -r t; do
     [ -n "$t" ] || continue
-    "$bump" --minor "$t"
+    "$bump" --commit "$t"
     git add -- "$t"
 done
 exit 0

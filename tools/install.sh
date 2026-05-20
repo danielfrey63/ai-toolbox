@@ -10,16 +10,20 @@
 # Usage:
 #   install.sh <build|status|clean> --target <claude|codex|agents>
 #              [--scope global|project] [--project PATH] [--what all|<name>|<type>]
+#              [--tagstyle plain|namespaced]
 #
 # Parameter families:
 #   scope   global (default; base = $HOME) | project (base = --project PATH)
 #   target  claude | codex | agents  — required unless the selection is hook-only
 #   what    all (default) | a tool name | a tool type
 #
+# --tagstyle applies only to hook installs — it sets the repo's
+# bumpversion.tagstyle (plain = v<version> tags for a single-artifact repo).
+#
 # Idempotent: build re-links cleanly, clean removes only our own symlinks,
 # a foreign file/dir at the target is never clobbered.
 
-APP_VERSION='0.4.16'
+APP_VERSION='0.5.22'
 set -u
 
 SELF_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -34,14 +38,16 @@ Usage:
   install.sh <build|status|clean> --target <claude|codex|agents> [options]
 
 Options:
-  --target  claude | codex | agents     Required, except when only hook tools are selected.
-  --scope   global | project            Default: global ($HOME). project needs --project.
-  --project PATH                        Project root; required when --scope project.
-  --what    all | <tool-name> | <type>  Default: all. Select catalog entries.
-  -h|--help                             Show this help.
+  --target   claude | codex | agents     Required, except when only hook tools are selected.
+  --scope    global | project            Default: global ($HOME). project needs --project.
+  --project  PATH                        Project root; required when --scope project.
+  --what     all | <tool-name> | <type>  Default: all. Select catalog entries.
+  --tagstyle plain | namespaced          Hook installs only: the repo's tag style.
+  -h|--help                              Show this help.
 
 Tool types: skill, hook, plugin.
   hook   — per-repo: needs --scope project --project PATH, ignores --target.
+           --tagstyle plain tags v<version> (single-artifact repo); default namespaced.
   plugin — --target claude does a real plugin install; codex/agents skill-link it.
 EOF
 }
@@ -60,16 +66,18 @@ SCOPE=global
 TARGET=''
 PROJECT=''
 WHAT=all
+TAGSTYLE=''
 while [ $# -gt 0 ]; do
     case "$1" in
-        --scope|--target|--project|--what)
+        --scope|--target|--project|--what|--tagstyle)
             opt=$1
             [ $# -ge 2 ] || { printf 'install: %s needs a value\n' "$opt" >&2; exit 2; }
             case "$opt" in
-                --scope)   SCOPE=$2 ;;
-                --target)  TARGET=$2 ;;
-                --project) PROJECT=$2 ;;
-                --what)    WHAT=$2 ;;
+                --scope)    SCOPE=$2 ;;
+                --target)   TARGET=$2 ;;
+                --project)  PROJECT=$2 ;;
+                --what)     WHAT=$2 ;;
+                --tagstyle) TAGSTYLE=$2 ;;
             esac
             shift 2 ;;
         -h|--help) usage; exit 0 ;;
@@ -92,6 +100,10 @@ case "$SCOPE" in
             || { printf 'install: --project path not found\n' >&2; exit 2; }
         ;;
     *) printf 'install: invalid --scope: %s\n' "$SCOPE" >&2; exit 2 ;;
+esac
+case "$TAGSTYLE" in
+    ''|plain|namespaced) ;;
+    *) printf 'install: invalid --tagstyle: %s\n' "$TAGSTYLE" >&2; exit 2 ;;
 esac
 [ -f "$CATALOG" ] || { printf 'install: catalog not found: %s\n' "$CATALOG" >&2; exit 1; }
 command -v jq >/dev/null 2>&1 \
@@ -186,7 +198,7 @@ handle_hook() {
         printf '  [.] %-18s hooks are per-repo — pass --scope project --project PATH\n' "$name"
         return
     fi
-    local prepo cur
+    local prepo cur curts fresh=''
     prepo=$(git -C "$PROJECT" rev-parse --show-toplevel 2>/dev/null) || {
         printf '  [!] %-18s --project is not a git repo: %s\n' "$name" "$PROJECT" >&2
         return
@@ -194,20 +206,32 @@ handle_hook() {
     cur=$(git -C "$prepo" config --local core.hooksPath 2>/dev/null || true)
     case "$CMD" in
         build)
-            if [ "$cur" = "$hooksdir" ]; then
-                printf '  [=] %-18s core.hooksPath already set\n' "$name"; return
-            fi
-            if [ -n "$cur" ]; then
+            if [ -n "$cur" ] && [ "$cur" != "$hooksdir" ]; then
                 printf '  [!] %-18s core.hooksPath already set to %s — skipped\n' "$name" "$cur" >&2
                 return
             fi
-            git -C "$prepo" config --local core.hooksPath "$hooksdir"
-            printf '  [+] %-18s core.hooksPath -> %s\n' "$name" "$hooksdir"
-            print_readme_hint
+            if [ "$cur" = "$hooksdir" ]; then
+                printf '  [=] %-18s core.hooksPath already set\n' "$name"
+            else
+                git -C "$prepo" config --local core.hooksPath "$hooksdir"
+                printf '  [+] %-18s core.hooksPath -> %s\n' "$name" "$hooksdir"
+                fresh=1
+            fi
+            if [ -n "$TAGSTYLE" ]; then
+                curts=$(git -C "$prepo" config --local bumpversion.tagstyle 2>/dev/null || true)
+                if [ "$curts" = "$TAGSTYLE" ]; then
+                    printf '  [=] %-18s bumpversion.tagstyle already %s\n' "$name" "$TAGSTYLE"
+                else
+                    git -C "$prepo" config --local bumpversion.tagstyle "$TAGSTYLE"
+                    printf '  [+] %-18s bumpversion.tagstyle -> %s\n' "$name" "$TAGSTYLE"
+                fi
+            fi
+            [ -n "$fresh" ] && print_readme_hint
             ;;
         status)
             if [ "$cur" = "$hooksdir" ]; then
-                printf '  [ok] %-18s %s\n' "$name" "$prepo"
+                curts=$(git -C "$prepo" config --local bumpversion.tagstyle 2>/dev/null || true)
+                printf '  [ok] %-18s %s (tagstyle=%s)\n' "$name" "$prepo" "${curts:-namespaced}"
             elif [ -n "$cur" ]; then
                 printf '  [? ] %-18s core.hooksPath = %s (not ours)\n' "$name" "$cur"
             else
@@ -221,6 +245,7 @@ handle_hook() {
             else
                 printf '  [.] %-18s nothing to remove\n' "$name"
             fi
+            git -C "$prepo" config --local --unset bumpversion.tagstyle 2>/dev/null || true
             ;;
     esac
 }
