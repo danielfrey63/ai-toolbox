@@ -3,13 +3,11 @@ name: watch
 description: Watch a video (URL or local path). Downloads with yt-dlp, extracts gap-filled frames + scdet-detected cuts (settle-delayed for stable post-transition content), auto-chunks long videos for dense per-chunk coverage, transcribes via captions / Whisper / AssemblyAI / pyannote diarization (with Claude-driven speaker-to-name substitution), and produces a three-file persistent report (`<base>.{md,protocol.md,transcript.md}` next to local sources or under `./watch/<YYYY-MM-DD>-<slug>/` for URLs) plus a Summary that hits the chat with clickable file:// links.
 argument-hint: "<video-url-or-path> [question]"
 allowed-tools: Bash, Read, AskUserQuestion
-homepage: https://github.com/danielfrey63/claude-video
-repository: https://github.com/danielfrey63/claude-video
+homepage: https://github.com/danielfrey63/ai-toolbox
+repository: https://github.com/danielfrey63/ai-toolbox
 author: bradautomates
 license: MIT
 user-invocable: true
-metadata:
-  version: "0.0.1"
 ---
 
 # /watch — Claude watches a video

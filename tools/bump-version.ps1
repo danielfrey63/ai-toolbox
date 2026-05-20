@@ -5,8 +5,10 @@
 #
 # The version marker is matched in its DECLARATION form only — an APP_VERSION
 # assignment at the start of a line, the whole <!-- APP_VERSION: --> comment,
-# or a version: key inside YAML frontmatter. A mere mention of the word in a
-# comment, help text or prose is never matched.
+# a version: key inside YAML frontmatter, or the "version" key of plugin.json.
+# A mere mention of the word in a comment, help text or prose is never matched.
+# A skill directory that ships a Claude Code plugin manifest is versioned via
+# plugin.json instead of SKILL.md.
 #
 # Modes:
 #   (default) bump BUILD (3rd) — driven by the per-edit PostToolUse hook
@@ -19,7 +21,7 @@
 # CLI, or a Codex / Claude Code PostToolUse hook JSON payload on stdin. Always
 # exits 0 (except on a usage error).
 
-$APP_VERSION = '0.2.7'
+$APP_VERSION = '0.3.8'
 $ErrorActionPreference = 'Stop'
 
 $InitVersion = '0.0.1'
@@ -30,6 +32,8 @@ $script:Segment = 'build'
 $DeclRe = '(?m)^[ \t]*((export|const|let|var)[ \t]+)?\$?APP_VERSION[ \t]*=[ \t]*[''"](\d+\.\d+\.\d+)'
 # The whole CLAUDE.md / markdown version-marker comment; group 1 is the version.
 $MarkerRe = '<!--[ \t]*APP_VERSION:[ \t]*(\d+\.\d+\.\d+)'
+# The "version" key of a JSON manifest (plugin.json); group 1 is the version.
+$JsonRe = '"version"[ \t]*:[ \t]*"(\d+\.\d+\.\d+)"'
 
 if ($args | Where-Object { $_ -in @('-h', '--help', '-Help', '/?') }) {
     Write-Output @'
@@ -48,6 +52,7 @@ Options:
   -h|--help Show this help.
 
 Artifact types (MAJOR.MINOR.BUILD version):
+  plugin  skill dir with .claude-plugin/plugin.json -> plugin.json "version"
   skill   file under .agents/skills/<name>/  -> <name>/SKILL.md metadata.version
   claude  CLAUDE.md                          -> trailing <!-- APP_VERSION --> marker
   agent   *.md whose parent dir is "agents"   -> frontmatter version
@@ -55,8 +60,9 @@ Artifact types (MAJOR.MINOR.BUILD version):
           APP_VERSION assignment
 
 The version is matched in its declaration form only — an assignment / the
-whole marker comment / a frontmatter key — never a bare mention of the word.
-A missing version is initialised to 0.0.1. A non-artifact file is a no-op.
+whole marker comment / a frontmatter key / the plugin.json "version" key —
+never a bare mention of the word. A missing version is initialised to 0.0.1.
+A non-artifact file is a no-op.
 '@
     exit 0
 }
@@ -108,6 +114,12 @@ function Get-ScriptVersion([string]$f) {
 
 function Get-MarkerVersion([string]$f) {
     $m = [regex]::Match((Get-Content -LiteralPath $f -Raw), $MarkerRe)
+    if ($m.Success) { return $m.Groups[1].Value }
+    return $null
+}
+
+function Get-PluginVersion([string]$f) {
+    $m = [regex]::Match((Get-Content -LiteralPath $f -Raw), $JsonRe)
     if ($m.Success) { return $m.Groups[1].Value }
     return $null
 }
@@ -183,6 +195,16 @@ function Bump-Script([string]$f) {
     $script:Result = "$cur -> $new"
 }
 
+function Bump-Plugin([string]$f) {
+    $content = Get-Content -LiteralPath $f -Raw
+    $m = [regex]::Match($content, $JsonRe)
+    if (-not $m.Success) { exit 0 }
+    $cur = $m.Groups[1].Value
+    $new = Bump-Version $cur
+    [System.IO.File]::WriteAllText($f, (Set-MatchGroup $content $m.Groups[1] $new))
+    $script:Result = "$cur -> $new"
+}
+
 # --- resolve target file ------------------------------------------------------
 $file = $null
 if ($positional.Count -ge 1 -and $positional[0]) {
@@ -212,7 +234,12 @@ $target = $null
 
 if ($norm -match '/\.agents/skills/([^/]+)/') {
     $skillDir = $norm.Substring(0, $norm.IndexOf('/.agents/skills/')) + '/.agents/skills/' + $Matches[1]
-    if (Test-Path -LiteralPath "$skillDir/SKILL.md") { $type = 'skill'; $target = "$skillDir/SKILL.md" }
+    # A skill that ships a Claude Code plugin manifest is versioned via plugin.json.
+    if (Test-Path -LiteralPath "$skillDir/.claude-plugin/plugin.json") {
+        $type = 'plugin'; $target = "$skillDir/.claude-plugin/plugin.json"
+    } elseif (Test-Path -LiteralPath "$skillDir/SKILL.md") {
+        $type = 'skill'; $target = "$skillDir/SKILL.md"
+    }
 }
 if (-not $type) {
     if ($base -eq 'SKILL.md') { $type = 'skill'; $target = $file }
@@ -243,6 +270,7 @@ if ($mode -eq 'get') {
         { $_ -in 'skill', 'agent' } { $v = Get-FmVersion @(Get-Content -LiteralPath $target) }
         'claude' { $v = Get-MarkerVersion $target }
         'script' { $v = Get-ScriptVersion $target }
+        'plugin' { $v = Get-PluginVersion $target }
     }
     if ($v) { Write-Output $v }
     exit 0
@@ -254,11 +282,12 @@ switch ($type) {
     'agent'  { Bump-Frontmatter $target 'agent' }
     'claude' { Bump-Marker $target }
     'script' { Bump-Script $target }
+    'plugin' { Bump-Plugin $target }
 }
 
 # --- report -------------------------------------------------------------------
 # When a skill sub-file triggered the bump, $file (the edited file) differs from
-# $target (the SKILL.md whose version moved) — log both so the trigger is traceable.
+# $target (the manifest whose version moved) — log both so the trigger is traceable.
 $via = if ($file -ne $target) { " (via $file)" } else { '' }
 try {
     $repo = (git -C (Split-Path -Parent $target) rev-parse --show-toplevel 2>$null)
