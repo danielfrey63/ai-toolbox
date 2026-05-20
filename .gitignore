@@ -2,3 +2,4 @@ artefacts
 .claude/hook-log.txt
 .claude/settings.local.json
 .codex/hook-log.txt
+.agents/skills/watch/HANDOFF.md
