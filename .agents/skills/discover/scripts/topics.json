@@ -1,0 +1,42 @@
+{
+  "AI": [
+    "AI news weekly",
+    "Anthropic announcement",
+    "Claude release notes"
+  ],
+  "Frontier Models": [
+    "Claude Opus 4.7 review",
+    "GPT-5 benchmark",
+    "frontier model comparison 2026"
+  ],
+  "IDEs": [
+    "Claude Code tutorial",
+    "Cursor AI editor 2026",
+    "Codex CLI walkthrough"
+  ],
+  "Programming": [
+    "agentic coding workflow",
+    "AI pair programming 2026",
+    "AI coding tutorial"
+  ],
+  "Antipatterns": [
+    "AI coding antipattern",
+    "vibe coding mistakes",
+    "LLM coding pitfall"
+  ],
+  "Skills": [
+    "Claude Code skill tutorial",
+    "Claude plugin marketplace",
+    "Claude skills explained"
+  ],
+  "MCP Server": [
+    "MCP server tutorial",
+    "model context protocol guide",
+    "MCP server github"
+  ],
+  "GitHub Projects": [
+    "claude code plugin github",
+    "open source AI agent github",
+    "AI coding tools open source"
+  ]
+}

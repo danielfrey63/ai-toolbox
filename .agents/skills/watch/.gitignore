@@ -1,0 +1,20 @@
+# OS / editor / tooling
+.DS_Store
+.entire/
+__pycache__/
+*.pyc
+.venv/
+.coverage
+htmlcov/
+.idea/
+.vscode/
+/videos/
+/dist/
+.claude/settings.local.json
+/watch/
+
+# Secrets - the real .env (whisper.py / diarize.py read ./.env as a fallback,
+# so a repo-root .env could hold live keys). .env.example is the safe,
+# committed template and is NOT ignored.
+.env
+!.env.example
