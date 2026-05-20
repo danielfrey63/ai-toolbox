@@ -3,16 +3,18 @@
 # PowerShell port of tools/bump-version.sh for Codex / Windows. See that file
 # for the full description of artifact types and version-storage rules.
 #
-# Segment (default: build):
-#   --build   bump BUILD (3rd) — driven by the per-edit PostToolUse hook
+# Modes:
+#   (default) bump BUILD (3rd) — driven by the per-edit PostToolUse hook
 #   --minor   bump MINOR (2nd), BUILD untouched — driven by the pre-commit hook
-#   --target  print the resolved artifact file without bumping (for dedup)
+#   --build   bump BUILD (3rd) explicitly
+#   --target  print the resolved artifact file without bumping
+#   --get     print the artifact's current version (type-aware, no mutation)
 #
-# Dual mode: `bump-version.ps1 [--minor|--build|--target] <file>` as a CLI, or a
-# Codex / Claude Code PostToolUse hook JSON payload on stdin. Always exits 0
-# (except on a usage error).
+# Dual mode: `bump-version.ps1 [--minor|--build|--target|--get] <file>` as a
+# CLI, or a Codex / Claude Code PostToolUse hook JSON payload on stdin. Always
+# exits 0 (except on a usage error).
 
-$APP_VERSION = '0.0.5'
+$APP_VERSION = '0.1.6'
 $ErrorActionPreference = 'Stop'
 
 $InitVersion = '0.0.1'
@@ -24,7 +26,7 @@ if ($args | Where-Object { $_ -in @('-h', '--help', '-Help', '/?') }) {
 bump-version — generic per-artifact version bumper for the AI-Toolbox.
 
 Usage:
-  bump-version.ps1 [--minor|--build|--target] <file>
+  bump-version.ps1 [--minor|--build|--target|--get] <file>
   bump-version.ps1 -h|--help
   <hook-json> | bump-version.ps1 [--minor|--build]
 
@@ -32,13 +34,15 @@ Options:
   --build   Bump the BUILD segment (3rd). Default. Used by the per-edit hook.
   --minor   Bump the MINOR segment (2nd), leaving BUILD. Used by the pre-commit hook.
   --target  Print the resolved artifact file without bumping anything.
+  --get     Print the artifact's current version (type-aware, no mutation).
   -h|--help Show this help.
 
 Artifact types (MAJOR.MINOR.BUILD version):
   skill   file under .agents/skills/<name>/  -> <name>/SKILL.md metadata.version
   claude  CLAUDE.md                          -> trailing <!-- APP_VERSION --> marker
   agent   *.md whose parent dir is "agents"   -> frontmatter version
-  script  *.sh .ps1 .js .mjs .cjs .py .html   -> APP_VERSION constant (if present)
+  script  *.sh .ps1 .js .mjs .cjs .py .html, or any #!-shebang file with an
+          APP_VERSION constant
 
 A missing version is initialised to 0.0.1. A non-artifact file is a no-op.
 '@
@@ -55,6 +59,7 @@ foreach ($a in $args) {
         '^--build$'  { $script:Segment = 'build'; break }
         '^--minor$'  { $script:Segment = 'minor'; break }
         '^--target$' { $mode = 'target'; break }
+        '^--get$'    { $mode = 'get'; break }
         '^--$'       { break }
         '^-.'        { [Console]::Error.WriteLine("bump-version: unknown option: $a"); exit 2 }
         default      { $positional += $a; break }
@@ -80,6 +85,12 @@ function Get-FmVersion([string[]]$lines) {
             if ($m.Success) { return $m.Value }
         }
     }
+    return $null
+}
+
+function Get-MarkerVersion([string]$f) {
+    $m = [regex]::Match((Get-Content -LiteralPath $f -Raw), 'APP_VERSION[^0-9]*(\d+\.\d+\.\d+)')
+    if ($m.Success) { return $m.Groups[1].Value }
     return $null
 }
 
@@ -186,15 +197,32 @@ if (-not $type) {
     if ($base -eq 'SKILL.md') { $type = 'skill'; $target = $file }
     elseif ($base -eq 'CLAUDE.md') { $type = 'claude'; $target = $file }
     elseif ($parent -eq 'agents' -and $ext -eq 'md') { $type = 'agent'; $target = $file }
-    elseif ($ext -in @('sh', 'ps1', 'js', 'mjs', 'cjs', 'py', 'html')) {
-        if ((Get-Content -LiteralPath $file -Raw) -match 'APP_VERSION') { $type = 'script'; $target = $file }
+    else {
+        # A "script" has a known code extension OR a #! shebang — the latter
+        # catches extensionless tools like the git hooks.
+        $isScript = $ext -in @('sh', 'ps1', 'js', 'mjs', 'cjs', 'py', 'html')
+        if (-not $isScript) {
+            $first = Get-Content -LiteralPath $file -TotalCount 1
+            if ($first -and $first.StartsWith('#!')) { $isScript = $true }
+        }
+        if ($isScript -and ((Get-Content -LiteralPath $file -Raw) -match 'APP_VERSION')) {
+            $type = 'script'; $target = $file
+        }
     }
 }
 if (-not $type) { exit 0 }
 
-# In --target mode, report the resolved artifact file and stop (no mutation).
+# --- read-only modes ----------------------------------------------------------
 if ($mode -eq 'target') {
     Write-Output $target
+    exit 0
+}
+if ($mode -eq 'get') {
+    switch ($type) {
+        { $_ -in 'skill', 'agent' }   { $v = Get-FmVersion @(Get-Content -LiteralPath $target) }
+        { $_ -in 'claude', 'script' } { $v = Get-MarkerVersion $target }
+    }
+    if ($v) { Write-Output $v }
     exit 0
 }
 

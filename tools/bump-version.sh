@@ -6,25 +6,28 @@
 #   skill   — file under .agents/skills/<name>/  -> <name>/SKILL.md frontmatter metadata.version
 #   claude  — CLAUDE.md                          -> trailing <!-- APP_VERSION: x.y.z --> marker
 #   agent   — *.md whose parent directory is "agents" -> frontmatter top-level version
-#   script  — *.sh/.ps1/.js/.mjs/.cjs/.py/.html  -> APP_VERSION constant (only if already present)
+#   script  — *.sh/.ps1/.js/.mjs/.cjs/.py/.html OR any file with a #! shebang,
+#             provided it carries an APP_VERSION constant
 #
-# Segment (default: build):
-#   --build   bump BUILD (3rd) — driven by the per-edit PostToolUse hook
+# Modes:
+#   (default) bump BUILD (3rd) — driven by the per-edit PostToolUse hook
 #   --minor   bump MINOR (2nd), BUILD untouched — driven by the pre-commit hook
-#   --target  print the resolved artifact file without bumping (for dedup)
+#   --build   bump BUILD (3rd) explicitly
+#   --target  print the resolved artifact file without bumping
+#   --get     print the artifact's current version (type-aware, no mutation)
 #
 # A missing version is initialised to 0.0.1. The structural step (inserting the
 # version field) is idempotent; once a version exists, a run only bumps it.
 #
 # Dual mode:
-#   bump-version.sh [--minor|--build|--target] <file>   — CLI
-#   <hook-json> | bump-version.sh [--minor|--build]      — hook: reads
+#   bump-version.sh [--minor|--build|--target|--get] <file>   — CLI
+#   <hook-json> | bump-version.sh [--minor|--build]            — hook: reads
 #                  tool_input.file_path from a Claude Code / Codex payload
 #
 # Always exits 0 (except on a usage error) — a non-artifact edit is a silent
 # no-op, so it is hook-safe.
 
-APP_VERSION='0.0.4'
+APP_VERSION='0.1.5'
 set -u
 
 INIT_VERSION='0.0.1'
@@ -40,7 +43,7 @@ while [ $# -gt 0 ]; do
 bump-version — generic per-artifact version bumper for the AI-Toolbox.
 
 Usage:
-  bump-version.sh [--minor|--build|--target] <file>
+  bump-version.sh [--minor|--build|--target|--get] <file>
   bump-version.sh -h|--help
   <hook-json> | bump-version.sh [--minor|--build]
 
@@ -48,6 +51,7 @@ Options:
   --build   Bump the BUILD segment (3rd). Default. Used by the per-edit hook.
   --minor   Bump the MINOR segment (2nd), leaving BUILD. Used by the pre-commit hook.
   --target  Print the resolved artifact file without bumping anything.
+  --get     Print the artifact's current version (type-aware, no mutation).
   -h|--help Show this help.
 
 Hook mode: with no <file>, the edited path is read from a Claude Code / Codex
@@ -57,7 +61,8 @@ Artifact types (MAJOR.MINOR.BUILD version):
   skill   file under .agents/skills/<name>/  -> <name>/SKILL.md metadata.version
   claude  CLAUDE.md                          -> trailing <!-- APP_VERSION --> marker
   agent   *.md whose parent dir is "agents"   -> frontmatter version
-  script  *.sh .ps1 .js .mjs .cjs .py .html   -> APP_VERSION constant (if present)
+  script  *.sh .ps1 .js .mjs .cjs .py .html, or any #!-shebang file with an
+          APP_VERSION constant
 
 A missing version is initialised to 0.0.1. A non-artifact file is a no-op.
 EOF
@@ -65,6 +70,7 @@ EOF
         --build)  SEGMENT=build; shift ;;
         --minor)  SEGMENT=minor; shift ;;
         --target) MODE=target; shift ;;
+        --get)    MODE=get; shift ;;
         --)       shift; break ;;
         -*)       printf 'bump-version: unknown option: %s\n' "$1" >&2; exit 2 ;;
         *)        break ;;
@@ -121,6 +127,12 @@ fm_version() {
     ' "$1"
 }
 
+marker_version() {
+    # Echo the version from an APP_VERSION: marker / constant, or nothing.
+    grep -oE "APP_VERSION[^0-9]*[0-9]+\.[0-9]+\.[0-9]+" "$1" \
+        | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+}
+
 # --- detect artifact type -----------------------------------------------------
 base=$(basename "$FILE")
 parent=$(basename "$(dirname "$FILE")")
@@ -145,19 +157,32 @@ if [ -z "$TYPE" ]; then
     elif [ "$parent" = 'agents' ] && [ "$ext" = 'md' ]; then
         TYPE=agent; TARGET="$FILE"
     else
-        case "$ext" in
-            sh|ps1|js|mjs|cjs|py|html)
-                grep -qE '(^|[^A-Za-z_])APP_VERSION' "$FILE" && { TYPE=script; TARGET="$FILE"; }
-                ;;
-        esac
+        # A "script" is a file with a known code extension OR a #! shebang —
+        # the latter catches extensionless tools like the git hooks.
+        is_script=''
+        case "$ext" in sh|ps1|js|mjs|cjs|py|html) is_script=1 ;; esac
+        if [ -z "$is_script" ] && [ "$(head -c2 -- "$FILE" 2>/dev/null)" = '#!' ]; then
+            is_script=1
+        fi
+        if [ -n "$is_script" ] && grep -qE '(^|[^A-Za-z_])APP_VERSION' "$FILE"; then
+            TYPE=script; TARGET="$FILE"
+        fi
     fi
 fi
 
 [ -n "$TYPE" ] || exit 0
 
-# In --target mode, report the resolved artifact file and stop (no mutation).
+# --- read-only modes ----------------------------------------------------------
 if [ "$MODE" = target ]; then
     printf '%s\n' "$TARGET"
+    exit 0
+fi
+if [ "$MODE" = get ]; then
+    # Type-aware read — no generic version-string guessing.
+    case "$TYPE" in
+        skill|agent) fm_version "$TARGET" ;;
+        claude|script) marker_version "$TARGET" ;;
+    esac
     exit 0
 fi
 

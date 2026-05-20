@@ -1,0 +1,52 @@
+#!/bin/sh
+# post-commit — tag each artifact changed in the new commit with its current
+# version.
+#
+# Part of the AI-Toolbox versioning system. After a commit, every artifact
+# touched by that commit is tagged <name>/v<version> (e.g. component-audit/
+# v1.3.0). Only tags that do not yet exist are created — existing versions are
+# never re-tagged. Tags are annotated and local; push them with
+# `git push --follow-tags` (or set `git config push.followTags true`).
+#
+# bump-version.sh is located centrally via $AI_TOOLBOX, falling back to the
+# repo's own tools/ (vendored copy).
+#
+# Logic lives here (version-controlled). .git/hooks/post-commit is a thin shim
+# pointing at this file, installed by tools/install-hooks.sh.
+
+APP_VERSION='0.1.2'
+
+repo=$(git rev-parse --show-toplevel) || exit 0
+
+bump=''
+[ -n "${AI_TOOLBOX:-}" ] && [ -x "$AI_TOOLBOX/tools/bump-version.sh" ] && bump="$AI_TOOLBOX/tools/bump-version.sh"
+[ -z "$bump" ] && [ -x "$repo/tools/bump-version.sh" ] && bump="$repo/tools/bump-version.sh"
+[ -n "$bump" ] || exit 0
+
+# Files changed in the just-created commit -> unique artifact targets.
+targets=$(
+    git diff-tree --no-commit-id --name-only -r --root HEAD | while IFS= read -r f; do
+        [ -n "$f" ] && [ -f "$repo/$f" ] && "$bump" --target "$repo/$f"
+    done | sort -u
+)
+[ -n "$targets" ] || exit 0
+
+printf '%s\n' "$targets" | while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    ver=$("$bump" --get "$t")
+    [ -n "$ver" ] || continue
+
+    # Artifact name: skill directory name for skills, basename otherwise.
+    case "$t" in
+        */.agents/skills/*) name=${t#*/.agents/skills/}; name=${name%%/*} ;;
+        *)                  name=$(basename "$t") ;;
+    esac
+    tag="$name/v$ver"
+
+    # Only new versions get tagged — never re-tag an existing version.
+    if git rev-parse -q --verify "refs/tags/$tag" >/dev/null 2>&1; then
+        continue
+    fi
+    git tag -a "$tag" -m "$name $ver" HEAD && printf 'post-commit: tagged %s\n' "$tag"
+done
+exit 0
