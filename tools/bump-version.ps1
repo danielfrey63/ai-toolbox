@@ -3,6 +3,11 @@
 # PowerShell port of tools/bump-version.sh for Codex / Windows. See that file
 # for the full description of artifact types and version-storage rules.
 #
+# The version marker is matched in its DECLARATION form only — an APP_VERSION
+# assignment at the start of a line, the whole <!-- APP_VERSION: --> comment,
+# or a version: key inside YAML frontmatter. A mere mention of the word in a
+# comment, help text or prose is never matched.
+#
 # Modes:
 #   (default) bump BUILD (3rd) — driven by the per-edit PostToolUse hook
 #   --minor   bump MINOR (2nd), BUILD untouched — driven by the pre-commit hook
@@ -14,12 +19,17 @@
 # CLI, or a Codex / Claude Code PostToolUse hook JSON payload on stdin. Always
 # exits 0 (except on a usage error).
 
-$APP_VERSION = '0.1.6'
+$APP_VERSION = '0.2.7'
 $ErrorActionPreference = 'Stop'
 
 $InitVersion = '0.0.1'
 $script:Result = ''
 $script:Segment = 'build'
+
+# An APP_VERSION assignment at the start of a line; group 3 is the version.
+$DeclRe = '(?m)^[ \t]*((export|const|let|var)[ \t]+)?\$?APP_VERSION[ \t]*=[ \t]*[''"](\d+\.\d+\.\d+)'
+# The whole CLAUDE.md / markdown version-marker comment; group 1 is the version.
+$MarkerRe = '<!--[ \t]*APP_VERSION:[ \t]*(\d+\.\d+\.\d+)'
 
 if ($args | Where-Object { $_ -in @('-h', '--help', '-Help', '/?') }) {
     Write-Output @'
@@ -42,8 +52,10 @@ Artifact types (MAJOR.MINOR.BUILD version):
   claude  CLAUDE.md                          -> trailing <!-- APP_VERSION --> marker
   agent   *.md whose parent dir is "agents"   -> frontmatter version
   script  *.sh .ps1 .js .mjs .cjs .py .html, or any #!-shebang file with an
-          APP_VERSION constant
+          APP_VERSION assignment
 
+The version is matched in its declaration form only — an assignment / the
+whole marker comment / a frontmatter key — never a bare mention of the word.
 A missing version is initialised to 0.0.1. A non-artifact file is a no-op.
 '@
     exit 0
@@ -88,8 +100,14 @@ function Get-FmVersion([string[]]$lines) {
     return $null
 }
 
+function Get-ScriptVersion([string]$f) {
+    $m = [regex]::Match((Get-Content -LiteralPath $f -Raw), $DeclRe)
+    if ($m.Success) { return $m.Groups[3].Value }
+    return $null
+}
+
 function Get-MarkerVersion([string]$f) {
-    $m = [regex]::Match((Get-Content -LiteralPath $f -Raw), 'APP_VERSION[^0-9]*(\d+\.\d+\.\d+)')
+    $m = [regex]::Match((Get-Content -LiteralPath $f -Raw), $MarkerRe)
     if ($m.Success) { return $m.Groups[1].Value }
     return $null
 }
@@ -135,9 +153,14 @@ function Bump-Frontmatter([string]$f, [string]$fmode) {
     [System.IO.File]::WriteAllLines($f, [string[]]$out)
 }
 
+function Set-MatchGroup([string]$content, $group, [string]$new) {
+    # Replace exactly the span of a regex group with $new.
+    return $content.Substring(0, $group.Index) + $new + $content.Substring($group.Index + $group.Length)
+}
+
 function Bump-Marker([string]$f) {
     $content = Get-Content -LiteralPath $f -Raw
-    $m = [regex]::Match($content, 'APP_VERSION:\s*(\d+\.\d+\.\d+)')
+    $m = [regex]::Match($content, $MarkerRe)
     if (-not $m.Success) {
         $sep = if ($content.EndsWith("`n")) { '' } else { "`n" }
         [System.IO.File]::AppendAllText($f, "$sep`n<!-- APP_VERSION: $InitVersion -->`n")
@@ -146,19 +169,17 @@ function Bump-Marker([string]$f) {
     }
     $cur = $m.Groups[1].Value
     $new = Bump-Version $cur
-    $content = [regex]::Replace($content, 'APP_VERSION:\s*' + [regex]::Escape($cur), "APP_VERSION: $new", 1)
-    [System.IO.File]::WriteAllText($f, $content)
+    [System.IO.File]::WriteAllText($f, (Set-MatchGroup $content $m.Groups[1] $new))
     $script:Result = "$cur -> $new"
 }
 
 function Bump-Script([string]$f) {
     $content = Get-Content -LiteralPath $f -Raw
-    $m = [regex]::Match($content, "APP_VERSION[^0-9]*['`"](\d+\.\d+\.\d+)['`"]")
+    $m = [regex]::Match($content, $DeclRe)
     if (-not $m.Success) { exit 0 }
-    $cur = $m.Groups[1].Value
+    $cur = $m.Groups[3].Value
     $new = Bump-Version $cur
-    $content = [regex]::Replace($content, "(APP_VERSION[^0-9]*['`"])" + [regex]::Escape($cur), "`${1}$new", 1)
-    [System.IO.File]::WriteAllText($f, $content)
+    [System.IO.File]::WriteAllText($f, (Set-MatchGroup $content $m.Groups[3] $new))
     $script:Result = "$cur -> $new"
 }
 
@@ -198,14 +219,14 @@ if (-not $type) {
     elseif ($base -eq 'CLAUDE.md') { $type = 'claude'; $target = $file }
     elseif ($parent -eq 'agents' -and $ext -eq 'md') { $type = 'agent'; $target = $file }
     else {
-        # A "script" has a known code extension OR a #! shebang — the latter
-        # catches extensionless tools like the git hooks.
+        # A "script" has a known code extension OR a #! shebang, and counts as a
+        # versioned artifact only if it carries an APP_VERSION assignment.
         $isScript = $ext -in @('sh', 'ps1', 'js', 'mjs', 'cjs', 'py', 'html')
         if (-not $isScript) {
             $first = Get-Content -LiteralPath $file -TotalCount 1
             if ($first -and $first.StartsWith('#!')) { $isScript = $true }
         }
-        if ($isScript -and ((Get-Content -LiteralPath $file -Raw) -match 'APP_VERSION')) {
+        if ($isScript -and [regex]::Match((Get-Content -LiteralPath $file -Raw), $DeclRe).Success) {
             $type = 'script'; $target = $file
         }
     }
@@ -219,8 +240,9 @@ if ($mode -eq 'target') {
 }
 if ($mode -eq 'get') {
     switch ($type) {
-        { $_ -in 'skill', 'agent' }   { $v = Get-FmVersion @(Get-Content -LiteralPath $target) }
-        { $_ -in 'claude', 'script' } { $v = Get-MarkerVersion $target }
+        { $_ -in 'skill', 'agent' } { $v = Get-FmVersion @(Get-Content -LiteralPath $target) }
+        'claude' { $v = Get-MarkerVersion $target }
+        'script' { $v = Get-ScriptVersion $target }
     }
     if ($v) { Write-Output $v }
     exit 0

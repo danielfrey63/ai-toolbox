@@ -7,7 +7,12 @@
 #   claude  — CLAUDE.md                          -> trailing <!-- APP_VERSION: x.y.z --> marker
 #   agent   — *.md whose parent directory is "agents" -> frontmatter top-level version
 #   script  — *.sh/.ps1/.js/.mjs/.cjs/.py/.html OR any file with a #! shebang,
-#             provided it carries an APP_VERSION constant
+#             provided it carries an APP_VERSION assignment
+#
+# The version marker is matched in its DECLARATION form only — an APP_VERSION
+# assignment at the start of a line, the whole <!-- APP_VERSION: --> comment,
+# or a version: key inside YAML frontmatter. A mere mention of the word in a
+# comment, help text or prose is never matched and never bumped.
 #
 # Modes:
 #   (default) bump BUILD (3rd) — driven by the per-edit PostToolUse hook
@@ -27,7 +32,7 @@
 # Always exits 0 (except on a usage error) — a non-artifact edit is a silent
 # no-op, so it is hook-safe.
 
-APP_VERSION='0.1.5'
+APP_VERSION='0.2.6'
 set -u
 
 INIT_VERSION='0.0.1'
@@ -62,8 +67,10 @@ Artifact types (MAJOR.MINOR.BUILD version):
   claude  CLAUDE.md                          -> trailing <!-- APP_VERSION --> marker
   agent   *.md whose parent dir is "agents"   -> frontmatter version
   script  *.sh .ps1 .js .mjs .cjs .py .html, or any #!-shebang file with an
-          APP_VERSION constant
+          APP_VERSION assignment
 
+The version is matched in its declaration form only — an assignment / the
+whole marker comment / a frontmatter key — never a bare mention of the word.
 A missing version is initialised to 0.0.1. A non-artifact file is a no-op.
 EOF
             exit 0 ;;
@@ -91,6 +98,15 @@ fi
 [ -n "$FILE" ] || exit 0
 [ -f "$FILE" ] || exit 0
 FILE="$(cd "$(dirname "$FILE")" && pwd)/$(basename "$FILE")"
+
+# --- declaration patterns -----------------------------------------------------
+# An APP_VERSION assignment at the start of a line — covers APP_VERSION='x',
+# $APP_VERSION = 'x', const APP_VERSION = "x", export APP_VERSION='x', etc.
+# Anchoring to the assignment form means a mention of APP_VERSION in a comment
+# or help text is never matched.
+DECL_RE='^[[:space:]]*((export|const|let|var)[[:space:]]+)?\$?APP_VERSION[[:space:]]*=[[:space:]]*['\''"]'
+# The whole CLAUDE.md / markdown version-marker comment.
+MARKER_RE='<!--[[:space:]]*APP_VERSION:[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+'
 
 # --- helpers ------------------------------------------------------------------
 bump_version() {
@@ -127,9 +143,15 @@ fm_version() {
     ' "$1"
 }
 
+script_version() {
+    # Echo the version from the first APP_VERSION assignment line, or nothing.
+    grep -m1 -oE "${DECL_RE}[0-9]+\.[0-9]+\.[0-9]+" "$1" \
+        | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+}
+
 marker_version() {
-    # Echo the version from an APP_VERSION: marker / constant, or nothing.
-    grep -oE "APP_VERSION[^0-9]*[0-9]+\.[0-9]+\.[0-9]+" "$1" \
+    # Echo the version from the <!-- APP_VERSION: x.y.z --> marker, or nothing.
+    grep -m1 -oE "$MARKER_RE" "$1" \
         | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
 }
 
@@ -158,13 +180,14 @@ if [ -z "$TYPE" ]; then
         TYPE=agent; TARGET="$FILE"
     else
         # A "script" is a file with a known code extension OR a #! shebang —
-        # the latter catches extensionless tools like the git hooks.
+        # the latter catches extensionless tools like the git hooks. It only
+        # counts as a versioned artifact if it carries an APP_VERSION assignment.
         is_script=''
         case "$ext" in sh|ps1|js|mjs|cjs|py|html) is_script=1 ;; esac
         if [ -z "$is_script" ] && [ "$(head -c2 -- "$FILE" 2>/dev/null)" = '#!' ]; then
             is_script=1
         fi
-        if [ -n "$is_script" ] && grep -qE '(^|[^A-Za-z_])APP_VERSION' "$FILE"; then
+        if [ -n "$is_script" ] && grep -qE "$DECL_RE" "$FILE"; then
             TYPE=script; TARGET="$FILE"
         fi
     fi
@@ -178,10 +201,11 @@ if [ "$MODE" = target ]; then
     exit 0
 fi
 if [ "$MODE" = get ]; then
-    # Type-aware read — no generic version-string guessing.
+    # Type-aware read — each type from its own declaration form.
     case "$TYPE" in
         skill|agent) fm_version "$TARGET" ;;
-        claude|script) marker_version "$TARGET" ;;
+        claude)      marker_version "$TARGET" ;;
+        script)      script_version "$TARGET" ;;
     esac
     exit 0
 fi
@@ -233,8 +257,7 @@ bump_frontmatter() {
 
 bump_marker() {
     local f=$1 cur new
-    cur=$(grep -oE 'APP_VERSION:[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+' "$f" \
-          | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    cur=$(marker_version "$f")
     if [ -z "$cur" ]; then
         [ -s "$f" ] && [ -n "$(tail -c1 "$f")" ] && printf '\n' >> "$f"
         printf '\n<!-- APP_VERSION: %s -->\n' "$INIT_VERSION" >> "$f"
@@ -242,17 +265,21 @@ bump_marker() {
         return
     fi
     new=$(bump_version "$cur")
-    sed -i "/APP_VERSION:/ s/$(re_escape "$cur")/$new/" "$f"
+    # Replace the version only inside the marker comment, nowhere else.
+    sed -i -E "s|(<!--[[:space:]]*APP_VERSION:[[:space:]]*)$(re_escape "$cur")|\\1$new|" "$f"
     RESULT="$cur -> $new"
 }
 
 bump_script() {
-    local f=$1 cur new
-    cur=$(grep -oE "APP_VERSION[^0-9]*['\"][0-9]+\.[0-9]+\.[0-9]+['\"]" "$f" \
-          | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    local f=$1 cur new ln
+    # Operate on the first APP_VERSION assignment line only — never on a
+    # comment or help text that merely mentions the token.
+    ln=$(grep -m1 -nE "$DECL_RE" "$f" | cut -d: -f1)
+    [ -n "$ln" ] || exit 0
+    cur=$(sed -n "${ln}p" "$f" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
     [ -n "$cur" ] || exit 0
     new=$(bump_version "$cur")
-    sed -i "/APP_VERSION/ s/$(re_escape "$cur")/$new/" "$f"
+    sed -i "${ln}s/$(re_escape "$cur")/$new/" "$f"
     RESULT="$cur -> $new"
 }
 
