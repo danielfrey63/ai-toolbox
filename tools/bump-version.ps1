@@ -10,11 +10,32 @@
 # Dual mode: `bump-version.ps1 <file>` as a CLI, or a Codex / Claude Code
 # PostToolUse hook JSON payload on stdin. Always exits 0.
 
-$APP_VERSION = '0.0.1'
+$APP_VERSION = '0.0.2'
 $ErrorActionPreference = 'Stop'
 
 $InitVersion = '0.0.1'
 $script:Result = ''
+
+if ($args.Count -ge 1 -and ($args[0] -in @('-h', '--help', '-Help', '/?'))) {
+    Write-Output @'
+bump-version — generic per-artifact version bumper for the AI-Toolbox.
+
+Usage:
+  bump-version.ps1 <file>         Bump the version of the artifact owning <file>.
+  bump-version.ps1 -h|--help      Show this help.
+  <hook-json> | bump-version.ps1  Hook mode: read the edited path from a Codex /
+                                  Claude Code PostToolUse JSON payload on stdin.
+
+Artifact types (MAJOR.MINOR.PATCH version; the PATCH segment is bumped):
+  skill   file under .agents/skills/<name>/  -> <name>/SKILL.md metadata.version
+  claude  CLAUDE.md                          -> trailing <!-- APP_VERSION --> marker
+  agent   *.md whose parent dir is "agents"   -> frontmatter version
+  script  *.sh .ps1 .js .mjs .cjs .py .html   -> APP_VERSION constant (if present)
+
+A missing version is initialised to 0.0.1. A non-artifact file is a no-op.
+'@
+    exit 0
+}
 
 function Bump-Patch([string]$v) {
     $p = $v -split '\.'

@@ -18,11 +18,33 @@
 #
 # Always exits 0 — a non-artifact edit is a silent no-op, so it is hook-safe.
 
-APP_VERSION='0.0.1'
+APP_VERSION='0.0.2'
 set -u
 
 INIT_VERSION='0.0.1'
 RESULT=''
+
+case "${1:-}" in
+    -h|--help)
+        cat <<'EOF'
+bump-version — generic per-artifact version bumper for the AI-Toolbox.
+
+Usage:
+  bump-version.sh <file>        Bump the version of the artifact owning <file>.
+  bump-version.sh -h|--help     Show this help.
+  <hook-json> | bump-version.sh Hook mode: read the edited path from a Claude
+                                Code / Codex PostToolUse JSON payload on stdin.
+
+Artifact types (MAJOR.MINOR.PATCH version; the PATCH segment is bumped):
+  skill   file under .agents/skills/<name>/  -> <name>/SKILL.md metadata.version
+  claude  CLAUDE.md                          -> trailing <!-- APP_VERSION --> marker
+  agent   *.md whose parent dir is "agents"   -> frontmatter version
+  script  *.sh .ps1 .js .mjs .cjs .py .html   -> APP_VERSION constant (if present)
+
+A missing version is initialised to 0.0.1. A non-artifact file is a no-op.
+EOF
+        exit 0 ;;
+esac
 
 # --- resolve target file ------------------------------------------------------
 FILE=${1:-}
@@ -47,6 +69,12 @@ bump_patch() {
         *[!0-9-]*|*--*|-*|*-) printf '%s' "$INIT_VERSION"; return ;;
     esac
     printf '%s.%s.%s' "$major" "$minor" "$((patch + 1))"
+}
+
+re_escape() {
+    # Escape regex metacharacters in a version string for safe use as a sed/awk
+    # pattern. Versions are digits + dots, so escaping dots is sufficient.
+    printf '%s' "${1//./\\.}"
 }
 
 fm_version() {
@@ -104,11 +132,11 @@ bump_frontmatter() {
     tmp=$(mktemp)
     if [ -n "$cur" ]; then
         new=$(bump_patch "$cur")
-        awk -v cur="$cur" -v new="$new" '
+        awk -v cur="$cur" -v cur_re="$(re_escape "$cur")" -v new="$new" '
             NR==1 && $0=="---" { fm=1; print; next }
             fm && $0=="---"     { fm=0; print; next }
             fm && !done && $0 ~ /^[[:space:]]*version:/ && index($0, cur) {
-                sub(cur, new); done=1
+                sub(cur_re, new); done=1
             }
             { print }
         ' "$f" > "$tmp"
@@ -153,7 +181,7 @@ bump_marker() {
         return
     fi
     new=$(bump_patch "$cur")
-    sed -i "/APP_VERSION:/ s/$cur/$new/" "$f"
+    sed -i "/APP_VERSION:/ s/$(re_escape "$cur")/$new/" "$f"
     RESULT="$cur -> $new"
 }
 
@@ -163,7 +191,7 @@ bump_script() {
           | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
     [ -n "$cur" ] || exit 0
     new=$(bump_patch "$cur")
-    sed -i "/APP_VERSION/ s/$cur/$new/" "$f"
+    sed -i "/APP_VERSION/ s/$(re_escape "$cur")/$new/" "$f"
     RESULT="$cur -> $new"
 }
 
