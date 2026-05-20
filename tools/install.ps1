@@ -4,7 +4,7 @@
 # the full description. Reads tools/catalog.json and dispatches per tool TYPE:
 #   skill  — junction (Windows) / symlink (Linux/macOS) into a skills/ dir
 #   hook   — point a repo's core.hooksPath at the toolbox hook directory
-#   plugin — claude plugin marketplace add + install      (handler: pending)
+#   plugin — claude plugin marketplace add + install (--target claude); else skill-link
 #
 # Usage:
 #   install.ps1 <build|status|clean> --target <claude|codex|agents>
@@ -13,7 +13,7 @@
 # Idempotent: build re-links cleanly, clean removes only our own links,
 # a foreign file/dir at the target is never clobbered.
 
-$APP_VERSION = '0.2.6'
+$APP_VERSION = '0.3.10'
 $ErrorActionPreference = 'Stop'
 
 $SelfDir  = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -34,9 +34,9 @@ Options:
   --what    all | <tool-name> | <type>  Default: all. Select catalog entries.
   -h|--help                             Show this help.
 
-Tool types: skill, hook (implemented); the plugin handler is pending.
-hook tools install per-repo — they need --scope project --project PATH and
-ignore --target.
+Tool types: skill, hook, plugin.
+  hook   — per-repo: needs --scope project --project PATH, ignores --target.
+  plugin — --target claude does a real plugin install; codex/agents skill-link it.
 '@
 }
 
@@ -190,6 +190,60 @@ function Handle-Hook([string]$name, [string]$path) {
     }
 }
 
+# --- plugin handler -----------------------------------------------------------
+# --target claude: real plugin install via the claude CLI. Other targets have
+# no plugin system — the tool falls back to a skill-link (a plugin directory
+# also carries a SKILL.md).
+function Handle-Plugin([string]$name, [string]$path, [string]$marketplace, [string]$plugin) {
+    if ($Target -ne 'claude') {
+        Handle-Skill $name $path
+        return
+    }
+    if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
+        [Console]::Error.WriteLine("  [!] $name  claude CLI not found — cannot install plugin")
+        return
+    }
+    $srcdir = Join-Path $RepoRoot $path
+    $ref = "$plugin@$marketplace"
+    $pscope = if ($Scope -eq 'project') { 'project' } else { 'user' }
+    $pdir = if ($Scope -eq 'project') { $Project } else { $PWD.Path }
+    $installed = [bool](claude plugin list 2>$null | Select-String -SimpleMatch $ref -Quiet)
+    switch ($Cmd) {
+        'build' {
+            Push-Location $pdir
+            try {
+                claude plugin marketplace add $srcdir --scope $pscope 2>$null | Out-Null
+                if ($installed) {
+                    Write-Output "  [=] $name  $ref already installed"
+                } else {
+                    claude plugin install $ref --scope $pscope 2>$null | Out-Null
+                    if (claude plugin list 2>$null | Select-String -SimpleMatch $ref -Quiet) {
+                        Write-Output "  [+] $name  $ref installed (scope $pscope)"
+                    } else {
+                        [Console]::Error.WriteLine("  [!] $name  install failed: $ref")
+                    }
+                }
+            } finally { Pop-Location }
+        }
+        'status' {
+            if ($installed) { Write-Output "  [ok] $name  $ref installed" }
+            else { Write-Output "  [  ] $name  $ref not installed" }
+        }
+        'clean' {
+            Push-Location $pdir
+            try {
+                if ($installed) {
+                    claude plugin uninstall $ref -y 2>$null | Out-Null
+                    Write-Output "  [-] $name  $ref uninstalled"
+                } else {
+                    Write-Output "  [.] $name  $ref not installed"
+                }
+                claude plugin marketplace remove $marketplace 2>$null | Out-Null
+            } finally { Pop-Location }
+        }
+    }
+}
+
 # --- dispatch -----------------------------------------------------------------
 Write-Output "install $Cmd — scope=$Scope target=$Target what=$What"
 
@@ -205,9 +259,7 @@ foreach ($tool in $selected) {
     switch ($tool.type) {
         'skill' { Handle-Skill $tool.name $tool.path }
         'hook'  { Handle-Hook $tool.name $tool.path }
-        'plugin' {
-            Write-Output "  [.] $($tool.name)  type `"$($tool.type)`" — handler not yet implemented"
-        }
+        'plugin' { Handle-Plugin $tool.name $tool.path $tool.marketplace $tool.plugin }
         default {
             [Console]::Error.WriteLine("  [!] $($tool.name)  unknown type `"$($tool.type)`"")
         }

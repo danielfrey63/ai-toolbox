@@ -4,7 +4,8 @@
 # Reads tools/catalog.json and dispatches per tool TYPE to a handler:
 #   skill  — symlink the tool into <scope>/.{claude,codex,agents}/skills/
 #   hook   — point a repo's core.hooksPath at the toolbox hook directory
-#   plugin — claude plugin marketplace add + install     (handler: pending)
+#   plugin — claude plugin marketplace add + install (--target claude);
+#            for --target codex|agents the plugin falls back to a skill-link
 #
 # Usage:
 #   install.sh <build|status|clean> --target <claude|codex|agents>
@@ -18,7 +19,7 @@
 # Idempotent: build re-links cleanly, clean removes only our own symlinks,
 # a foreign file/dir at the target is never clobbered.
 
-APP_VERSION='0.2.6'
+APP_VERSION='0.3.10'
 set -u
 
 SELF_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -39,9 +40,9 @@ Options:
   --what    all | <tool-name> | <type>  Default: all. Select catalog entries.
   -h|--help                             Show this help.
 
-Tool types: skill, hook (implemented); the plugin handler is pending.
-hook tools install per-repo — they need --scope project --project PATH and
-ignore --target.
+Tool types: skill, hook, plugin.
+  hook   — per-repo: needs --scope project --project PATH, ignores --target.
+  plugin — --target claude does a real plugin install; codex/agents skill-link it.
 EOF
 }
 
@@ -205,6 +206,55 @@ handle_hook() {
     esac
 }
 
+# --- plugin handler -----------------------------------------------------------
+# --target claude: real plugin install via the claude CLI (marketplace add +
+# install). Other targets have no plugin system — the tool falls back to a
+# skill-link, since a plugin directory also carries a SKILL.md.
+handle_plugin() {
+    local name=$1 path=$2 marketplace=$3 plugin=$4
+    if [ "$TARGET" != claude ]; then
+        handle_skill "$name" "$path"
+        return
+    fi
+    command -v claude >/dev/null 2>&1 || {
+        printf '  [!] %-18s claude CLI not found — cannot install plugin\n' "$name" >&2
+        return
+    }
+    local srcdir="$REPO_ROOT/$path" ref="$plugin@$marketplace"
+    local pscope=user pdir=$PWD
+    [ "$SCOPE" = project ] && { pscope=project; pdir=$PROJECT; }
+    case "$CMD" in
+        build)
+            # marketplace add is idempotent enough — tolerate "already added".
+            ( cd "$pdir" && claude plugin marketplace add "$srcdir" --scope "$pscope" ) \
+                >/dev/null 2>&1 || true
+            if claude plugin list 2>/dev/null | grep -qF "$ref"; then
+                printf '  [=] %-18s %s already installed\n' "$name" "$ref"
+            elif ( cd "$pdir" && claude plugin install "$ref" --scope "$pscope" ) >/dev/null 2>&1; then
+                printf '  [+] %-18s %s installed (scope %s)\n' "$name" "$ref" "$pscope"
+            else
+                printf '  [!] %-18s install failed: %s\n' "$name" "$ref" >&2
+            fi
+            ;;
+        status)
+            if claude plugin list 2>/dev/null | grep -qF "$ref"; then
+                printf '  [ok] %-18s %s installed\n' "$name" "$ref"
+            else
+                printf '  [  ] %-18s %s not installed\n' "$name" "$ref"
+            fi
+            ;;
+        clean)
+            if claude plugin list 2>/dev/null | grep -qF "$ref"; then
+                ( cd "$pdir" && claude plugin uninstall "$ref" -y ) >/dev/null 2>&1 \
+                    && printf '  [-] %-18s %s uninstalled\n' "$name" "$ref"
+            else
+                printf '  [.] %-18s %s not installed\n' "$name" "$ref"
+            fi
+            ( cd "$pdir" && claude plugin marketplace remove "$marketplace" ) >/dev/null 2>&1 || true
+            ;;
+    esac
+}
+
 # --- dispatch -----------------------------------------------------------------
 printf 'install %s — scope=%s target=%s what=%s\n' "$CMD" "$SCOPE" "$TARGET" "$WHAT"
 
@@ -224,7 +274,9 @@ printf '%s\n' "$selected" | while IFS= read -r tool; do
         skill)  handle_skill "$name" "$path" ;;
         hook)   handle_hook "$name" "$path" ;;
         plugin)
-            printf '  [.] %-18s type "%s" — handler not yet implemented\n' "$name" "$type"
+            mkt=$(printf '%s' "$tool" | jq -r '.marketplace // empty')
+            plg=$(printf '%s' "$tool" | jq -r '.plugin // empty')
+            handle_plugin "$name" "$path" "$mkt" "$plg"
             ;;
         *)
             printf '  [!] %-18s unknown type "%s"\n' "$name" "$type" >&2
