@@ -8,20 +8,14 @@
 # never re-tagged. Tags are annotated and local; push them with
 # `git push --follow-tags` (or set `git config push.followTags true`).
 #
-# bump-version.sh is located centrally via $AI_TOOLBOX, falling back to the
-# repo's own tools/ (vendored copy).
-#
 # Logic lives here (version-controlled). .git/hooks/post-commit is a thin shim
 # pointing at this file, installed by tools/install-hooks.sh.
 
-APP_VERSION='0.1.2'
+APP_VERSION='0.2.3'
 
 repo=$(git rev-parse --show-toplevel) || exit 0
-
-bump=''
-[ -n "${AI_TOOLBOX:-}" ] && [ -x "$AI_TOOLBOX/tools/bump-version.sh" ] && bump="$AI_TOOLBOX/tools/bump-version.sh"
-[ -z "$bump" ] && [ -x "$repo/tools/bump-version.sh" ] && bump="$repo/tools/bump-version.sh"
-[ -n "$bump" ] || exit 0
+bump="$repo/tools/bump-version.sh"
+[ -x "$bump" ] || exit 0
 
 # Files changed in the just-created commit -> unique artifact targets.
 targets=$(

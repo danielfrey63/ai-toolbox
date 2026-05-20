@@ -1,29 +1,23 @@
 #!/bin/sh
-# pre-commit — bump the MINOR segment of staged artifacts whose BUILD moved.
+# pre-commit — bump the MINOR segment of every staged artifact.
 #
 # Part of the AI-Toolbox versioning system. The per-edit PostToolUse hook bumps
-# BUILD; this hook bumps MINOR once per commit — but only for artifacts that
-# were genuinely edited, detected by their BUILD differing from HEAD. Build and
-# minor are different segments, so the two bumps never collide.
+# BUILD; this hook bumps MINOR once per commit. Build and minor are different
+# segments, so the two bumps never collide.
 #
-# Each staged file is resolved to its artifact (bump-version.sh --target),
-# duplicates are collapsed, and every artifact whose build changed has its
-# minor bumped once and is re-staged so the change joins this commit.
-#
-# bump-version.sh is located centrally via $AI_TOOLBOX, falling back to the
-# repo's own tools/ (vendored copy).
+# Every staged file is resolved to its artifact (bump-version.sh --target),
+# duplicates are collapsed, each artifact's minor is bumped once, and the
+# bumped files are re-staged so the change joins this commit. The staged file
+# list is git's own record of what changed — no version comparison needed.
 #
 # Logic lives here (version-controlled). .git/hooks/pre-commit is a thin shim
 # pointing at this file, installed by tools/install-hooks.sh.
 
-APP_VERSION='0.1.2'
+APP_VERSION='0.2.3'
 
 repo=$(git rev-parse --show-toplevel) || exit 0
-
-bump=''
-[ -n "${AI_TOOLBOX:-}" ] && [ -x "$AI_TOOLBOX/tools/bump-version.sh" ] && bump="$AI_TOOLBOX/tools/bump-version.sh"
-[ -z "$bump" ] && [ -x "$repo/tools/bump-version.sh" ] && bump="$repo/tools/bump-version.sh"
-[ -n "$bump" ] || exit 0
+bump="$repo/tools/bump-version.sh"
+[ -x "$bump" ] || exit 0
 
 # Resolve staged files (added/copied/modified) to unique artifact targets.
 targets=$(
@@ -33,27 +27,10 @@ targets=$(
 )
 [ -n "$targets" ] || exit 0
 
-tmp=$(mktemp -d) || exit 0
-trap 'rm -rf "$tmp"' EXIT
-
-# For each artifact: bump minor only if it is new or its BUILD moved vs HEAD.
+# Bump each artifact's minor once and re-stage it.
 printf '%s\n' "$targets" | while IFS= read -r t; do
     [ -n "$t" ] || continue
-    rel=${t#"$repo"/}
-    work_ver=$("$bump" --get "$t")
-
-    head_ver=''
-    if git cat-file -e "HEAD:$rel" 2>/dev/null; then
-        # Mirror parent-dir + basename so bump-version.sh classifies the blob.
-        blob="$tmp/$(basename "$(dirname "$t")")/$(basename "$t")"
-        mkdir -p "$(dirname "$blob")"
-        git show "HEAD:$rel" > "$blob" 2>/dev/null
-        head_ver=$("$bump" --get "$blob")
-    fi
-
-    if [ -z "$head_ver" ] || [ "${work_ver##*.}" != "${head_ver##*.}" ]; then
-        "$bump" --minor "$t"
-        git add -- "$t"
-    fi
+    "$bump" --minor "$t"
+    git add -- "$t"
 done
 exit 0
