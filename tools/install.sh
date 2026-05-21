@@ -8,7 +8,7 @@
 #            for --target codex|agents the plugin falls back to a skill-link
 #
 # Usage:
-#   install.sh <build|status|clean> --target <claude|codex|agents>
+#   install.sh <install|status|clean> --target <claude|codex|agents>
 #              [--scope global|project] [--project PATH] [--what all|<name>|<type>]
 #              [--tagstyle plain|namespaced]
 #
@@ -21,10 +21,10 @@
 # --tagstyle applies only to hook installs — it sets the repo's
 # bumpversion.tagstyle (plain = v<version> tags for a single-artifact repo).
 #
-# Idempotent: build re-links cleanly, clean removes only our own symlinks,
+# Idempotent: install re-links cleanly, clean removes only our own symlinks,
 # a foreign file/dir at the target is never clobbered.
 
-APP_VERSION='0.8.38'
+APP_VERSION='0.9.46'
 set -u
 
 SELF_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -39,12 +39,12 @@ Tools are described in the catalog (tools/catalog.json) and installed by
 type-specific handlers. Run `install.sh list` to see what is available.
 
 Usage:
-  install.sh <build|status|clean> --target <claude|codex|agents> [options]
+  install.sh <install|status|clean> --target <claude|codex|agents> [options]
   install.sh list
   install.sh -h|--help
 
 Commands:
-  build    Install the selected tools (idempotent — safe to re-run).
+  install  Install the selected tools (idempotent — safe to re-run).
   status   Report whether each selected tool is installed.
   clean    Remove the selected tools (only ever removes our own links/config).
   list     Print the catalog — every installable tool with its type.
@@ -82,13 +82,13 @@ Catalog (tools/catalog.json):
 
 Examples:
   install.sh list
-  install.sh build --target claude                       # all tools, global
-  install.sh build --target codex --what component-audit
-  install.sh build --what versioning-hooks --scope project   # --project = cwd
+  install.sh install --target claude   # all tools, global
+  install.sh install --target codex --what component-audit
+  install.sh install --what versioning-hooks --scope project   # --project = cwd
   install.sh status --target claude
   install.sh clean --target claude --what watch
 
-Idempotent: build re-links cleanly, clean removes only our own links/config,
+Idempotent: install re-links cleanly, clean removes only our own links/config,
 a foreign file or directory at a target is never clobbered.
 EOF
 }
@@ -107,9 +107,9 @@ print_catalog_list() {
 # --- command ------------------------------------------------------------------
 CMD=${1:-}
 case "$CMD" in
-    build|status|clean|list) shift ;;
+    install|status|clean|list) shift ;;
     -h|--help) usage; exit 0 ;;
-    '') printf 'install: missing command (build|status|clean|list)\n' >&2; exit 2 ;;
+    '') printf 'install: missing command (install|status|clean|list)\n' >&2; exit 2 ;;
     *)  printf 'install: unknown command: %s\n' "$CMD" >&2; exit 2 ;;
 esac
 
@@ -196,7 +196,7 @@ handle_skill() {
     fi
 
     case "$CMD" in
-        build)
+        install)
             mkdir -p "$destdir"
             if [ -L "$link" ] && [ "$(readlink "$link")" = "$src" ]; then
                 printf '  [=] %-18s already linked\n' "$name"; return
@@ -245,7 +245,7 @@ print_readme_hint() {
          Artifacts here are version-bumped by the AI-Toolbox git hooks.
          Once per clone, from this repo's root:
            git clone https://github.com/danielfrey63/ai-toolbox.git   # if needed
-           <ai-toolbox>/tools/install.sh build --what versioning-hooks \
+           <ai-toolbox>/tools/install.sh install --what versioning-hooks \
              --scope project
 EOF
 }
@@ -264,7 +264,7 @@ handle_hook() {
     }
     cur=$(git -C "$prepo" config --local core.hooksPath 2>/dev/null || true)
     case "$CMD" in
-        build)
+        install)
             if [ -n "$cur" ] && [ "$cur" != "$hooksdir" ]; then
                 printf '  [!] %-18s core.hooksPath already set to %s — skipped\n' "$name" "$cur" >&2
                 return
@@ -327,7 +327,7 @@ handle_plugin() {
     local pscope=user pdir=$PWD
     [ "$SCOPE" = project ] && { pscope=project; pdir=$PROJECT; }
     case "$CMD" in
-        build)
+        install)
             # marketplace add is idempotent enough — tolerate "already added".
             ( cd "$pdir" && claude plugin marketplace add "$srcdir" --scope "$pscope" ) \
                 >/dev/null 2>&1 || true

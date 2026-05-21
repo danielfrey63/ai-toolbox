@@ -7,17 +7,17 @@
 #   plugin — claude plugin marketplace add + install (--target claude); else skill-link
 #
 # Usage:
-#   install.ps1 <build|status|clean> --target <claude|codex|agents>
+#   install.ps1 <install|status|clean> --target <claude|codex|agents>
 #               [--scope global|project] [--project PATH] [--what all|<name>|<type>]
 #               [--tagstyle plain|namespaced]
 #
 # --tagstyle applies only to hook installs — it sets the repo's
 # bumpversion.tagstyle (plain = v<version> tags for a single-artifact repo).
 #
-# Idempotent: build re-links cleanly, clean removes only our own links,
+# Idempotent: install re-links cleanly, clean removes only our own links,
 # a foreign file/dir at the target is never clobbered.
 
-$APP_VERSION = '0.8.35'
+$APP_VERSION = '0.9.43'
 $ErrorActionPreference = 'Stop'
 
 $SelfDir  = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -32,12 +32,12 @@ Tools are described in the catalog (tools/catalog.json) and installed by
 type-specific handlers. Run `install.ps1 list` to see what is available.
 
 Usage:
-  install.ps1 <build|status|clean> --target <claude|codex|agents> [options]
+  install.ps1 <install|status|clean> --target <claude|codex|agents> [options]
   install.ps1 list
   install.ps1 -h|--help
 
 Commands:
-  build    Install the selected tools (idempotent — safe to re-run).
+  install  Install the selected tools (idempotent — safe to re-run).
   status   Report whether each selected tool is installed.
   clean    Remove the selected tools (only ever removes our own links/config).
   list     Print the catalog — every installable tool with its type.
@@ -75,13 +75,13 @@ Catalog (tools/catalog.json):
 
 Examples:
   install.ps1 list
-  install.ps1 build --target claude                       # all tools, global
-  install.ps1 build --target codex --what component-audit
-  install.ps1 build --what versioning-hooks --scope project   # --project = cwd
+  install.ps1 install --target claude   # all tools, global
+  install.ps1 install --target codex --what component-audit
+  install.ps1 install --what versioning-hooks --scope project   # --project = cwd
   install.ps1 status --target claude
   install.ps1 clean --target claude --what watch
 
-Idempotent: build re-links cleanly, clean removes only our own links/config,
+Idempotent: install re-links cleanly, clean removes only our own links/config,
 a foreign file or directory at a target is never clobbered.
 '@
 }
@@ -99,8 +99,8 @@ function Show-CatalogList {
 # --- command ------------------------------------------------------------------
 $Cmd = if ($args.Count -ge 1) { [string]$args[0] } else { '' }
 if ($Cmd -in @('-h', '--help')) { Show-Usage; exit 0 }
-if ($Cmd -notin @('build', 'status', 'clean', 'list')) {
-    [Console]::Error.WriteLine("install: missing or unknown command (build|status|clean|list)")
+if ($Cmd -notin @('install', 'status', 'clean', 'list')) {
+    [Console]::Error.WriteLine("install: missing or unknown command (install|status|clean|list)")
     exit 2
 }
 
@@ -180,7 +180,7 @@ function Handle-Skill([string]$name, [string]$path) {
     $item = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
 
     switch ($Cmd) {
-        'build' {
+        'install' {
             New-Item -ItemType Directory -Path $destdir -Force | Out-Null
             if ($item -and $item.Target -eq $src) {
                 Write-Output "  [=] $name  already linked"; return
@@ -232,7 +232,7 @@ function Show-ReadmeHint {
          Artifacts here are version-bumped by the AI-Toolbox git hooks.
          Once per clone, from this repo's root:
            git clone https://github.com/danielfrey63/ai-toolbox.git   # if needed
-           <ai-toolbox>/tools/install.ps1 build --what versioning-hooks --scope project
+           <ai-toolbox>/tools/install.ps1 install --what versioning-hooks --scope project
 '@
 }
 
@@ -248,7 +248,7 @@ function Handle-Hook([string]$name, [string]$path) {
     }
     $cur = (git -C $prepo config --local core.hooksPath 2>$null)
     switch ($Cmd) {
-        'build' {
+        'install' {
             if ($cur -and $cur -ne $hooksdir) {
                 [Console]::Error.WriteLine("  [!] $name  core.hooksPath already set to $cur — skipped"); return
             }
@@ -309,7 +309,7 @@ function Handle-Plugin([string]$name, [string]$path, [string]$marketplace, [stri
     $pdir = if ($Scope -eq 'project') { $Project } else { $PWD.Path }
     $installed = [bool](claude plugin list 2>$null | Select-String -SimpleMatch $ref -Quiet)
     switch ($Cmd) {
-        'build' {
+        'install' {
             Push-Location $pdir
             try {
                 claude plugin marketplace add $srcdir --scope $pscope 2>$null | Out-Null
