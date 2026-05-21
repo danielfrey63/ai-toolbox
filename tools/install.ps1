@@ -17,7 +17,7 @@
 # Idempotent: install re-links cleanly, clean removes only our own links,
 # a foreign file/dir at the target is never clobbered.
 
-$APP_VERSION = '0.9.43'
+$APP_VERSION = '0.10.45'
 $ErrorActionPreference = 'Stop'
 
 $SelfDir  = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -260,14 +260,18 @@ function Handle-Hook([string]$name, [string]$path) {
                 Write-Output "  [+] $name  core.hooksPath -> $hooksdir"
                 $fresh = $true
             }
+            $curts = (git -C $prepo config --local bumpversion.tagstyle 2>$null)
             if ($TagStyle) {
-                $curts = (git -C $prepo config --local bumpversion.tagstyle 2>$null)
                 if ($curts -eq $TagStyle) {
                     Write-Output "  [=] $name  bumpversion.tagstyle already $TagStyle"
                 } else {
                     git -C $prepo config --local bumpversion.tagstyle $TagStyle
                     Write-Output "  [+] $name  bumpversion.tagstyle -> $TagStyle"
                 }
+            } elseif ($curts) {
+                Write-Output "  [i] $name  bumpversion.tagstyle = $curts"
+            } else {
+                Write-Output "  [i] $name  bumpversion.tagstyle = namespaced (default) — pass --tagstyle plain for a single-artifact repo"
             }
             if ($fresh) { Show-ReadmeHint }
         }

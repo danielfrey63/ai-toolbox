@@ -24,7 +24,7 @@
 # Idempotent: install re-links cleanly, clean removes only our own symlinks,
 # a foreign file/dir at the target is never clobbered.
 
-APP_VERSION='0.9.46'
+APP_VERSION='0.10.48'
 set -u
 
 SELF_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -276,14 +276,18 @@ handle_hook() {
                 printf '  [+] %-18s core.hooksPath -> %s\n' "$name" "$hooksdir"
                 fresh=1
             fi
+            curts=$(git -C "$prepo" config --local bumpversion.tagstyle 2>/dev/null || true)
             if [ -n "$TAGSTYLE" ]; then
-                curts=$(git -C "$prepo" config --local bumpversion.tagstyle 2>/dev/null || true)
                 if [ "$curts" = "$TAGSTYLE" ]; then
                     printf '  [=] %-18s bumpversion.tagstyle already %s\n' "$name" "$TAGSTYLE"
                 else
                     git -C "$prepo" config --local bumpversion.tagstyle "$TAGSTYLE"
                     printf '  [+] %-18s bumpversion.tagstyle -> %s\n' "$name" "$TAGSTYLE"
                 fi
+            elif [ -n "$curts" ]; then
+                printf '  [i] %-18s bumpversion.tagstyle = %s\n' "$name" "$curts"
+            else
+                printf '  [i] %-18s bumpversion.tagstyle = namespaced (default) — pass --tagstyle plain for a single-artifact repo\n' "$name"
             fi
             [ -n "$fresh" ] && print_readme_hint
             ;;
