@@ -13,7 +13,8 @@
 #              [--tagstyle plain|namespaced]
 #
 # Parameter families:
-#   scope   global (default; base = $HOME) | project (base = --project PATH)
+#   scope   global (default; base = $HOME) | project (base = --project PATH,
+#           which itself defaults to the current directory)
 #   target  claude | codex | agents  — required unless the selection is hook-only
 #   what    all (default) | a tool name | a tool type
 #
@@ -23,7 +24,7 @@
 # Idempotent: build re-links cleanly, clean removes only our own symlinks,
 # a foreign file/dir at the target is never clobbered.
 
-APP_VERSION='0.7.30'
+APP_VERSION='0.8.38'
 set -u
 
 SELF_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -53,8 +54,8 @@ Options:
              Where to install. Required, unless the selection is hook-only.
   --scope    global | project   Default: global.
              global  — install under $HOME (~/.claude, ~/.codex, ~/.agents).
-             project — install under --project PATH (needs --project).
-  --project  PATH    Project root; required when --scope project.
+             project — install under --project PATH.
+  --project  PATH    Project root for --scope project. Default: current directory.
   --what     all | <tool-name> | <type>   Default: all.
              Select catalog entries by exact name, by type, or all of them.
   --tagstyle plain | namespaced   Hook installs only.
@@ -74,7 +75,7 @@ Catalog (tools/catalog.json):
   a type and a path. Types and their install handlers:
     skill   symlink/junction into a .{claude,codex,agents}/skills/ directory
     hook    point a repo's core.hooksPath at the toolbox git hooks
-            (per-repo — needs --scope project --project PATH)
+            (per-repo — needs --scope project; --project defaults to cwd)
     plugin  `claude plugin` marketplace add + install (--target claude),
             else a skill-link
   Run `install.sh list` to print the current catalog.
@@ -83,7 +84,7 @@ Examples:
   install.sh list
   install.sh build --target claude                       # all tools, global
   install.sh build --target codex --what component-audit
-  install.sh build --what versioning-hooks --scope project --project .
+  install.sh build --what versioning-hooks --scope project   # --project = cwd
   install.sh status --target claude
   install.sh clean --target claude --what watch
 
@@ -146,9 +147,10 @@ esac
 case "$SCOPE" in
     global) ;;
     project)
-        [ -n "$PROJECT" ] || { printf 'install: --scope project requires --project PATH\n' >&2; exit 2; }
+        # --project defaults to the current directory.
+        [ -n "$PROJECT" ] || PROJECT=$PWD
         PROJECT=$(cd "$PROJECT" 2>/dev/null && pwd) \
-            || { printf 'install: --project path not found\n' >&2; exit 2; }
+            || { printf 'install: --project path not found: %s\n' "$PROJECT" >&2; exit 2; }
         ;;
     *) printf 'install: invalid --scope: %s\n' "$SCOPE" >&2; exit 2 ;;
 esac
@@ -244,7 +246,7 @@ print_readme_hint() {
          Once per clone, from this repo's root:
            git clone https://github.com/danielfrey63/ai-toolbox.git   # if needed
            <ai-toolbox>/tools/install.sh build --what versioning-hooks \
-             --scope project --project .
+             --scope project
 EOF
 }
 
@@ -252,7 +254,7 @@ handle_hook() {
     local name=$1 path=$2
     local hooksdir="$REPO_ROOT/$path"
     if [ "$SCOPE" != project ]; then
-        printf '  [.] %-18s hooks are per-repo — pass --scope project --project PATH\n' "$name"
+        printf '  [.] %-18s hooks are per-repo — pass --scope project\n' "$name"
         return
     fi
     local prepo cur curts fresh=''

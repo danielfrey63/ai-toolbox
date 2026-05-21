@@ -17,7 +17,7 @@
 # Idempotent: build re-links cleanly, clean removes only our own links,
 # a foreign file/dir at the target is never clobbered.
 
-$APP_VERSION = '0.7.28'
+$APP_VERSION = '0.8.35'
 $ErrorActionPreference = 'Stop'
 
 $SelfDir  = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -47,8 +47,8 @@ Options:
              Where to install. Required, unless the selection is hook-only.
   --scope    global | project   Default: global.
              global  — install under $HOME (~/.claude, ~/.codex, ~/.agents).
-             project — install under --project PATH (needs --project).
-  --project  PATH    Project root; required when --scope project.
+             project — install under --project PATH.
+  --project  PATH    Project root for --scope project. Default: current directory.
   --what     all | <tool-name> | <type>   Default: all.
              Select catalog entries by exact name, by type, or all of them.
   --tagstyle plain | namespaced   Hook installs only.
@@ -68,7 +68,7 @@ Catalog (tools/catalog.json):
   a type and a path. Types and their install handlers:
     skill   junction/symlink into a .{claude,codex,agents}/skills/ directory
     hook    point a repo's core.hooksPath at the toolbox git hooks
-            (per-repo — needs --scope project --project PATH)
+            (per-repo — needs --scope project; --project defaults to cwd)
     plugin  `claude plugin` marketplace add + install (--target claude),
             else a skill-link
   Run `install.ps1 list` to print the current catalog.
@@ -77,7 +77,7 @@ Examples:
   install.ps1 list
   install.ps1 build --target claude                       # all tools, global
   install.ps1 build --target codex --what component-audit
-  install.ps1 build --what versioning-hooks --scope project --project .
+  install.ps1 build --what versioning-hooks --scope project   # --project = cwd
   install.ps1 status --target claude
   install.ps1 clean --target claude --what watch
 
@@ -139,11 +139,10 @@ if ($TagStyle -and $TagStyle -notin @('plain', 'namespaced')) {
     [Console]::Error.WriteLine("install: invalid --tagstyle: $TagStyle"); exit 2
 }
 if ($Scope -eq 'project') {
-    if (-not $Project) {
-        [Console]::Error.WriteLine("install: --scope project requires --project PATH"); exit 2
-    }
+    # --project defaults to the current directory.
+    if (-not $Project) { $Project = $PWD.Path }
     if (-not (Test-Path -LiteralPath $Project -PathType Container)) {
-        [Console]::Error.WriteLine("install: --project path not found"); exit 2
+        [Console]::Error.WriteLine("install: --project path not found: $Project"); exit 2
     }
     $Project = (Resolve-Path -LiteralPath $Project).Path
 } elseif ($Scope -ne 'global') {
@@ -233,14 +232,14 @@ function Show-ReadmeHint {
          Artifacts here are version-bumped by the AI-Toolbox git hooks.
          Once per clone, from this repo's root:
            git clone https://github.com/danielfrey63/ai-toolbox.git   # if needed
-           <ai-toolbox>/tools/install.ps1 build --what versioning-hooks --scope project --project .
+           <ai-toolbox>/tools/install.ps1 build --what versioning-hooks --scope project
 '@
 }
 
 function Handle-Hook([string]$name, [string]$path) {
     $hooksdir = Join-Path $RepoRoot $path
     if ($Scope -ne 'project') {
-        Write-Output "  [.] $name  hooks are per-repo — pass --scope project --project PATH"
+        Write-Output "  [.] $name  hooks are per-repo — pass --scope project"
         return
     }
     $prepo = (git -C $Project rev-parse --show-toplevel 2>$null)
