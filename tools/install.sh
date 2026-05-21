@@ -23,7 +23,7 @@
 # Idempotent: build re-links cleanly, clean removes only our own symlinks,
 # a foreign file/dir at the target is never clobbered.
 
-APP_VERSION='0.6.28'
+APP_VERSION='0.7.30'
 set -u
 
 SELF_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -32,28 +32,63 @@ CATALOG="$SELF_DIR/catalog.json"
 
 usage() {
     cat <<'EOF'
-install — install AI-Toolbox tools from the catalog (tools/catalog.json).
+install — install AI-Toolbox tools into a Claude Code / Codex / agents setup.
+
+Tools are described in the catalog (tools/catalog.json) and installed by
+type-specific handlers. Run `install.sh list` to see what is available.
 
 Usage:
   install.sh <build|status|clean> --target <claude|codex|agents> [options]
   install.sh list
+  install.sh -h|--help
 
 Commands:
-  build | status | clean  Install / report / remove the selected tools.
-  list                    Print the installable tools from the catalog.
+  build    Install the selected tools (idempotent — safe to re-run).
+  status   Report whether each selected tool is installed.
+  clean    Remove the selected tools (only ever removes our own links/config).
+  list     Print the catalog — every installable tool with its type.
 
 Options:
-  --target   claude | codex | agents     Required, except when only hook tools are selected.
-  --scope    global | project            Default: global ($HOME). project needs --project.
-  --project  PATH                        Project root; required when --scope project.
-  --what     all | <tool-name> | <type>  Default: all. Select catalog entries.
-  --tagstyle plain | namespaced          Hook installs only: the repo's tag style.
-  -h|--help                              Show this help.
+  --target   claude | codex | agents
+             Where to install. Required, unless the selection is hook-only.
+  --scope    global | project   Default: global.
+             global  — install under $HOME (~/.claude, ~/.codex, ~/.agents).
+             project — install under --project PATH (needs --project).
+  --project  PATH    Project root; required when --scope project.
+  --what     all | <tool-name> | <type>   Default: all.
+             Select catalog entries by exact name, by type, or all of them.
+  --tagstyle plain | namespaced   Hook installs only.
+             plain      — tag v<version>         (single-artifact repo)
+             namespaced — tag <name>/v<version>  (default; multi-artifact repo)
+  -h|--help  Show this help.
 
-Tool types: skill, hook, plugin.
-  hook   — per-repo: needs --scope project --project PATH, ignores --target.
-           --tagstyle plain tags v<version> (single-artifact repo); default namespaced.
-  plugin — --target claude does a real plugin install; codex/agents skill-link it.
+Targets:
+  claude   Claude Code     — skills link into <scope>/.claude/skills/
+  codex    Codex CLI       — skills link into <scope>/.codex/skills/
+  agents   agentskills.io  — skills link into <scope>/.agents/skills/
+  Hooks ignore --target (they are per-repo git config). Plugins do a real
+  `claude plugin` install for --target claude, else fall back to a skill-link.
+
+Catalog (tools/catalog.json):
+  The single source of truth for installable tools — each entry has a name,
+  a type and a path. Types and their install handlers:
+    skill   symlink/junction into a .{claude,codex,agents}/skills/ directory
+    hook    point a repo's core.hooksPath at the toolbox git hooks
+            (per-repo — needs --scope project --project PATH)
+    plugin  `claude plugin` marketplace add + install (--target claude),
+            else a skill-link
+  Run `install.sh list` to print the current catalog.
+
+Examples:
+  install.sh list
+  install.sh build --target claude                       # all tools, global
+  install.sh build --target codex --what component-audit
+  install.sh build --what versioning-hooks --scope project --project .
+  install.sh status --target claude
+  install.sh clean --target claude --what watch
+
+Idempotent: build re-links cleanly, clean removes only our own links/config,
+a foreign file or directory at a target is never clobbered.
 EOF
 }
 
