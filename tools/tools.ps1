@@ -1,13 +1,13 @@
-# install.ps1 — install AI-Toolbox tools from the catalog.
+# tools.ps1 — install AI-Toolbox tools from the catalog.
 #
-# PowerShell port of tools/install.sh for Codex / Windows. See that file for
+# PowerShell port of tools/tools.sh for Codex / Windows. See that file for
 # the full description. Reads tools/catalog.json and dispatches per tool TYPE:
 #   skill  — junction (Windows) / symlink (Linux/macOS) into a skills/ dir
 #   hook   — point a repo's core.hooksPath at the toolbox hook directory
 #   plugin — claude plugin marketplace add + install (--target claude); else skill-link
 #
 # Usage:
-#   install.ps1 <install|status|clean> --target <claude|codex|agents>
+#   tools.ps1 <install|status|clean> --target <claude|codex|agents>
 #               [--scope global|project] [--project PATH] [--what all|<name>|<type>]
 #               [--tagstyle plain|namespaced]
 #
@@ -17,7 +17,7 @@
 # Idempotent: install re-links cleanly, clean removes only our own links,
 # a foreign file/dir at the target is never clobbered.
 
-$APP_VERSION = '0.10.45'
+$APP_VERSION = '0.10.59'
 $ErrorActionPreference = 'Stop'
 
 $SelfDir  = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -26,15 +26,15 @@ $Catalog  = Join-Path $SelfDir 'catalog.json'
 
 function Show-Usage {
     Write-Output @'
-install — install AI-Toolbox tools into a Claude Code / Codex / agents setup.
+tools — install AI-Toolbox tools into a Claude Code / Codex / agents setup.
 
 Tools are described in the catalog (tools/catalog.json) and installed by
-type-specific handlers. Run `install.ps1 list` to see what is available.
+type-specific handlers. Run `tools.ps1 list` to see what is available.
 
 Usage:
-  install.ps1 <install|status|clean> --target <claude|codex|agents> [options]
-  install.ps1 list
-  install.ps1 -h|--help
+  tools.ps1 <install|status|clean> --target <claude|codex|agents> [options]
+  tools.ps1 list
+  tools.ps1 -h|--help
 
 Commands:
   install  Install the selected tools (idempotent — safe to re-run).
@@ -71,15 +71,15 @@ Catalog (tools/catalog.json):
             (per-repo — needs --scope project; --project defaults to cwd)
     plugin  `claude plugin` marketplace add + install (--target claude),
             else a skill-link
-  Run `install.ps1 list` to print the current catalog.
+  Run `tools.ps1 list` to print the current catalog.
 
 Examples:
-  install.ps1 list
-  install.ps1 install --target claude   # all tools, global
-  install.ps1 install --target codex --what component-audit
-  install.ps1 install --what versioning-hooks --scope project   # --project = cwd
-  install.ps1 status --target claude
-  install.ps1 clean --target claude --what watch
+  tools.ps1 list
+  tools.ps1 install --target claude   # all tools, global
+  tools.ps1 install --target codex --what component-audit
+  tools.ps1 install --what versioning-hooks --scope project   # --project = cwd
+  tools.ps1 status --target claude
+  tools.ps1 clean --target claude --what watch
 
 Idempotent: install re-links cleanly, clean removes only our own links/config,
 a foreign file or directory at a target is never clobbered.
@@ -88,7 +88,7 @@ a foreign file or directory at a target is never clobbered.
 
 # Print the catalog as a readable table — answers "what can I install?".
 function Show-CatalogList {
-    Write-Output "install — available tools ($Catalog):`n"
+    Write-Output "tools — available tools ($Catalog):`n"
     Write-Output ('  {0,-20} {1,-7} {2}' -f 'NAME', 'TYPE', 'DESCRIPTION')
     foreach ($t in (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools) {
         Write-Output ('  {0,-20} {1,-7} {2}' -f $t.name, $t.type, $t.description)
@@ -100,7 +100,7 @@ function Show-CatalogList {
 $Cmd = if ($args.Count -ge 1) { [string]$args[0] } else { '' }
 if ($Cmd -in @('-h', '--help')) { Show-Usage; exit 0 }
 if ($Cmd -notin @('install', 'status', 'clean', 'list')) {
-    [Console]::Error.WriteLine("install: missing or unknown command (install|status|clean|list)")
+    [Console]::Error.WriteLine("tools: missing or unknown command (install|status|clean|list)")
     exit 2
 }
 
@@ -112,7 +112,7 @@ while ($i -lt $args.Count) {
     switch ($opt) {
         { $_ -in '--scope', '--target', '--project', '--what', '--tagstyle' } {
             if ($i + 1 -ge $args.Count) {
-                [Console]::Error.WriteLine("install: $opt needs a value"); exit 2
+                [Console]::Error.WriteLine("tools: $opt needs a value"); exit 2
             }
             $val = [string]$args[$i + 1]
             switch ($opt) {
@@ -125,7 +125,7 @@ while ($i -lt $args.Count) {
             $i += 2
         }
         { $_ -in '-h', '--help' } { Show-Usage; exit 0 }
-        default { [Console]::Error.WriteLine("install: unknown option: $opt"); exit 2 }
+        default { [Console]::Error.WriteLine("tools: unknown option: $opt"); exit 2 }
     }
 }
 
@@ -133,23 +133,23 @@ while ($i -lt $args.Count) {
 # An empty --target is allowed here; whether it is required depends on the
 # selected tool types and is checked once the catalog selection is known.
 if ($Target -and $Target -notin @('claude', 'codex', 'agents')) {
-    [Console]::Error.WriteLine("install: invalid --target: $Target"); exit 2
+    [Console]::Error.WriteLine("tools: invalid --target: $Target"); exit 2
 }
 if ($TagStyle -and $TagStyle -notin @('plain', 'namespaced')) {
-    [Console]::Error.WriteLine("install: invalid --tagstyle: $TagStyle"); exit 2
+    [Console]::Error.WriteLine("tools: invalid --tagstyle: $TagStyle"); exit 2
 }
 if ($Scope -eq 'project') {
     # --project defaults to the current directory.
     if (-not $Project) { $Project = $PWD.Path }
     if (-not (Test-Path -LiteralPath $Project -PathType Container)) {
-        [Console]::Error.WriteLine("install: --project path not found: $Project"); exit 2
+        [Console]::Error.WriteLine("tools: --project path not found: $Project"); exit 2
     }
     $Project = (Resolve-Path -LiteralPath $Project).Path
 } elseif ($Scope -ne 'global') {
-    [Console]::Error.WriteLine("install: invalid --scope: $Scope"); exit 2
+    [Console]::Error.WriteLine("tools: invalid --scope: $Scope"); exit 2
 }
 if (-not (Test-Path -LiteralPath $Catalog)) {
-    [Console]::Error.WriteLine("install: catalog not found: $Catalog"); exit 1
+    [Console]::Error.WriteLine("tools: catalog not found: $Catalog"); exit 1
 }
 
 # "list" just prints the catalog — no scope/target/selection needed.
@@ -232,7 +232,7 @@ function Show-ReadmeHint {
          Artifacts here are version-bumped by the AI-Toolbox git hooks.
          Once per clone, from this repo's root:
            git clone https://github.com/danielfrey63/ai-toolbox.git   # if needed
-           <ai-toolbox>/tools/install.ps1 install --what versioning-hooks --scope project
+           <ai-toolbox>/tools/tools.ps1 install --what versioning-hooks --scope project
 '@
 }
 
@@ -349,14 +349,14 @@ function Handle-Plugin([string]$name, [string]$path, [string]$marketplace, [stri
 }
 
 # --- dispatch -----------------------------------------------------------------
-Write-Output "install $Cmd — scope=$Scope target=$Target what=$What"
+Write-Output "tools $Cmd — scope=$Scope target=$Target what=$What"
 
 $tools = (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools
 $selected = $tools | Where-Object {
     $What -eq 'all' -or $_.name -eq $What -or $_.type -eq $What
 }
 if (-not $selected) {
-    [Console]::Error.WriteLine("install: nothing in the catalog matches --what $What")
+    [Console]::Error.WriteLine("tools: nothing in the catalog matches --what $What")
     Show-CatalogList
     exit 1
 }
@@ -365,7 +365,7 @@ if (-not $selected) {
 if (-not $Target) {
     $needsTarget = $selected | Where-Object { $_.type -ne 'hook' } | Select-Object -First 1
     if ($needsTarget) {
-        [Console]::Error.WriteLine("install: --target is required (claude|codex|agents) — `"$($needsTarget.name)`" needs it")
+        [Console]::Error.WriteLine("tools: --target is required (claude|codex|agents) — `"$($needsTarget.name)`" needs it")
         exit 2
     }
 }

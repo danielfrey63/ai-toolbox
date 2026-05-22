@@ -11,10 +11,10 @@
 # `git push --follow-tags` (or set `git config push.followTags true`).
 #
 # Installed by pointing a repo's core.hooksPath at this directory — see
-# tools/install.sh ("versioning-hooks" tool). The hook resolves the AI-Toolbox
+# tools/tools.sh ("versioning-hooks" tool). The hook resolves the AI-Toolbox
 # from its own path, so it works inside any repo.
 
-APP_VERSION='0.4.8'
+APP_VERSION='0.5.10'
 
 repo=$(git rev-parse --show-toplevel) || exit 0
 # Resolve bump-version.sh from this hook's own path (see pre-commit).

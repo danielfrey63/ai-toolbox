@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — install AI-Toolbox tools from the catalog.
+# tools.sh — install AI-Toolbox tools from the catalog.
 #
 # Reads tools/catalog.json and dispatches per tool TYPE to a handler:
 #   skill  — symlink the tool into <scope>/.{claude,codex,agents}/skills/
@@ -8,7 +8,7 @@
 #            for --target codex|agents the plugin falls back to a skill-link
 #
 # Usage:
-#   install.sh <install|status|clean> --target <claude|codex|agents>
+#   tools.sh <install|status|clean> --target <claude|codex|agents>
 #              [--scope global|project] [--project PATH] [--what all|<name>|<type>]
 #              [--tagstyle plain|namespaced]
 #
@@ -24,7 +24,7 @@
 # Idempotent: install re-links cleanly, clean removes only our own symlinks,
 # a foreign file/dir at the target is never clobbered.
 
-APP_VERSION='0.10.48'
+APP_VERSION='0.10.62'
 set -u
 
 SELF_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -33,15 +33,15 @@ CATALOG="$SELF_DIR/catalog.json"
 
 usage() {
     cat <<'EOF'
-install — install AI-Toolbox tools into a Claude Code / Codex / agents setup.
+tools — install AI-Toolbox tools into a Claude Code / Codex / agents setup.
 
 Tools are described in the catalog (tools/catalog.json) and installed by
-type-specific handlers. Run `install.sh list` to see what is available.
+type-specific handlers. Run `tools.sh list` to see what is available.
 
 Usage:
-  install.sh <install|status|clean> --target <claude|codex|agents> [options]
-  install.sh list
-  install.sh -h|--help
+  tools.sh <install|status|clean> --target <claude|codex|agents> [options]
+  tools.sh list
+  tools.sh -h|--help
 
 Commands:
   install  Install the selected tools (idempotent — safe to re-run).
@@ -78,15 +78,15 @@ Catalog (tools/catalog.json):
             (per-repo — needs --scope project; --project defaults to cwd)
     plugin  `claude plugin` marketplace add + install (--target claude),
             else a skill-link
-  Run `install.sh list` to print the current catalog.
+  Run `tools.sh list` to print the current catalog.
 
 Examples:
-  install.sh list
-  install.sh install --target claude   # all tools, global
-  install.sh install --target codex --what component-audit
-  install.sh install --what versioning-hooks --scope project   # --project = cwd
-  install.sh status --target claude
-  install.sh clean --target claude --what watch
+  tools.sh list
+  tools.sh install --target claude   # all tools, global
+  tools.sh install --target codex --what component-audit
+  tools.sh install --what versioning-hooks --scope project   # --project = cwd
+  tools.sh status --target claude
+  tools.sh clean --target claude --what watch
 
 Idempotent: install re-links cleanly, clean removes only our own links/config,
 a foreign file or directory at a target is never clobbered.
@@ -95,7 +95,7 @@ EOF
 
 # Print the catalog as a readable table — answers "what can I install?".
 print_catalog_list() {
-    printf 'install — available tools (%s):\n\n' "$CATALOG"
+    printf 'tools — available tools (%s):\n\n' "$CATALOG"
     printf '  %-20s %-7s %s\n' NAME TYPE DESCRIPTION
     jq -r '.tools[] | [.name, .type, .description] | @tsv' "$CATALOG" \
         | while IFS=$(printf '\t') read -r n t d; do
@@ -109,8 +109,8 @@ CMD=${1:-}
 case "$CMD" in
     install|status|clean|list) shift ;;
     -h|--help) usage; exit 0 ;;
-    '') printf 'install: missing command (install|status|clean|list)\n' >&2; exit 2 ;;
-    *)  printf 'install: unknown command: %s\n' "$CMD" >&2; exit 2 ;;
+    '') printf 'tools: missing command (install|status|clean|list)\n' >&2; exit 2 ;;
+    *)  printf 'tools: unknown command: %s\n' "$CMD" >&2; exit 2 ;;
 esac
 
 # --- options ------------------------------------------------------------------
@@ -123,7 +123,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --scope|--target|--project|--what|--tagstyle)
             opt=$1
-            [ $# -ge 2 ] || { printf 'install: %s needs a value\n' "$opt" >&2; exit 2; }
+            [ $# -ge 2 ] || { printf 'tools: %s needs a value\n' "$opt" >&2; exit 2; }
             case "$opt" in
                 --scope)    SCOPE=$2 ;;
                 --target)   TARGET=$2 ;;
@@ -133,7 +133,7 @@ while [ $# -gt 0 ]; do
             esac
             shift 2 ;;
         -h|--help) usage; exit 0 ;;
-        *) printf 'install: unknown option: %s\n' "$1" >&2; exit 2 ;;
+        *) printf 'tools: unknown option: %s\n' "$1" >&2; exit 2 ;;
     esac
 done
 
@@ -142,7 +142,7 @@ done
 # the selected tool types and is checked once the catalog selection is known.
 case "$TARGET" in
     ''|claude|codex|agents) ;;
-    *) printf 'install: invalid --target: %s\n' "$TARGET" >&2; exit 2 ;;
+    *) printf 'tools: invalid --target: %s\n' "$TARGET" >&2; exit 2 ;;
 esac
 case "$SCOPE" in
     global) ;;
@@ -150,17 +150,17 @@ case "$SCOPE" in
         # --project defaults to the current directory.
         [ -n "$PROJECT" ] || PROJECT=$PWD
         PROJECT=$(cd "$PROJECT" 2>/dev/null && pwd) \
-            || { printf 'install: --project path not found: %s\n' "$PROJECT" >&2; exit 2; }
+            || { printf 'tools: --project path not found: %s\n' "$PROJECT" >&2; exit 2; }
         ;;
-    *) printf 'install: invalid --scope: %s\n' "$SCOPE" >&2; exit 2 ;;
+    *) printf 'tools: invalid --scope: %s\n' "$SCOPE" >&2; exit 2 ;;
 esac
 case "$TAGSTYLE" in
     ''|plain|namespaced) ;;
-    *) printf 'install: invalid --tagstyle: %s\n' "$TAGSTYLE" >&2; exit 2 ;;
+    *) printf 'tools: invalid --tagstyle: %s\n' "$TAGSTYLE" >&2; exit 2 ;;
 esac
-[ -f "$CATALOG" ] || { printf 'install: catalog not found: %s\n' "$CATALOG" >&2; exit 1; }
+[ -f "$CATALOG" ] || { printf 'tools: catalog not found: %s\n' "$CATALOG" >&2; exit 1; }
 command -v jq >/dev/null 2>&1 \
-    || { printf 'install: jq is required to read the catalog\n' >&2; exit 1; }
+    || { printf 'tools: jq is required to read the catalog\n' >&2; exit 1; }
 
 # "list" just prints the catalog — no scope/target/selection needed.
 if [ "$CMD" = list ]; then
@@ -245,7 +245,7 @@ print_readme_hint() {
          Artifacts here are version-bumped by the AI-Toolbox git hooks.
          Once per clone, from this repo's root:
            git clone https://github.com/danielfrey63/ai-toolbox.git   # if needed
-           <ai-toolbox>/tools/install.sh install --what versioning-hooks \
+           <ai-toolbox>/tools/tools.sh install --what versioning-hooks \
              --scope project
 EOF
 }
@@ -363,12 +363,12 @@ handle_plugin() {
 }
 
 # --- dispatch -----------------------------------------------------------------
-printf 'install %s — scope=%s target=%s what=%s\n' "$CMD" "$SCOPE" "$TARGET" "$WHAT"
+printf 'tools %s — scope=%s target=%s what=%s\n' "$CMD" "$SCOPE" "$TARGET" "$WHAT"
 
 selected=$(jq -c --arg what "$WHAT" \
     '.tools[] | select($what == "all" or .name == $what or .type == $what)' "$CATALOG")
 if [ -z "$selected" ]; then
-    printf 'install: nothing in the catalog matches --what %s\n\n' "$WHAT" >&2
+    printf 'tools: nothing in the catalog matches --what %s\n\n' "$WHAT" >&2
     print_catalog_list >&2
     exit 1
 fi
@@ -377,7 +377,7 @@ fi
 if [ -z "$TARGET" ]; then
     needs_target=$(printf '%s\n' "$selected" | jq -r 'select(.type != "hook") | .name' | head -1)
     if [ -n "$needs_target" ]; then
-        printf 'install: --target is required (claude|codex|agents) — "%s" needs it\n' \
+        printf 'tools: --target is required (claude|codex|agents) — "%s" needs it\n' \
             "$needs_target" >&2
         exit 2
     fi

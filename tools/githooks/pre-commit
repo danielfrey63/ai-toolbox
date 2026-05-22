@@ -11,11 +11,11 @@
 # list is git's own record of what changed — no version comparison needed.
 #
 # Installed by pointing a repo's core.hooksPath at this directory — see
-# tools/install.sh ("versioning-hooks" tool). Works for any repo: the hook
+# tools/tools.sh ("versioning-hooks" tool). Works for any repo: the hook
 # resolves the AI-Toolbox from its own path, so bump-version.sh is found even
 # when this runs inside a foreign repo.
 
-APP_VERSION='0.4.7'
+APP_VERSION='0.5.9'
 
 repo=$(git rev-parse --show-toplevel) || exit 0
 # This hook lives in <ai-toolbox>/tools/githooks/ — resolve bump-version.sh
