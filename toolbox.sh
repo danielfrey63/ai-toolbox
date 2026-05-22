@@ -7,6 +7,7 @@
 #   plugin — claude plugin marketplace add + install (--target claude);
 #            for --target codex|agents the plugin falls back to a skill-link
 #   config — symlink a global config file (CLAUDE.md) into ~/.claude/
+#   bin    — symlink the CLI itself into ~/.local/bin as the toolbox command
 #
 # Usage:
 #   toolbox.sh <install|status|clean> --target <claude|codex|agents>
@@ -16,7 +17,7 @@
 # Parameter families:
 #   scope   global (default; base = $HOME) | project (base = --project PATH,
 #           which itself defaults to the current directory)
-#   target  claude | codex | agents  — required unless the selection is hook/config-only
+#   target  claude | codex | agents  — required unless the selection is hook/config/bin-only
 #   what    all (default) | a tool name | a tool type
 #
 # --tagstyle applies only to hook installs — it sets the repo's
@@ -28,7 +29,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `clean --all` can sweep every install.
 
-APP_VERSION='0.13.93'
+APP_VERSION='0.14.105'
 set -u
 
 REPO_ROOT=$(cd "$(dirname "$0")" && pwd)
@@ -54,7 +55,7 @@ Commands:
 
 Options:
   --target   claude | codex | agents
-             Where to install. Required, unless the selection is hook/config-only.
+             Where to install. Required, unless the selection is hook/config/bin-only.
   --scope    global | project   Default: global.
              global  — install under $HOME (~/.claude, ~/.codex, ~/.agents).
              project — install under --project PATH.
@@ -72,8 +73,8 @@ Targets:
   claude   Claude Code     — skills link into <scope>/.claude/skills/
   codex    Codex CLI       — skills link into <scope>/.codex/skills/
   agents   agentskills.io  — skills link into <scope>/.agents/skills/
-  Hooks (per-repo git config) and config files ignore --target. Plugins do a
-  real `claude plugin` install for --target claude, else fall back to a skill-link.
+  Hooks, config files and the bin install ignore --target. Plugins do a real
+  `claude plugin` install for --target claude, else fall back to a skill-link.
 
 Catalog (tools/catalog.json):
   The single source of truth for installable tools — each entry has a name,
@@ -84,6 +85,7 @@ Catalog (tools/catalog.json):
     plugin  `claude plugin` marketplace add + install (--target claude),
             else a skill-link
     config  symlink a global config file into ~/.claude/ (global scope only)
+    bin     symlink the CLI into ~/.local/bin as the `toolbox` command
   Run `toolbox.sh list` to print the current catalog.
 
 Registry:
@@ -196,12 +198,13 @@ skill_destdir() {
     esac
 }
 
-# Symlink one artifact (file or directory) into a destination directory.
-# Idempotent across install/status/clean; never clobbers a non-symlink.
-# Shared by the skill and config handlers.
+# Symlink one artifact (file or directory) into a destination directory, under
+# an optional link name (4th arg; defaults to the source basename). Idempotent
+# across install/status/clean; never clobbers a non-symlink. Shared by the
+# skill, config and bin handlers.
 link_artifact() {
     local name=$1 src=$2 destdir=$3
-    local link="$destdir/$(basename "$src")"
+    local link="$destdir/${4:-$(basename "$src")}"
 
     if [ "$link" = "$src" ]; then
         printf '  [=] %-18s source == target, skipped\n' "$name"
@@ -269,6 +272,33 @@ handle_config() {
         return
     fi
     link_artifact "$name" "$src" "$HOME/.claude"
+}
+
+# --- bin handler --------------------------------------------------------------
+# Puts the CLI itself on PATH: a symlink ~/.local/bin/<command> -> the script.
+# Global scope only, ignores --target. (The PowerShell port installs a $PROFILE
+# function instead — pwsh has no ~/.local/bin convention.)
+handle_bin() {
+    local name=$1 path=$2 cmdname=$3
+    local src="$REPO_ROOT/$path"
+    if [ "$SCOPE" != global ]; then
+        printf '  [.] %-18s bin is global-only — use --scope global\n' "$name"
+        return
+    fi
+    if [ ! -f "$src" ]; then
+        printf '  [!] %-18s source missing: %s\n' "$name" "$src" >&2
+        return
+    fi
+    local bindir="$HOME/.local/bin"
+    link_artifact "$name" "$src" "$bindir" "$cmdname"
+    # A symlink in a directory that is not on PATH does nothing — say so.
+    if [ "$CMD" = install ]; then
+        case ":${PATH}:" in
+            *":$bindir:"*) ;;
+            *) printf '  [i] %-18s %s is not on PATH — add it so `%s` is found\n' \
+                "$name" "$bindir" "$cmdname" ;;
+        esac
+    fi
 }
 
 # --- hook handler -------------------------------------------------------------
@@ -447,7 +477,7 @@ registry_remove() {  # name scope target project
 # entries. clean: remove each install, then empty the registry. Entries carry
 # only install parameters — the handlers re-verify against reality.
 registry_sweep() {
-    local entries n i e tool type path mkt plg kept='[]'
+    local entries n i e tool type path mkt plg cmdname kept='[]'
     entries=$(registry_read)
     n=$(printf '%s' "$entries" | jq 'length' 2>/dev/null || printf 0)
     if [ "$n" = 0 ]; then
@@ -471,6 +501,10 @@ registry_sweep() {
             skill)  handle_skill "$tool" "$path" ;;
             hook)   handle_hook "$tool" "$path" ;;
             config) handle_config "$tool" "$path" ;;
+            bin)
+                cmdname=$(jq -r --arg n "$tool" \
+                    '.tools[] | select(.name==$n) | .command // empty' "$CATALOG")
+                handle_bin "$tool" "$path" "$cmdname" ;;
             plugin)
                 mkt=$(jq -r --arg n "$tool" \
                     '.tools[] | select(.name==$n) | .marketplace // empty' "$CATALOG")
@@ -517,10 +551,10 @@ if [ -z "$selected" ]; then
     exit 1
 fi
 
-# --target is required unless every selected tool ignores it (hook, config).
+# --target is required unless every selected tool ignores it (hook, config, bin).
 if [ -z "$TARGET" ]; then
     needs_target=$(printf '%s\n' "$selected" \
-        | jq -r 'select(.type != "hook" and .type != "config") | .name' | head -1)
+        | jq -r 'select(.type != "hook" and .type != "config" and .type != "bin") | .name' | head -1)
     if [ -n "$needs_target" ]; then
         printf 'toolbox: --target is required (claude|codex|agents) — "%s" needs it\n' \
             "$needs_target" >&2
@@ -537,6 +571,10 @@ printf '%s\n' "$selected" | while IFS= read -r tool; do
         skill)  handle_skill "$name" "$path" ;;
         hook)   handle_hook "$name" "$path" ;;
         config) handle_config "$name" "$path" ;;
+        bin)
+            cmdname=$(printf '%s' "$tool" | jq -r '.command // empty')
+            handle_bin "$name" "$path" "$cmdname"
+            ;;
         plugin)
             mkt=$(printf '%s' "$tool" | jq -r '.marketplace // empty')
             plg=$(printf '%s' "$tool" | jq -r '.plugin // empty')

@@ -6,6 +6,7 @@
 #   hook   — point a repo's core.hooksPath at the toolbox hook directory
 #   plugin — claude plugin marketplace add + install (--target claude); else skill-link
 #   config — symlink a global config file (CLAUDE.md) into ~/.claude/
+#   bin    — install the CLI as a toolbox function in the PowerShell $PROFILE
 #
 # Usage:
 #   toolbox.ps1 <install|status|clean> --target <claude|codex|agents>
@@ -21,7 +22,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `clean --all` can sweep every install.
 
-$APP_VERSION = '0.13.88'
+$APP_VERSION = '0.14.98'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -47,7 +48,7 @@ Commands:
 
 Options:
   --target   claude | codex | agents
-             Where to install. Required, unless the selection is hook/config-only.
+             Where to install. Required, unless the selection is hook/config/bin-only.
   --scope    global | project   Default: global.
              global  — install under $HOME (~/.claude, ~/.codex, ~/.agents).
              project — install under --project PATH.
@@ -65,8 +66,8 @@ Targets:
   claude   Claude Code     — skills link into <scope>/.claude/skills/
   codex    Codex CLI       — skills link into <scope>/.codex/skills/
   agents   agentskills.io  — skills link into <scope>/.agents/skills/
-  Hooks (per-repo git config) and config files ignore --target. Plugins do a
-  real `claude plugin` install for --target claude, else fall back to a skill-link.
+  Hooks, config files and the bin install ignore --target. Plugins do a real
+  `claude plugin` install for --target claude, else fall back to a skill-link.
 
 Catalog (tools/catalog.json):
   The single source of truth for installable tools — each entry has a name,
@@ -77,6 +78,7 @@ Catalog (tools/catalog.json):
     plugin  `claude plugin` marketplace add + install (--target claude),
             else a skill-link
     config  symlink a global config file into ~/.claude/ (global scope only)
+    bin     install the CLI as a 'toolbox' function in the PowerShell $PROFILE
   Run `toolbox.ps1 list` to print the current catalog.
 
 Registry:
@@ -254,6 +256,54 @@ function Handle-Config([string]$name, [string]$path) {
         [Console]::Error.WriteLine("  [!] $name  source missing: $src"); return
     }
     Link-Artifact $name $src (Join-Path $HOME '.claude')
+}
+
+# --- bin handler --------------------------------------------------------------
+# Puts the CLI on PATH for PowerShell: a `function <command>` block in the
+# user's $PROFILE (pwsh has no ~/.local/bin convention). Global scope only,
+# ignores --target. The bash port installs a ~/.local/bin symlink instead.
+function Handle-Bin([string]$name, [string]$path, [string]$command) {
+    if ($Scope -ne 'global') {
+        Write-Output "  [.] $name  bin is global-only — use --scope global"
+        return
+    }
+    # The PowerShell entry point is the .ps1 sibling of the catalogued script.
+    $exe = Join-Path $RepoRoot ($path -replace '\.sh$', '.ps1')
+    if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+        [Console]::Error.WriteLine("  [!] $name  source missing: $exe"); return
+    }
+    $beg      = "# >>> ai-toolbox $command >>>"
+    $end      = "# <<< ai-toolbox $command <<<"
+    $block    = "$beg`nfunction $command { & '$exe' @args }`n$end"
+    $strip    = "(?s)\r?\n*$([regex]::Escape($beg)).*?$([regex]::Escape($end))"
+    $current  = [string]$(if (Test-Path -LiteralPath $PROFILE) { Get-Content -LiteralPath $PROFILE -Raw })
+    $hasBlock = [regex]::IsMatch($current, [regex]::Escape($beg))
+    $rest     = ($current -replace $strip, '').TrimEnd()
+
+    switch ($Cmd) {
+        'install' {
+            New-Item -ItemType Directory -Path (Split-Path -Parent $PROFILE) -Force | Out-Null
+            Set-Content -LiteralPath $PROFILE -Value $(if ($rest) { "$rest`n`n$block" } else { $block })
+            if ($hasBlock) { Write-Output "  [=] $name  $command already in `$PROFILE" }
+            else           { Write-Output "  [+] $name  $command -> `$PROFILE" }
+        }
+        'status' {
+            if ($hasBlock) {
+                Write-Output "  [ok] $name  $command in `$PROFILE"
+                $script:State = 'ok'
+            } else {
+                Write-Output "  [  ] $name  not installed"
+            }
+        }
+        'clean' {
+            if ($hasBlock) {
+                Set-Content -LiteralPath $PROFILE -Value $rest
+                Write-Output "  [-] $name  $command removed from `$PROFILE"
+            } else {
+                Write-Output "  [.] $name  nothing to remove"
+            }
+        }
+    }
 }
 
 # --- hook handler -------------------------------------------------------------
@@ -462,6 +512,11 @@ function Registry-Sweep {
             'skill'  { Handle-Skill  $e.tool $e.path }
             'hook'   { Handle-Hook   $e.tool $e.path }
             'config' { Handle-Config $e.tool $e.path }
+            'bin' {
+                $cat = (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools |
+                    Where-Object { $_.name -eq $e.tool } | Select-Object -First 1
+                Handle-Bin $e.tool $e.path $cat.command
+            }
             'plugin' {
                 $cat = (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools |
                     Where-Object { $_.name -eq $e.tool } | Select-Object -First 1
@@ -503,9 +558,9 @@ if (-not $selected) {
     exit 1
 }
 
-# --target is required unless every selected tool ignores it (hook, config).
+# --target is required unless every selected tool ignores it (hook, config, bin).
 if (-not $Target) {
-    $needsTarget = $selected | Where-Object { $_.type -ne 'hook' -and $_.type -ne 'config' } | Select-Object -First 1
+    $needsTarget = $selected | Where-Object { $_.type -ne 'hook' -and $_.type -ne 'config' -and $_.type -ne 'bin' } | Select-Object -First 1
     if ($needsTarget) {
         [Console]::Error.WriteLine("toolbox: --target is required (claude|codex|agents) — `"$($needsTarget.name)`" needs it")
         exit 2
@@ -517,12 +572,13 @@ foreach ($tool in $selected) {
         'skill'  { Handle-Skill $tool.name $tool.path }
         'hook'   { Handle-Hook $tool.name $tool.path }
         'config' { Handle-Config $tool.name $tool.path }
+        'bin'    { Handle-Bin $tool.name $tool.path $tool.command }
         'plugin' { Handle-Plugin $tool.name $tool.path $tool.marketplace $tool.plugin }
         default {
             [Console]::Error.WriteLine("  [!] $($tool.name)  unknown type `"$($tool.type)`"")
         }
     }
-    if ($tool.type -in @('skill', 'hook', 'config', 'plugin')) {
+    if ($tool.type -in @('skill', 'hook', 'config', 'bin', 'plugin')) {
         if ($Cmd -eq 'install') {
             Registry-Add $tool.name $tool.type $tool.path $Scope $Target $Project
         } elseif ($Cmd -eq 'clean') {

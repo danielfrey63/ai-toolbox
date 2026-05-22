@@ -32,6 +32,13 @@
       "type": "config",
       "path": "CLAUDE.md",
       "description": "Global Claude Code instructions (CLAUDE.md -> ~/.claude/)."
+    },
+    {
+      "name": "cli",
+      "type": "bin",
+      "path": "toolbox.sh",
+      "command": "toolbox",
+      "description": "The toolbox CLI itself, as a system-wide 'toolbox' command."
     }
   ]
 }
