@@ -10,7 +10,7 @@
 #   bin    — symlink the CLI itself into ~/.local/bin as the toolbox command
 #
 # Usage:
-#   toolbox.sh <install|status|clean> --target <claude|codex|agents>
+#   toolbox.sh <install|status|remove> --target <claude|codex|agents>
 #              [--scope global|project] [--project PATH] [--what all|<name>|<type>]
 #              [--tagstyle plain|namespaced]
 #
@@ -23,13 +23,13 @@
 # --tagstyle applies only to hook installs — it sets the repo's
 # bumpversion.tagstyle (plain = v<version> tags for a single-artifact repo).
 #
-# Idempotent: install re-links cleanly, clean removes only our own symlinks,
+# Idempotent: install re-links cleanly, remove deletes only our own symlinks,
 # a foreign file/dir at the target is never clobbered.
 #
 # Every install is recorded in a per-machine registry (see "Registry" in
-# --help) so `status --all` / `clean --all` can sweep every install.
+# --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.15.107'
+APP_VERSION='0.16.125'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -45,14 +45,14 @@ Tools are described in the catalog (tools/catalog.json) and installed by
 type-specific handlers. Run `toolbox.sh list` to see what is available.
 
 Usage:
-  toolbox.sh <install|status|clean> --target <claude|codex|agents> [options]
+  toolbox.sh <install|status|remove> --target <claude|codex|agents> [options]
   toolbox.sh list
   toolbox.sh -h|--help
 
 Commands:
   install  Install the selected tools (idempotent — safe to re-run).
-  status   Report whether each selected tool is installed.
-  clean    Remove the selected tools (only ever removes our own links/config).
+  status   Report install state — with no arguments, sweeps the registry.
+  remove   Remove the selected tools (only ever removes our own links/config).
   list     Print the catalog — every installable tool with its type.
 
 Options:
@@ -67,7 +67,7 @@ Options:
   --tagstyle plain | namespaced   Hook installs only.
              plain      — tag v<version>         (single-artifact repo)
              namespaced — tag <name>/v<version>  (default; multi-artifact repo)
-  --all      status / clean only: act on every recorded install (the registry),
+  --all      status / remove only: act on every recorded install (the registry),
              ignoring --what. status --all also prunes stale entries.
   -h|--help  Show this help.
 
@@ -103,10 +103,10 @@ Examples:
   toolbox.sh install --what versioning-hooks --scope project   # --project = cwd
   toolbox.sh status --target claude
   toolbox.sh status --all              # every recorded install; prune stale
-  toolbox.sh clean --all               # uninstall everything recorded
-  toolbox.sh clean --target claude --what watch
+  toolbox.sh remove --all               # uninstall everything recorded
+  toolbox.sh remove --target claude --what watch
 
-Idempotent: install re-links cleanly, clean removes only our own links/config,
+Idempotent: install re-links cleanly, remove deletes only our own links/config,
 a foreign file or directory at a target is never clobbered.
 EOF
 }
@@ -125,9 +125,9 @@ print_catalog_list() {
 # --- command ------------------------------------------------------------------
 CMD=${1:-}
 case "$CMD" in
-    install|status|clean|list) shift ;;
+    install|status|remove|list) shift ;;
     -h|--help) usage; exit 0 ;;
-    '') printf 'toolbox: missing command (install|status|clean|list)\n' >&2; exit 2 ;;
+    '') printf 'toolbox: missing command (install|status|remove|list)\n' >&2; exit 2 ;;
     *)  printf 'toolbox: unknown command: %s\n' "$CMD" >&2; exit 2 ;;
 esac
 
@@ -202,7 +202,7 @@ skill_destdir() {
 
 # Symlink one artifact (file or directory) into a destination directory, under
 # an optional link name (4th arg; defaults to the source basename). Idempotent
-# across install/status/clean; never clobbers a non-symlink. Shared by the
+# across install/status/remove; never clobbers a non-symlink. Shared by the
 # skill, config and bin handlers.
 link_artifact() {
     local name=$1 src=$2 destdir=$3
@@ -238,7 +238,7 @@ link_artifact() {
                 printf '  [  ] %-18s not installed\n' "$name"
             fi
             ;;
-        clean)
+        remove)
             if [ -L "$link" ] && [ "$(readlink "$link")" = "$src" ]; then
                 rm -f "$link"
                 printf '  [-] %-18s removed\n' "$name"
@@ -375,7 +375,7 @@ handle_hook() {
                 printf '  [  ] %-18s not installed in %s\n' "$name" "$prepo"
             fi
             ;;
-        clean)
+        remove)
             if [ "$cur" = "$hooksdir" ]; then
                 git -C "$prepo" config --local --unset core.hooksPath
                 printf '  [-] %-18s core.hooksPath unset (%s)\n' "$name" "$prepo"
@@ -425,7 +425,7 @@ handle_plugin() {
                 printf '  [  ] %-18s %s not installed\n' "$name" "$ref"
             fi
             ;;
-        clean)
+        remove)
             if claude plugin list 2>/dev/null | grep -qF "$ref"; then
                 ( cd "$pdir" && claude plugin uninstall "$ref" -y ) >/dev/null 2>&1 \
                     && printf '  [-] %-18s %s uninstalled\n' "$name" "$ref"
@@ -438,7 +438,7 @@ handle_plugin() {
 }
 
 # --- registry -----------------------------------------------------------------
-# Records every install so `status --all` / `clean --all` can find them across
+# Records every install so `status --all` / `remove --all` can find them across
 # all scopes, targets and projects. The registry is only a discovery index —
 # each entry is re-verified against reality before any action, stale ones are
 # pruned. Per machine, in the user config dir; never committed.
@@ -463,7 +463,7 @@ registry_add() {  # name type path scope target project
     mkdir -p "$(dirname "$REGISTRY")" && printf '%s\n' "$data" > "$REGISTRY"
 }
 
-# Drop the entry with this key — used by a non---all clean.
+# Drop the entry with this key — used by a non---all remove.
 registry_remove() {  # name scope target project
     [ -f "$REGISTRY" ] || return 0
     local data
@@ -476,7 +476,7 @@ registry_remove() {  # name scope target project
 }
 
 # Run $CMD against every registry entry. status: verify, report, prune stale
-# entries. clean: remove each install, then empty the registry. Entries carry
+# entries. remove: uninstall each, then empty the registry. Entries carry
 # only install parameters — the handlers re-verify against reality.
 registry_sweep() {
     local entries n i e tool type path mkt plg cmdname kept='[]'
@@ -484,7 +484,7 @@ registry_sweep() {
     n=$(printf '%s' "$entries" | jq 'length' 2>/dev/null || printf 0)
     if [ "$n" = 0 ]; then
         printf '  (registry empty — nothing recorded)\n'
-        [ "$CMD" = clean ] && printf '[]\n' > "$REGISTRY"
+        [ "$CMD" = remove ] && printf '[]\n' > "$REGISTRY"
         return
     fi
     i=0
@@ -517,25 +517,36 @@ registry_sweep() {
         esac
 
         if [ "$CMD" = status ]; then
-            if [ "$STATE" = ok ]; then
+            # bin entries are kept regardless of the verdict — their install
+            # mechanism is port-specific (bash symlink vs pwsh $PROFILE), so a
+            # cross-port status check cannot tell "gone" apart from "installed
+            # by the other port".
+            if [ "$STATE" = ok ] || [ "$type" = bin ]; then
                 kept=$(printf '%s' "$kept" | jq -c --argjson e "$e" '. + [$e]')
             else
                 printf '      -> pruned from registry (no longer installed)\n'
             fi
         fi
     done
-    if [ "$CMD" = clean ]; then
+    if [ "$CMD" = remove ]; then
         printf '[]\n' > "$REGISTRY"
     else
         printf '%s\n' "$kept" | jq . > "$REGISTRY"
     fi
 }
 
+# `status` with no selection arguments shows the registry — bare `toolbox
+# status` answers "what is installed?" without needing a --target.
+if [ "$CMD" = status ] && [ -z "$ALL" ] && [ -z "$TARGET" ] \
+    && [ "$WHAT" = all ] && [ "$SCOPE" = global ]; then
+    ALL=1
+fi
+
 # --- registry sweep (--all) ---------------------------------------------------
 if [ -n "$ALL" ]; then
     case "$CMD" in
-        status|clean) ;;
-        *) printf 'toolbox: --all is only valid for status and clean\n' >&2; exit 2 ;;
+        status|remove) ;;
+        *) printf 'toolbox: --all is only valid for status and remove\n' >&2; exit 2 ;;
     esac
     printf 'toolbox %s --all — sweeping the registry (%s)\n' "$CMD" "$REGISTRY"
     registry_sweep
@@ -589,7 +600,7 @@ printf '%s\n' "$selected" | while IFS= read -r tool; do
     esac
     case "$CMD" in
         install) registry_add "$name" "$type" "$path" "$SCOPE" "$TARGET" "$PROJECT" ;;
-        clean)   registry_remove "$name" "$SCOPE" "$TARGET" "$PROJECT" ;;
+        remove)  registry_remove "$name" "$SCOPE" "$TARGET" "$PROJECT" ;;
     esac
 done
 

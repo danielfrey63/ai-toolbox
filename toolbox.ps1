@@ -9,20 +9,20 @@
 #   bin    — install the CLI as a toolbox function in the PowerShell $PROFILE
 #
 # Usage:
-#   toolbox.ps1 <install|status|clean> --target <claude|codex|agents>
+#   toolbox.ps1 <install|status|remove> --target <claude|codex|agents>
 #               [--scope global|project] [--project PATH] [--what all|<name>|<type>]
 #               [--tagstyle plain|namespaced]
 #
 # --tagstyle applies only to hook installs — it sets the repo's
 # bumpversion.tagstyle (plain = v<version> tags for a single-artifact repo).
 #
-# Idempotent: install re-links cleanly, clean removes only our own links,
+# Idempotent: install re-links cleanly, remove deletes only our own links,
 # a foreign file/dir at the target is never clobbered.
 #
 # Every install is recorded in a per-machine registry (see "Registry" in
-# --help) so `status --all` / `clean --all` can sweep every install.
+# --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.14.98'
+$APP_VERSION = '0.15.115'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -36,14 +36,14 @@ Tools are described in the catalog (tools/catalog.json) and installed by
 type-specific handlers. Run `toolbox.ps1 list` to see what is available.
 
 Usage:
-  toolbox.ps1 <install|status|clean> --target <claude|codex|agents> [options]
+  toolbox.ps1 <install|status|remove> --target <claude|codex|agents> [options]
   toolbox.ps1 list
   toolbox.ps1 -h|--help
 
 Commands:
   install  Install the selected tools (idempotent — safe to re-run).
-  status   Report whether each selected tool is installed.
-  clean    Remove the selected tools (only ever removes our own links/config).
+  status   Report install state — with no arguments, sweeps the registry.
+  remove   Remove the selected tools (only ever removes our own links/config).
   list     Print the catalog — every installable tool with its type.
 
 Options:
@@ -58,7 +58,7 @@ Options:
   --tagstyle plain | namespaced   Hook installs only.
              plain      — tag v<version>         (single-artifact repo)
              namespaced — tag <name>/v<version>  (default; multi-artifact repo)
-  --all      status / clean only: act on every recorded install (the registry),
+  --all      status / remove only: act on every recorded install (the registry),
              ignoring --what. status --all also prunes stale entries.
   -h|--help  Show this help.
 
@@ -94,10 +94,10 @@ Examples:
   toolbox.ps1 install --what versioning-hooks --scope project   # --project = cwd
   toolbox.ps1 status --target claude
   toolbox.ps1 status --all              # every recorded install; prune stale
-  toolbox.ps1 clean --all               # uninstall everything recorded
-  toolbox.ps1 clean --target claude --what watch
+  toolbox.ps1 remove --all               # uninstall everything recorded
+  toolbox.ps1 remove --target claude --what watch
 
-Idempotent: install re-links cleanly, clean removes only our own links/config,
+Idempotent: install re-links cleanly, remove deletes only our own links/config,
 a foreign file or directory at a target is never clobbered.
 '@
 }
@@ -115,8 +115,8 @@ function Show-CatalogList {
 # --- command ------------------------------------------------------------------
 $Cmd = if ($args.Count -ge 1) { [string]$args[0] } else { '' }
 if ($Cmd -in @('-h', '--help')) { Show-Usage; exit 0 }
-if ($Cmd -notin @('install', 'status', 'clean', 'list')) {
-    [Console]::Error.WriteLine("toolbox: missing or unknown command (install|status|clean|list)")
+if ($Cmd -notin @('install', 'status', 'remove', 'list')) {
+    [Console]::Error.WriteLine("toolbox: missing or unknown command (install|status|remove|list)")
     exit 2
 }
 
@@ -184,7 +184,7 @@ function Get-SkillDestDir {
 }
 
 # Symlink one artifact (file or directory) into a destination directory.
-# Idempotent across install/status/clean; never clobbers a non-link.
+# Idempotent across install/status/remove; never clobbers a non-link.
 # Shared by the skill and config handlers.
 function Link-Artifact([string]$name, [string]$src, [string]$destdir) {
     $link = Join-Path $destdir (Split-Path -Leaf $src)
@@ -223,7 +223,7 @@ function Link-Artifact([string]$name, [string]$src, [string]$destdir) {
                 Write-Output "  [  ] $name  not installed"
             }
         }
-        'clean' {
+        'remove' {
             if ($item -and $item.Target -eq $src) {
                 if ($isDir) { [System.IO.Directory]::Delete($link, $false) }
                 else        { [System.IO.File]::Delete($link) }
@@ -295,7 +295,7 @@ function Handle-Bin([string]$name, [string]$path, [string]$command) {
                 Write-Output "  [  ] $name  not installed"
             }
         }
-        'clean' {
+        'remove' {
             if ($hasBlock) {
                 Set-Content -LiteralPath $PROFILE -Value $rest
                 Write-Output "  [-] $name  $command removed from `$PROFILE"
@@ -374,7 +374,7 @@ function Handle-Hook([string]$name, [string]$path) {
             elseif ($cur) { Write-Output "  [? ] $name  core.hooksPath = $cur (not ours)" }
             else { Write-Output "  [  ] $name  not installed in $prepo" }
         }
-        'clean' {
+        'remove' {
             if ($cur -eq $hooksdir) {
                 git -C $prepo config --local --unset core.hooksPath
                 Write-Output "  [-] $name  core.hooksPath unset ($prepo)"
@@ -426,7 +426,7 @@ function Handle-Plugin([string]$name, [string]$path, [string]$marketplace, [stri
             }
             else { Write-Output "  [  ] $name  $ref not installed" }
         }
-        'clean' {
+        'remove' {
             Push-Location $pdir
             try {
                 if ($installed) {
@@ -442,7 +442,7 @@ function Handle-Plugin([string]$name, [string]$path, [string]$marketplace, [stri
 }
 
 # --- registry -----------------------------------------------------------------
-# Records every install so `status --all` / `clean --all` can find them across
+# Records every install so `status --all` / `remove --all` can find them across
 # all scopes, targets and projects. The registry is only a discovery index —
 # each entry is re-verified against reality before any action, stale ones are
 # pruned. Per machine, in the user config dir; never committed.
@@ -483,7 +483,7 @@ function Registry-Add([string]$tool, [string]$type, [string]$path,
     Registry-Write (@($kept) | Sort-Object tool, scope, target, project)
 }
 
-# Drop the entry with this key — used by a non---all clean.
+# Drop the entry with this key — used by a non---all remove.
 function Registry-Remove([string]$tool, [string]$scope, [string]$target, [string]$project) {
     if (-not (Test-Path -LiteralPath $Registry)) { return }
     Registry-Write @(Registry-Read | Where-Object {
@@ -493,13 +493,13 @@ function Registry-Remove([string]$tool, [string]$scope, [string]$target, [string
 }
 
 # Run $Cmd against every registry entry. status: verify, report, prune stale
-# entries. clean: remove each install, then empty the registry. Entries carry
+# entries. remove: uninstall each, then empty the registry. Entries carry
 # only install parameters — the handlers re-verify against reality.
 function Registry-Sweep {
     $entries = @(Registry-Read)
     if ($entries.Count -eq 0) {
         Write-Output '  (registry empty — nothing recorded)'
-        if ($Cmd -eq 'clean') { Registry-Write @() }
+        if ($Cmd -eq 'remove') { Registry-Write @() }
         return
     }
     $kept = @()
@@ -527,18 +527,28 @@ function Registry-Sweep {
             }
         }
         if ($Cmd -eq 'status') {
-            if ($script:State -eq 'ok') { $kept += $e }
+            # bin entries are kept regardless — the install mechanism is
+            # port-specific (bash symlink vs pwsh $PROFILE), so a cross-port
+            # check cannot tell "gone" from "installed by the other port".
+            if ($script:State -eq 'ok' -or $e.type -eq 'bin') { $kept += $e }
             else { Write-Output '      -> pruned from registry (no longer installed)' }
         }
     }
-    if ($Cmd -eq 'clean') { Registry-Write @() }
+    if ($Cmd -eq 'remove') { Registry-Write @() }
     else { Registry-Write @($kept) }
+}
+
+# `status` with no selection arguments shows the registry — bare `toolbox
+# status` answers "what is installed?" without needing a --target.
+if ($Cmd -eq 'status' -and -not $All -and -not $Target `
+        -and $What -eq 'all' -and $Scope -eq 'global') {
+    $All = $true
 }
 
 # --- registry sweep (--all) ---------------------------------------------------
 if ($All) {
-    if ($Cmd -notin @('status', 'clean')) {
-        [Console]::Error.WriteLine("toolbox: --all is only valid for status and clean"); exit 2
+    if ($Cmd -notin @('status', 'remove')) {
+        [Console]::Error.WriteLine("toolbox: --all is only valid for status and remove"); exit 2
     }
     Write-Output "toolbox $Cmd --all — sweeping the registry ($Registry)"
     Registry-Sweep
@@ -581,7 +591,7 @@ foreach ($tool in $selected) {
     if ($tool.type -in @('skill', 'hook', 'config', 'bin', 'plugin')) {
         if ($Cmd -eq 'install') {
             Registry-Add $tool.name $tool.type $tool.path $Scope $Target $Project
-        } elseif ($Cmd -eq 'clean') {
+        } elseif ($Cmd -eq 'remove') {
             Registry-Remove $tool.name $Scope $Target $Project
         }
     }
