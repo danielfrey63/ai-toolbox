@@ -24,8 +24,11 @@
 #
 # Idempotent: install re-links cleanly, clean removes only our own symlinks,
 # a foreign file/dir at the target is never clobbered.
+#
+# Every install is recorded in a per-machine registry (see "Registry" in
+# --help) so `status --all` / `clean --all` can sweep every install.
 
-APP_VERSION='0.12.72'
+APP_VERSION='0.13.82'
 set -u
 
 SELF_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -62,6 +65,8 @@ Options:
   --tagstyle plain | namespaced   Hook installs only.
              plain      — tag v<version>         (single-artifact repo)
              namespaced — tag <name>/v<version>  (default; multi-artifact repo)
+  --all      status / clean only: act on every recorded install (the registry),
+             ignoring --what. status --all also prunes stale entries.
   -h|--help  Show this help.
 
 Targets:
@@ -82,12 +87,20 @@ Catalog (tools/catalog.json):
     config  symlink a global config file into ~/.claude/ (global scope only)
   Run `tools.sh list` to print the current catalog.
 
+Registry:
+  Every install is recorded in
+  ${XDG_CONFIG_HOME:-~/.config}/ai-toolbox/installs.json (per machine). It is
+  only a discovery index — `status --all` and every `install` re-verify each
+  entry against reality and prune stale ones.
+
 Examples:
   tools.sh list
   tools.sh install --target claude   # all tools, global
   tools.sh install --target codex --what component-audit
   tools.sh install --what versioning-hooks --scope project   # --project = cwd
   tools.sh status --target claude
+  tools.sh status --all              # every recorded install; prune stale
+  tools.sh clean --all               # uninstall everything recorded
   tools.sh clean --target claude --what watch
 
 Idempotent: install re-links cleanly, clean removes only our own links/config,
@@ -121,6 +134,8 @@ TARGET=''
 PROJECT=''
 WHAT=all
 TAGSTYLE=''
+ALL=''
+STATE=''
 while [ $# -gt 0 ]; do
     case "$1" in
         --scope|--target|--project|--what|--tagstyle)
@@ -134,6 +149,7 @@ while [ $# -gt 0 ]; do
                 --tagstyle) TAGSTYLE=$2 ;;
             esac
             shift 2 ;;
+        --all) ALL=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) printf 'tools: unknown option: %s\n' "$1" >&2; exit 2 ;;
     esac
@@ -211,6 +227,7 @@ link_artifact() {
         status)
             if [ -L "$link" ] && [ "$(readlink "$link")" = "$src" ]; then
                 printf '  [ok] %-18s %s\n' "$name" "$link"
+                STATE=ok
             elif [ -e "$link" ] || [ -L "$link" ]; then
                 printf '  [? ] %-18s %s (exists, not our link)\n' "$name" "$link"
             else
@@ -320,6 +337,7 @@ handle_hook() {
             if [ "$cur" = "$hooksdir" ]; then
                 curts=$(git -C "$prepo" config --local bumpversion.tagstyle 2>/dev/null || true)
                 printf '  [ok] %-18s %s (tagstyle=%s)\n' "$name" "$prepo" "${curts:-namespaced}"
+                STATE=ok
             elif [ -n "$cur" ]; then
                 printf '  [? ] %-18s core.hooksPath = %s (not ours)\n' "$name" "$cur"
             else
@@ -371,6 +389,7 @@ handle_plugin() {
         status)
             if claude plugin list 2>/dev/null | grep -qF "$ref"; then
                 printf '  [ok] %-18s %s installed\n' "$name" "$ref"
+                STATE=ok
             else
                 printf '  [  ] %-18s %s not installed\n' "$name" "$ref"
             fi
@@ -386,6 +405,107 @@ handle_plugin() {
             ;;
     esac
 }
+
+# --- registry -----------------------------------------------------------------
+# Records every install so `status --all` / `clean --all` can find them across
+# all scopes, targets and projects. The registry is only a discovery index —
+# each entry is re-verified against reality before any action, stale ones are
+# pruned. Per machine, in the user config dir; never committed.
+REGISTRY="${XDG_CONFIG_HOME:-$HOME/.config}/ai-toolbox/installs.json"
+
+registry_read() {
+    [ -f "$REGISTRY" ] && cat "$REGISTRY" 2>/dev/null || printf '[]'
+}
+
+# Upsert an entry, keyed by tool + scope + target + project.
+registry_add() {  # name type path scope target project
+    local data
+    data=$(registry_read | jq \
+        --arg tool "$1" --arg type "$2" --arg path "$3" \
+        --arg scope "$4" --arg target "$5" --arg project "$6" '
+        map(select((.tool==$tool and .scope==$scope
+                    and .target==$target and .project==$project) | not))
+        + [{tool:$tool, type:$type, path:$path,
+            scope:$scope, target:$target, project:$project}]
+        | sort_by(.tool, .scope, .target, .project)
+    ' 2>/dev/null) || return 0
+    mkdir -p "$(dirname "$REGISTRY")" && printf '%s\n' "$data" > "$REGISTRY"
+}
+
+# Drop the entry with this key — used by a non---all clean.
+registry_remove() {  # name scope target project
+    [ -f "$REGISTRY" ] || return 0
+    local data
+    data=$(registry_read | jq \
+        --arg tool "$1" --arg scope "$2" --arg target "$3" --arg project "$4" '
+        map(select((.tool==$tool and .scope==$scope
+                    and .target==$target and .project==$project) | not))
+    ' 2>/dev/null) || return 0
+    printf '%s\n' "$data" > "$REGISTRY"
+}
+
+# Run $CMD against every registry entry. status: verify, report, prune stale
+# entries. clean: remove each install, then empty the registry. Entries carry
+# only install parameters — the handlers re-verify against reality.
+registry_sweep() {
+    local entries n i e tool type path mkt plg kept='[]'
+    entries=$(registry_read)
+    n=$(printf '%s' "$entries" | jq 'length' 2>/dev/null || printf 0)
+    if [ "$n" = 0 ]; then
+        printf '  (registry empty — nothing recorded)\n'
+        [ "$CMD" = clean ] && printf '[]\n' > "$REGISTRY"
+        return
+    fi
+    i=0
+    while [ "$i" -lt "$n" ]; do
+        e=$(printf '%s' "$entries" | jq -c ".[$i]")
+        i=$((i + 1))
+        tool=$(printf '%s' "$e" | jq -r '.tool')
+        type=$(printf '%s' "$e" | jq -r '.type')
+        path=$(printf '%s' "$e" | jq -r '.path')
+        SCOPE=$(printf '%s' "$e" | jq -r '.scope')
+        TARGET=$(printf '%s' "$e" | jq -r '.target')
+        PROJECT=$(printf '%s' "$e" | jq -r '.project')
+
+        STATE=gone
+        case "$type" in
+            skill)  handle_skill "$tool" "$path" ;;
+            hook)   handle_hook "$tool" "$path" ;;
+            config) handle_config "$tool" "$path" ;;
+            plugin)
+                mkt=$(jq -r --arg n "$tool" \
+                    '.tools[] | select(.name==$n) | .marketplace // empty' "$CATALOG")
+                plg=$(jq -r --arg n "$tool" \
+                    '.tools[] | select(.name==$n) | .plugin // empty' "$CATALOG")
+                handle_plugin "$tool" "$path" "$mkt" "$plg" ;;
+            *)  printf '  [!] %-18s unknown type "%s"\n' "$tool" "$type" >&2 ;;
+        esac
+
+        if [ "$CMD" = status ]; then
+            if [ "$STATE" = ok ]; then
+                kept=$(printf '%s' "$kept" | jq -c --argjson e "$e" '. + [$e]')
+            else
+                printf '      -> pruned from registry (no longer installed)\n'
+            fi
+        fi
+    done
+    if [ "$CMD" = clean ]; then
+        printf '[]\n' > "$REGISTRY"
+    else
+        printf '%s\n' "$kept" | jq . > "$REGISTRY"
+    fi
+}
+
+# --- registry sweep (--all) ---------------------------------------------------
+if [ -n "$ALL" ]; then
+    case "$CMD" in
+        status|clean) ;;
+        *) printf 'tools: --all is only valid for status and clean\n' >&2; exit 2 ;;
+    esac
+    printf 'tools %s --all — sweeping the registry (%s)\n' "$CMD" "$REGISTRY"
+    registry_sweep
+    exit 0
+fi
 
 # --- dispatch -----------------------------------------------------------------
 printf 'tools %s — scope=%s target=%s what=%s\n' "$CMD" "$SCOPE" "$TARGET" "$WHAT"
@@ -425,7 +545,20 @@ printf '%s\n' "$selected" | while IFS= read -r tool; do
             ;;
         *)
             printf '  [!] %-18s unknown type "%s"\n' "$name" "$type" >&2
+            continue
             ;;
     esac
+    case "$CMD" in
+        install) registry_add "$name" "$type" "$path" "$SCOPE" "$TARGET" "$PROJECT" ;;
+        clean)   registry_remove "$name" "$SCOPE" "$TARGET" "$PROJECT" ;;
+    esac
 done
+
+# install reconciles the whole registry afterwards — the same verification as
+# `status --all`, so stale entries are pruned on every install.
+if [ "$CMD" = install ]; then
+    printf '\n-- registry reconcile --\n'
+    CMD=status
+    registry_sweep
+fi
 exit 0

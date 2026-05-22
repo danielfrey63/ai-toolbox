@@ -17,8 +17,11 @@
 #
 # Idempotent: install re-links cleanly, clean removes only our own links,
 # a foreign file/dir at the target is never clobbered.
+#
+# Every install is recorded in a per-machine registry (see "Registry" in
+# --help) so `status --all` / `clean --all` can sweep every install.
 
-$APP_VERSION = '0.12.68'
+$APP_VERSION = '0.13.79'
 $ErrorActionPreference = 'Stop'
 
 $SelfDir  = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -55,6 +58,8 @@ Options:
   --tagstyle plain | namespaced   Hook installs only.
              plain      — tag v<version>         (single-artifact repo)
              namespaced — tag <name>/v<version>  (default; multi-artifact repo)
+  --all      status / clean only: act on every recorded install (the registry),
+             ignoring --what. status --all also prunes stale entries.
   -h|--help  Show this help.
 
 Targets:
@@ -75,12 +80,20 @@ Catalog (tools/catalog.json):
     config  symlink a global config file into ~/.claude/ (global scope only)
   Run `tools.ps1 list` to print the current catalog.
 
+Registry:
+  Every install is recorded in
+  ${XDG_CONFIG_HOME:-~/.config}/ai-toolbox/installs.json (per machine). It is
+  only a discovery index — `status --all` and every `install` re-verify each
+  entry against reality and prune stale ones.
+
 Examples:
   tools.ps1 list
   tools.ps1 install --target claude   # all tools, global
   tools.ps1 install --target codex --what component-audit
   tools.ps1 install --what versioning-hooks --scope project   # --project = cwd
   tools.ps1 status --target claude
+  tools.ps1 status --all              # every recorded install; prune stale
+  tools.ps1 clean --all               # uninstall everything recorded
   tools.ps1 clean --target claude --what watch
 
 Idempotent: install re-links cleanly, clean removes only our own links/config,
@@ -108,6 +121,7 @@ if ($Cmd -notin @('install', 'status', 'clean', 'list')) {
 
 # --- options ------------------------------------------------------------------
 $Scope = 'global'; $Target = ''; $Project = ''; $What = 'all'; $TagStyle = ''
+$All = $false; $State = ''
 $i = 1
 while ($i -lt $args.Count) {
     $opt = [string]$args[$i]
@@ -126,6 +140,7 @@ while ($i -lt $args.Count) {
             }
             $i += 2
         }
+        '--all' { $All = $true; $i += 1 }
         { $_ -in '-h', '--help' } { Show-Usage; exit 0 }
         default { [Console]::Error.WriteLine("tools: unknown option: $opt"); exit 2 }
     }
@@ -200,6 +215,7 @@ function Link-Artifact([string]$name, [string]$src, [string]$destdir) {
         'status' {
             if ($item -and $item.Target -eq $src) {
                 Write-Output "  [ok] $name  $link"
+                $script:State = 'ok'
             } elseif ($item) {
                 Write-Output "  [? ] $name  $link (exists, not our link)"
             } else {
@@ -304,6 +320,7 @@ function Handle-Hook([string]$name, [string]$path) {
                 $curts = (git -C $prepo config --local bumpversion.tagstyle 2>$null)
                 if (-not $curts) { $curts = 'namespaced' }
                 Write-Output "  [ok] $name  $prepo (tagstyle=$curts)"
+                $script:State = 'ok'
             }
             elseif ($cur) { Write-Output "  [? ] $name  core.hooksPath = $cur (not ours)" }
             else { Write-Output "  [  ] $name  not installed in $prepo" }
@@ -354,7 +371,10 @@ function Handle-Plugin([string]$name, [string]$path, [string]$marketplace, [stri
             } finally { Pop-Location }
         }
         'status' {
-            if ($installed) { Write-Output "  [ok] $name  $ref installed" }
+            if ($installed) {
+                Write-Output "  [ok] $name  $ref installed"
+                $script:State = 'ok'
+            }
             else { Write-Output "  [  ] $name  $ref not installed" }
         }
         'clean' {
@@ -370,6 +390,105 @@ function Handle-Plugin([string]$name, [string]$path, [string]$marketplace, [stri
             } finally { Pop-Location }
         }
     }
+}
+
+# --- registry -----------------------------------------------------------------
+# Records every install so `status --all` / `clean --all` can find them across
+# all scopes, targets and projects. The registry is only a discovery index —
+# each entry is re-verified against reality before any action, stale ones are
+# pruned. Per machine, in the user config dir; never committed.
+$cfgBase  = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $HOME '.config' }
+$Registry = Join-Path $cfgBase 'ai-toolbox/installs.json'
+
+function Registry-Read {
+    if (Test-Path -LiteralPath $Registry) {
+        try { return @(Get-Content -LiteralPath $Registry -Raw | ConvertFrom-Json) }
+        catch { return @() }
+    }
+    return @()
+}
+
+function Registry-Write([object[]]$entries) {
+    New-Item -ItemType Directory -Path (Split-Path -Parent $Registry) -Force | Out-Null
+    if (@($entries).Count -eq 0) {
+        Set-Content -LiteralPath $Registry -Value '[]'
+    } else {
+        # Pipe the array so it unrolls — one JSON entry per element. Passing it
+        # via -InputObject would serialise the whole array as a single object.
+        Set-Content -LiteralPath $Registry `
+            -Value (@($entries) | ConvertTo-Json -Depth 5 -AsArray)
+    }
+}
+
+# Upsert an entry, keyed by tool + scope + target + project.
+function Registry-Add([string]$tool, [string]$type, [string]$path,
+                      [string]$scope, [string]$target, [string]$project) {
+    $kept = @(Registry-Read | Where-Object {
+        -not ($_.tool -eq $tool -and $_.scope -eq $scope -and
+              $_.target -eq $target -and $_.project -eq $project)
+    })
+    $kept += [pscustomobject]@{
+        tool = $tool; type = $type; path = $path
+        scope = $scope; target = $target; project = $project
+    }
+    Registry-Write (@($kept) | Sort-Object tool, scope, target, project)
+}
+
+# Drop the entry with this key — used by a non---all clean.
+function Registry-Remove([string]$tool, [string]$scope, [string]$target, [string]$project) {
+    if (-not (Test-Path -LiteralPath $Registry)) { return }
+    Registry-Write @(Registry-Read | Where-Object {
+        -not ($_.tool -eq $tool -and $_.scope -eq $scope -and
+              $_.target -eq $target -and $_.project -eq $project)
+    })
+}
+
+# Run $Cmd against every registry entry. status: verify, report, prune stale
+# entries. clean: remove each install, then empty the registry. Entries carry
+# only install parameters — the handlers re-verify against reality.
+function Registry-Sweep {
+    $entries = @(Registry-Read)
+    if ($entries.Count -eq 0) {
+        Write-Output '  (registry empty — nothing recorded)'
+        if ($Cmd -eq 'clean') { Registry-Write @() }
+        return
+    }
+    $kept = @()
+    foreach ($e in $entries) {
+        $script:Scope   = $e.scope
+        $script:Target  = $e.target
+        $script:Project = $e.project
+        $script:State   = 'gone'
+        switch ($e.type) {
+            'skill'  { Handle-Skill  $e.tool $e.path }
+            'hook'   { Handle-Hook   $e.tool $e.path }
+            'config' { Handle-Config $e.tool $e.path }
+            'plugin' {
+                $cat = (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools |
+                    Where-Object { $_.name -eq $e.tool } | Select-Object -First 1
+                Handle-Plugin $e.tool $e.path $cat.marketplace $cat.plugin
+            }
+            default {
+                [Console]::Error.WriteLine("  [!] $($e.tool)  unknown type `"$($e.type)`"")
+            }
+        }
+        if ($Cmd -eq 'status') {
+            if ($script:State -eq 'ok') { $kept += $e }
+            else { Write-Output '      -> pruned from registry (no longer installed)' }
+        }
+    }
+    if ($Cmd -eq 'clean') { Registry-Write @() }
+    else { Registry-Write @($kept) }
+}
+
+# --- registry sweep (--all) ---------------------------------------------------
+if ($All) {
+    if ($Cmd -notin @('status', 'clean')) {
+        [Console]::Error.WriteLine("tools: --all is only valid for status and clean"); exit 2
+    }
+    Write-Output "tools $Cmd --all — sweeping the registry ($Registry)"
+    Registry-Sweep
+    exit 0
 }
 
 # --- dispatch -----------------------------------------------------------------
@@ -404,5 +523,20 @@ foreach ($tool in $selected) {
             [Console]::Error.WriteLine("  [!] $($tool.name)  unknown type `"$($tool.type)`"")
         }
     }
+    if ($tool.type -in @('skill', 'hook', 'config', 'plugin')) {
+        if ($Cmd -eq 'install') {
+            Registry-Add $tool.name $tool.type $tool.path $Scope $Target $Project
+        } elseif ($Cmd -eq 'clean') {
+            Registry-Remove $tool.name $Scope $Target $Project
+        }
+    }
+}
+
+# install reconciles the whole registry afterwards — the same verification as
+# `status --all`, so stale entries are pruned on every install.
+if ($Cmd -eq 'install') {
+    Write-Output "`n-- registry reconcile --"
+    $script:Cmd = 'status'
+    Registry-Sweep
 }
 exit 0
