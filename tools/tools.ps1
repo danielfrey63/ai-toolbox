@@ -5,6 +5,7 @@
 #   skill  — junction (Windows) / symlink (Linux/macOS) into a skills/ dir
 #   hook   — point a repo's core.hooksPath at the toolbox hook directory
 #   plugin — claude plugin marketplace add + install (--target claude); else skill-link
+#   config — symlink a global config file (CLAUDE.md) into ~/.claude/
 #
 # Usage:
 #   tools.ps1 <install|status|clean> --target <claude|codex|agents>
@@ -17,7 +18,7 @@
 # Idempotent: install re-links cleanly, clean removes only our own links,
 # a foreign file/dir at the target is never clobbered.
 
-$APP_VERSION = '0.11.66'
+$APP_VERSION = '0.12.68'
 $ErrorActionPreference = 'Stop'
 
 $SelfDir  = Split-Path -Parent $MyInvocation.MyCommand.Definition

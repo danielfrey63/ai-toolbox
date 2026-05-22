@@ -6,6 +6,7 @@
 #   hook   — point a repo's core.hooksPath at the toolbox hook directory
 #   plugin — claude plugin marketplace add + install (--target claude);
 #            for --target codex|agents the plugin falls back to a skill-link
+#   config — symlink a global config file (CLAUDE.md) into ~/.claude/
 #
 # Usage:
 #   tools.sh <install|status|clean> --target <claude|codex|agents>
@@ -15,7 +16,7 @@
 # Parameter families:
 #   scope   global (default; base = $HOME) | project (base = --project PATH,
 #           which itself defaults to the current directory)
-#   target  claude | codex | agents  — required unless the selection is hook-only
+#   target  claude | codex | agents  — required unless the selection is hook/config-only
 #   what    all (default) | a tool name | a tool type
 #
 # --tagstyle applies only to hook installs — it sets the repo's
@@ -24,7 +25,7 @@
 # Idempotent: install re-links cleanly, clean removes only our own symlinks,
 # a foreign file/dir at the target is never clobbered.
 
-APP_VERSION='0.11.69'
+APP_VERSION='0.12.72'
 set -u
 
 SELF_DIR=$(cd "$(dirname "$0")" && pwd)
