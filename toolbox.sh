@@ -29,10 +29,12 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `clean --all` can sweep every install.
 
-APP_VERSION='0.14.105'
+APP_VERSION='0.15.107'
 set -u
 
-REPO_ROOT=$(cd "$(dirname "$0")" && pwd)
+# Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
+# symlink (the "bin" install) $0 is the link, not the real script.
+REPO_ROOT=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 CATALOG="$REPO_ROOT/tools/catalog.json"
 
 usage() {
