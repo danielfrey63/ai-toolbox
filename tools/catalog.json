@@ -26,6 +26,12 @@
       "type": "hook",
       "path": "tools/githooks",
       "description": "Per-artifact version-bump git hooks (pre-commit + post-commit)."
+    },
+    {
+      "name": "claude-md",
+      "type": "config",
+      "path": "CLAUDE.md",
+      "description": "Global Claude Code instructions (CLAUDE.md -> ~/.claude/)."
     }
   ]
 }

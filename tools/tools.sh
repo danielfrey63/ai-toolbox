@@ -24,7 +24,7 @@
 # Idempotent: install re-links cleanly, clean removes only our own symlinks,
 # a foreign file/dir at the target is never clobbered.
 
-APP_VERSION='0.10.62'
+APP_VERSION='0.11.69'
 set -u
 
 SELF_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -51,7 +51,7 @@ Commands:
 
 Options:
   --target   claude | codex | agents
-             Where to install. Required, unless the selection is hook-only.
+             Where to install. Required, unless the selection is hook/config-only.
   --scope    global | project   Default: global.
              global  — install under $HOME (~/.claude, ~/.codex, ~/.agents).
              project — install under --project PATH.
@@ -67,8 +67,8 @@ Targets:
   claude   Claude Code     — skills link into <scope>/.claude/skills/
   codex    Codex CLI       — skills link into <scope>/.codex/skills/
   agents   agentskills.io  — skills link into <scope>/.agents/skills/
-  Hooks ignore --target (they are per-repo git config). Plugins do a real
-  `claude plugin` install for --target claude, else fall back to a skill-link.
+  Hooks (per-repo git config) and config files ignore --target. Plugins do a
+  real `claude plugin` install for --target claude, else fall back to a skill-link.
 
 Catalog (tools/catalog.json):
   The single source of truth for installable tools — each entry has a name,
@@ -78,6 +78,7 @@ Catalog (tools/catalog.json):
             (per-repo — needs --scope project; --project defaults to cwd)
     plugin  `claude plugin` marketplace add + install (--target claude),
             else a skill-link
+    config  symlink a global config file into ~/.claude/ (global scope only)
   Run `tools.sh list` to print the current catalog.
 
 Examples:
@@ -179,17 +180,13 @@ skill_destdir() {
     esac
 }
 
-handle_skill() {
-    local name=$1 path=$2
-    local src="$REPO_ROOT/$path"
-    local destdir link
-    destdir=$(skill_destdir)
-    link="$destdir/$name"
+# Symlink one artifact (file or directory) into a destination directory.
+# Idempotent across install/status/clean; never clobbers a non-symlink.
+# Shared by the skill and config handlers.
+link_artifact() {
+    local name=$1 src=$2 destdir=$3
+    local link="$destdir/$(basename "$src")"
 
-    if [ ! -d "$src" ]; then
-        printf '  [!] %-18s source missing: %s\n' "$name" "$src" >&2
-        return
-    fi
     if [ "$link" = "$src" ]; then
         printf '  [=] %-18s source == target, skipped\n' "$name"
         return
@@ -228,6 +225,33 @@ handle_skill() {
             fi
             ;;
     esac
+}
+
+handle_skill() {
+    local name=$1 path=$2
+    local src="$REPO_ROOT/$path"
+    if [ ! -d "$src" ]; then
+        printf '  [!] %-18s source missing: %s\n' "$name" "$src" >&2
+        return
+    fi
+    link_artifact "$name" "$src" "$(skill_destdir)"
+}
+
+# --- config handler -----------------------------------------------------------
+# Symlinks a global config file (e.g. CLAUDE.md) into ~/.claude/. Config is
+# user-global — global scope only, and --target is ignored.
+handle_config() {
+    local name=$1 path=$2
+    local src="$REPO_ROOT/$path"
+    if [ "$SCOPE" != global ]; then
+        printf '  [.] %-18s config is global-only — use --scope global\n' "$name"
+        return
+    fi
+    if [ ! -f "$src" ]; then
+        printf '  [!] %-18s source missing: %s\n' "$name" "$src" >&2
+        return
+    fi
+    link_artifact "$name" "$src" "$HOME/.claude"
 }
 
 # --- hook handler -------------------------------------------------------------
@@ -373,9 +397,10 @@ if [ -z "$selected" ]; then
     exit 1
 fi
 
-# --target is required unless every selected tool is a hook (hooks ignore it).
+# --target is required unless every selected tool ignores it (hook, config).
 if [ -z "$TARGET" ]; then
-    needs_target=$(printf '%s\n' "$selected" | jq -r 'select(.type != "hook") | .name' | head -1)
+    needs_target=$(printf '%s\n' "$selected" \
+        | jq -r 'select(.type != "hook" and .type != "config") | .name' | head -1)
     if [ -n "$needs_target" ]; then
         printf 'tools: --target is required (claude|codex|agents) — "%s" needs it\n' \
             "$needs_target" >&2
@@ -391,6 +416,7 @@ printf '%s\n' "$selected" | while IFS= read -r tool; do
     case "$type" in
         skill)  handle_skill "$name" "$path" ;;
         hook)   handle_hook "$name" "$path" ;;
+        config) handle_config "$name" "$path" ;;
         plugin)
             mkt=$(printf '%s' "$tool" | jq -r '.marketplace // empty')
             plg=$(printf '%s' "$tool" | jq -r '.plugin // empty')

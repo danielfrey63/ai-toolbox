@@ -17,7 +17,7 @@
 # Idempotent: install re-links cleanly, clean removes only our own links,
 # a foreign file/dir at the target is never clobbered.
 
-$APP_VERSION = '0.10.59'
+$APP_VERSION = '0.11.66'
 $ErrorActionPreference = 'Stop'
 
 $SelfDir  = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -44,7 +44,7 @@ Commands:
 
 Options:
   --target   claude | codex | agents
-             Where to install. Required, unless the selection is hook-only.
+             Where to install. Required, unless the selection is hook/config-only.
   --scope    global | project   Default: global.
              global  — install under $HOME (~/.claude, ~/.codex, ~/.agents).
              project — install under --project PATH.
@@ -60,8 +60,8 @@ Targets:
   claude   Claude Code     — skills link into <scope>/.claude/skills/
   codex    Codex CLI       — skills link into <scope>/.codex/skills/
   agents   agentskills.io  — skills link into <scope>/.agents/skills/
-  Hooks ignore --target (they are per-repo git config). Plugins do a real
-  `claude plugin` install for --target claude, else fall back to a skill-link.
+  Hooks (per-repo git config) and config files ignore --target. Plugins do a
+  real `claude plugin` install for --target claude, else fall back to a skill-link.
 
 Catalog (tools/catalog.json):
   The single source of truth for installable tools — each entry has a name,
@@ -71,6 +71,7 @@ Catalog (tools/catalog.json):
             (per-repo — needs --scope project; --project defaults to cwd)
     plugin  `claude plugin` marketplace add + install (--target claude),
             else a skill-link
+    config  symlink a global config file into ~/.claude/ (global scope only)
   Run `tools.ps1 list` to print the current catalog.
 
 Examples:
@@ -165,18 +166,15 @@ function Get-SkillDestDir {
     }
 }
 
-function Handle-Skill([string]$name, [string]$path) {
-    $src = Join-Path $RepoRoot $path
-    $destdir = Get-SkillDestDir
-    $link = Join-Path $destdir $name
-
-    if (-not (Test-Path -LiteralPath $src -PathType Container)) {
-        [Console]::Error.WriteLine("  [!] $name  source missing: $src"); return
-    }
+# Symlink one artifact (file or directory) into a destination directory.
+# Idempotent across install/status/clean; never clobbers a non-link.
+# Shared by the skill and config handlers.
+function Link-Artifact([string]$name, [string]$src, [string]$destdir) {
+    $link = Join-Path $destdir (Split-Path -Leaf $src)
     if ($link -eq $src) {
         Write-Output "  [=] $name  source == target, skipped"; return
     }
-
+    $isDir = Test-Path -LiteralPath $src -PathType Container
     $item = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
 
     switch ($Cmd) {
@@ -186,11 +184,12 @@ function Handle-Skill([string]$name, [string]$path) {
                 Write-Output "  [=] $name  already linked"; return
             }
             if ($item -and $item.LinkType) {
-                [System.IO.Directory]::Delete($link, $false)
+                if ($isDir) { [System.IO.Directory]::Delete($link, $false) }
+                else        { [System.IO.File]::Delete($link) }
             } elseif ($item) {
                 [Console]::Error.WriteLine("  [!] $name  exists and is not a link — skipped"); return
             }
-            if ($IsWindows) {
+            if ($IsWindows -and $isDir) {
                 New-Item -ItemType Junction -Path $link -Target $src | Out-Null
             } else {
                 New-Item -ItemType SymbolicLink -Path $link -Target $src | Out-Null
@@ -208,13 +207,37 @@ function Handle-Skill([string]$name, [string]$path) {
         }
         'clean' {
             if ($item -and $item.Target -eq $src) {
-                [System.IO.Directory]::Delete($link, $false)
+                if ($isDir) { [System.IO.Directory]::Delete($link, $false) }
+                else        { [System.IO.File]::Delete($link) }
                 Write-Output "  [-] $name  removed"
             } else {
                 Write-Output "  [.] $name  nothing to remove"
             }
         }
     }
+}
+
+function Handle-Skill([string]$name, [string]$path) {
+    $src = Join-Path $RepoRoot $path
+    if (-not (Test-Path -LiteralPath $src -PathType Container)) {
+        [Console]::Error.WriteLine("  [!] $name  source missing: $src"); return
+    }
+    Link-Artifact $name $src (Get-SkillDestDir)
+}
+
+# --- config handler -----------------------------------------------------------
+# Symlinks a global config file (e.g. CLAUDE.md) into ~/.claude/. Config is
+# user-global — global scope only, and --target is ignored.
+function Handle-Config([string]$name, [string]$path) {
+    $src = Join-Path $RepoRoot $path
+    if ($Scope -ne 'global') {
+        Write-Output "  [.] $name  config is global-only — use --scope global"
+        return
+    }
+    if (-not (Test-Path -LiteralPath $src -PathType Leaf)) {
+        [Console]::Error.WriteLine("  [!] $name  source missing: $src"); return
+    }
+    Link-Artifact $name $src (Join-Path $HOME '.claude')
 }
 
 # --- hook handler -------------------------------------------------------------
@@ -361,9 +384,9 @@ if (-not $selected) {
     exit 1
 }
 
-# --target is required unless every selected tool is a hook (hooks ignore it).
+# --target is required unless every selected tool ignores it (hook, config).
 if (-not $Target) {
-    $needsTarget = $selected | Where-Object { $_.type -ne 'hook' } | Select-Object -First 1
+    $needsTarget = $selected | Where-Object { $_.type -ne 'hook' -and $_.type -ne 'config' } | Select-Object -First 1
     if ($needsTarget) {
         [Console]::Error.WriteLine("tools: --target is required (claude|codex|agents) — `"$($needsTarget.name)`" needs it")
         exit 2
@@ -372,8 +395,9 @@ if (-not $Target) {
 
 foreach ($tool in $selected) {
     switch ($tool.type) {
-        'skill' { Handle-Skill $tool.name $tool.path }
-        'hook'  { Handle-Hook $tool.name $tool.path }
+        'skill'  { Handle-Skill $tool.name $tool.path }
+        'hook'   { Handle-Hook $tool.name $tool.path }
+        'config' { Handle-Config $tool.name $tool.path }
         'plugin' { Handle-Plugin $tool.name $tool.path $tool.marketplace $tool.plugin }
         default {
             [Console]::Error.WriteLine("  [!] $($tool.name)  unknown type `"$($tool.type)`"")
