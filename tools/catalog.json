@@ -1,5 +1,5 @@
 {
-  "_comment": "AI-Toolbox tool catalog — consumed by tools/tools.{sh,ps1}. Each entry is an installable tool with a type that selects the install handler.",
+  "_comment": "AI-Toolbox tool catalog — consumed by toolbox.{sh,ps1}. Each entry is an installable tool with a type that selects the install handler.",
   "tools": [
     {
       "name": "component-audit",
