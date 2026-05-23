@@ -29,9 +29,9 @@ toolbox status --all                                # was ist wo installiert?
 
 ## Die `toolbox`-CLI
 
-`toolbox <install|status|clean|list>` installiert, prüft und entfernt Einträge
-aus dem Katalog `tools/catalog.json`. Jeder Eintrag hat einen Typ, der den
-Install-Handler bestimmt:
+`toolbox <install|status|remove|list>` installiert, prüft und entfernt
+Einträge aus dem Katalog `tools/catalog.json`. Jeder Eintrag hat einen Typ,
+der den Install-Handler bestimmt:
 
 | Typ | Was es macht |
 |---|---|
@@ -39,7 +39,7 @@ Install-Handler bestimmt:
 | `hook`   | `core.hooksPath` eines Repos auf die Toolbox-Git-Hooks zeigen |
 | `plugin` | echtes `claude plugin`-Install (Target `claude`), sonst Skill-Link |
 | `config` | globale Konfig-Datei (`CLAUDE.md`) nach `~/.claude/` verlinken |
-| `bin`    | die CLI selbst als `toolbox`-Befehl auf den `PATH` |
+| `bin`    | einen CLI-Befehl systemweit verfügbar machen — exec (Symlink in `~/.local/bin` / `&` in `$PROFILE`) oder sourced (Funktion in `~/.bashrc` / `.` in `$PROFILE`, Katalog `source: true` — z.B. für env-setzende Tools wie `cc-profil`) |
 
 Vollständige Referenz: `toolbox --help`. Alle Befehle sind idempotent — beliebig
 oft ausführbar, ohne Schaden.
@@ -69,23 +69,46 @@ wiederauffindbar sind:
 
 ```bash
 toolbox status --all     # jeden erfassten Install prüfen, tote Einträge ausräumen
-toolbox clean --all      # alles Installierte wieder entfernen
+toolbox remove --all     # alles Installierte wieder entfernen
 ```
 
 Vor jeder Aktion wird gegen die Realität verifiziert — der Index kann nicht
 gefährlich driften, und `status --all` heilt ihn.
 
+## `cc-profil` — Profile-Wechsel für Claude Code
+
+Schaltet zwischen benannten Sets von Umgebungsvariablen um — API-Key, Foundry-
+Endpoint, Modell-Defaults, Git-Identität, …. Jedes Profil ist eine `.env`-Datei
+unter `cc-profil/profiles/`; `use` exportiert die Vars in die aktuelle Shell,
+`list` zeigt die verfügbaren Profile.
+
+Einmalig installieren (legt die sourcing-Funktion in `~/.bashrc` bzw.
+PowerShell-`$PROFILE` an):
+
+```bash
+toolbox install --what cc-profil
+# danach in einer neuen Shell oder nach `source ~/.bashrc`:
+cc-profil list
+cc-profil use <name>
+```
+
+Die echten `.env`-Dateien enthalten Live-Schlüssel und sind **gitignored**;
+nur `*.env.example`-Vorlagen und `.managed-vars` sind versioniert.
+
 ## Repo-Aufbau
 
 ```
 ai-toolbox/
-├── toolbox.sh / toolbox.ps1   ← die CLI (bash + PowerShell)
-├── CLAUDE.md                  ← globale Claude-Konfiguration
-├── .agents/skills/            ← integrierte Skills (component-audit, discover, watch)
+├── toolbox.sh / toolbox.ps1     ← die CLI (bash + PowerShell)
+├── CLAUDE.md                    ← globale Claude-Konfiguration
+├── .agents/skills/              ← integrierte Skills (component-audit, discover, watch)
+├── cc-profil/                   ← Profil-Switcher (env-Vars für Claude Code)
+│   ├── cc-profil.sh / .ps1
+│   └── profiles/                ← *.env.example getrackt, echte *.env lokal
 └── tools/
-    ├── catalog.json           ← der Tool-Katalog
-    ├── bump-version.{sh,ps1}  ← Versions-Bumper
-    └── githooks/              ← pre-commit / post-commit
+    ├── catalog.json             ← der Tool-Katalog
+    ├── bump-version.{sh,ps1}    ← Versions-Bumper
+    └── githooks/                ← pre-commit / post-commit
 ```
 
 Jedes Skript gibt es in bash **und** PowerShell — Linux/macOS wie Windows.
