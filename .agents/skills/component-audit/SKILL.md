@@ -2,7 +2,7 @@
 name: component-audit
 description: Audit a codebase for component-orientation drift — finds DOM/UI-construction bypasses, hand-rolled patterns that should go through shared factories, and refactor opportunities, then routes them through the right component. Use after any UI-touching change, or when the user asks to "verify component consistency", "check for duplication", "audit the components". Works on any project — reads the project's component inventory from `.claude/component-inventory.md` (or a path passed as argument).
 metadata:
-  version: "0.0.1"
+  version: "0.1.5"
 ---
 
 # Component-Audit Skill
@@ -48,12 +48,13 @@ The factories list is the human-readable map. The bypass patterns drive the agen
    })
    ```
 
-3. **Review findings.** For each entry:
-   - **Bypass → direct factory replacement**: refactor inline.
-   - **Almost-fits**: extend the factory with a small option, then call.
-   - **Legitimate exception**: add it to the inventory's exceptions section so the next audit doesn't re-flag it.
+3. **Review findings.** Classify each entry into one of four buckets — every bucket has a code action AND an inventory action:
+   - **Bypass → direct factory replacement.** Refactor inline. Inventory unchanged.
+   - **Almost-fits → extend the factory.** Add the small option, then call. **Inventory:** update the factory's entry to mention the new option, if it changes the call surface.
+   - **Repeated hand-built pattern without factory (3+ similar sites).** Extract a new factory. **Inventory:** add the new factory to the Factories section AND add a fresh grep recipe to Bypass patterns so the next audit defends it.
+   - **Legitimate exception.** Add it to the inventory's exceptions section so the next audit doesn't re-flag it.
 
-4. **Apply refactors in the current turn.** Don't just report — fix. Migrate to factory calls, drop the dead inline code, cross-check that no other site still references the old pattern.
+4. **Apply refactors AND inventory updates in the current turn.** Don't just report — fix. Migrate to factory calls, drop the dead inline code, cross-check that no other site still references the old pattern. If a new factory was extracted or an existing one extended, the inventory edit is part of this step — not a follow-up.
 
 5. **Verify.** Run the command from the inventory's "Recommended verification command" field. If the field is missing, ask the user once and offer to add it to the inventory. Tests must stay green. If a user-facing surface changed, run the targeted spec too.
 
@@ -88,8 +89,8 @@ Known legitimate exceptions (do NOT re-report):
 
 Report format:
   - Group findings under the numbered categories above.
-  - For each finding: file:line, 5-word summary, "bypass" or "extend X" or "exception", suggested refactor target.
-  - End with a one-line verdict (e.g. "3 bypasses, 1 extension opportunity, 2 exceptions").
+  - For each finding: file:line, 5-word summary, one of "bypass" / "extend X" / "factory candidate (N similar sites)" / "exception", suggested refactor target.
+  - End with a one-line verdict (e.g. "3 bypasses, 1 extension opportunity, 1 factory candidate, 2 exceptions").
 
 Do NOT modify files. Read-only.
 ```
@@ -112,3 +113,4 @@ Don't run the audit on a bootstrapped inventory until the user has reviewed it �
 - **No new low-level primitives where a factory exists.** New file-inputs, new toolbar markup, new card-construction outside the factory all drift.
 - **Refactor in the same turn.** Don't drop a punch list and stop — apply the fixes, verify, commit. If a refactor is genuinely too large, say so and propose a separate scoped session.
 - **Feed exceptions back into the inventory.** A legitimate exception flagged twice means the inventory is incomplete, not that the user has to re-explain.
+- **Inventory is a living document.** Every new factory extracted, every factory extended, every legitimate exception accepted goes back into `.claude/component-inventory.md` in the same turn. A factory that exists in code but not in the inventory is invisible to the next audit — and the next audit will then flag *its* call sites as bypasses.
