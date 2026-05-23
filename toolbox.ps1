@@ -6,7 +6,8 @@
 #   hook   — point a repo's core.hooksPath at the toolbox hook directory
 #   plugin — claude plugin marketplace add + install (--target claude); else skill-link
 #   config — symlink a global config file (CLAUDE.md) into ~/.claude/
-#   bin    — install the CLI as a toolbox function in the PowerShell $PROFILE
+#   bin    — install a CLI as a function in the PowerShell $PROFILE — using
+#            `&` (exec) or `.` (sourced, catalog "source: true")
 #
 # Usage:
 #   toolbox.ps1 <install|status|remove> --target <claude|codex|agents>
@@ -22,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.15.115'
+$APP_VERSION = '0.16.121'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -78,7 +79,8 @@ Catalog (tools/catalog.json):
     plugin  `claude plugin` marketplace add + install (--target claude),
             else a skill-link
     config  symlink a global config file into ~/.claude/ (global scope only)
-    bin     install the CLI as a 'toolbox' function in the PowerShell $PROFILE
+    bin     install a CLI as a function in $PROFILE — `&` (exec) or `.`
+            (sourced, catalog `source: true` for env-setting tools)
   Run `toolbox.ps1 list` to print the current catalog.
 
 Registry:
@@ -259,10 +261,14 @@ function Handle-Config([string]$name, [string]$path) {
 }
 
 # --- bin handler --------------------------------------------------------------
-# Puts the CLI on PATH for PowerShell: a `function <command>` block in the
-# user's $PROFILE (pwsh has no ~/.local/bin convention). Global scope only,
-# ignores --target. The bash port installs a ~/.local/bin symlink instead.
-function Handle-Bin([string]$name, [string]$path, [string]$command) {
+# Makes a CLI available via a function in the user's $PROFILE (pwsh has no
+# ~/.local/bin convention). Two modes (catalog flag `source: true`):
+#   exec    (default): `& '<script>' @args`  — runs the script as a subprocess
+#   source            : `. '<script>' @args` — dot-sources into the current
+#                       shell (needed for env-setting tools like cc-profil)
+# Global scope only, ignores --target. The bash port uses a ~/.local/bin
+# symlink (exec) or a ~/.bashrc block (source) instead.
+function Handle-Bin([string]$name, [string]$path, [string]$command, [bool]$sourced = $false) {
     if ($Scope -ne 'global') {
         Write-Output "  [.] $name  bin is global-only — use --scope global"
         return
@@ -272,9 +278,10 @@ function Handle-Bin([string]$name, [string]$path, [string]$command) {
     if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
         [Console]::Error.WriteLine("  [!] $name  source missing: $exe"); return
     }
+    $op       = if ($sourced) { '.' } else { '&' }
     $beg      = "# >>> ai-toolbox $command >>>"
     $end      = "# <<< ai-toolbox $command <<<"
-    $block    = "$beg`nfunction $command { & '$exe' @args }`n$end"
+    $block    = "$beg`nfunction $command { $op '$exe' @args }`n$end"
     $strip    = "(?s)\r?\n*$([regex]::Escape($beg)).*?$([regex]::Escape($end))"
     $current  = [string]$(if (Test-Path -LiteralPath $PROFILE) { Get-Content -LiteralPath $PROFILE -Raw })
     $hasBlock = [regex]::IsMatch($current, [regex]::Escape($beg))
@@ -515,7 +522,7 @@ function Registry-Sweep {
             'bin' {
                 $cat = (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools |
                     Where-Object { $_.name -eq $e.tool } | Select-Object -First 1
-                Handle-Bin $e.tool $e.path $cat.command
+                Handle-Bin $e.tool $e.path $cat.command ([bool]$cat.source)
             }
             'plugin' {
                 $cat = (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools |
@@ -582,7 +589,7 @@ foreach ($tool in $selected) {
         'skill'  { Handle-Skill $tool.name $tool.path }
         'hook'   { Handle-Hook $tool.name $tool.path }
         'config' { Handle-Config $tool.name $tool.path }
-        'bin'    { Handle-Bin $tool.name $tool.path $tool.command }
+        'bin'    { Handle-Bin $tool.name $tool.path $tool.command ([bool]$tool.source) }
         'plugin' { Handle-Plugin $tool.name $tool.path $tool.marketplace $tool.plugin }
         default {
             [Console]::Error.WriteLine("  [!] $($tool.name)  unknown type `"$($tool.type)`"")

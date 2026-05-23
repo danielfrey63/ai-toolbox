@@ -7,7 +7,8 @@
 #   plugin — claude plugin marketplace add + install (--target claude);
 #            for --target codex|agents the plugin falls back to a skill-link
 #   config — symlink a global config file (CLAUDE.md) into ~/.claude/
-#   bin    — symlink the CLI itself into ~/.local/bin as the toolbox command
+#   bin    — make a CLI available system-wide (PATH symlink, or sourced shell
+#            function via catalog "source: true" — needed for env-setting tools)
 #
 # Usage:
 #   toolbox.sh <install|status|remove> --target <claude|codex|agents>
@@ -29,7 +30,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.16.125'
+APP_VERSION='0.17.132'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -87,7 +88,8 @@ Catalog (tools/catalog.json):
     plugin  `claude plugin` marketplace add + install (--target claude),
             else a skill-link
     config  symlink a global config file into ~/.claude/ (global scope only)
-    bin     symlink the CLI into ~/.local/bin as the `toolbox` command
+    bin     make a CLI available system-wide — exec (symlink in ~/.local/bin)
+            or sourced shell function in ~/.bashrc (catalog `source: true`)
   Run `toolbox.sh list` to print the current catalog.
 
 Registry:
@@ -277,11 +279,15 @@ handle_config() {
 }
 
 # --- bin handler --------------------------------------------------------------
-# Puts the CLI itself on PATH: a symlink ~/.local/bin/<command> -> the script.
-# Global scope only, ignores --target. (The PowerShell port installs a $PROFILE
-# function instead — pwsh has no ~/.local/bin convention.)
+# Makes a CLI available system-wide. Two modes (catalog flag `source: true`):
+#   exec   (default): a symlink in ~/.local/bin (the script is run as a
+#                     subprocess); pwsh uses a $PROFILE function with `&`.
+#   source           : a sourcing function in ~/.bashrc (the script is sourced
+#                     into the current shell — needed for env-setting tools
+#                     like cc-profil); pwsh uses `.` (dot-source) in $PROFILE.
+# Global scope only, ignores --target.
 handle_bin() {
-    local name=$1 path=$2 cmdname=$3
+    local name=$1 path=$2 cmdname=$3 sourced=${4:-}
     local src="$REPO_ROOT/$path"
     if [ "$SCOPE" != global ]; then
         printf '  [.] %-18s bin is global-only — use --scope global\n' "$name"
@@ -291,9 +297,18 @@ handle_bin() {
         printf '  [!] %-18s source missing: %s\n' "$name" "$src" >&2
         return
     fi
+    if [ -n "$sourced" ]; then
+        handle_bin_source "$name" "$src" "$cmdname"
+    else
+        handle_bin_exec "$name" "$src" "$cmdname"
+    fi
+}
+
+# Exec mode: symlink the script into ~/.local/bin as <cmdname>.
+handle_bin_exec() {
+    local name=$1 src=$2 cmdname=$3
     local bindir="$HOME/.local/bin"
     link_artifact "$name" "$src" "$bindir" "$cmdname"
-    # A symlink in a directory that is not on PATH does nothing — say so.
     if [ "$CMD" = install ]; then
         case ":${PATH}:" in
             *":$bindir:"*) ;;
@@ -301,6 +316,60 @@ handle_bin() {
                 "$name" "$bindir" "$cmdname" ;;
         esac
     fi
+}
+
+# Source mode: a sourcing function `<cmdname>() { source '<src>' "$@"; }` in
+# ~/.bashrc, inside a marker-bracketed block. Idempotent install/status/remove.
+handle_bin_source() {
+    local name=$1 src=$2 cmdname=$3
+    local rc="$HOME/.bashrc"
+    local beg="# >>> ai-toolbox $cmdname >>>"
+    local end="# <<< ai-toolbox $cmdname <<<"
+    local has=0
+    [ -f "$rc" ] && grep -qF "$beg" "$rc" && has=1
+    case "$CMD" in
+        install)
+            local tmp
+            tmp=$(mktemp)
+            [ -f "$rc" ] && awk -v b="$beg" -v e="$end" '
+                index($0,b){s=1;next}
+                s&&index($0,e){s=0;next}
+                !s{print}
+            ' "$rc" > "$tmp"
+            [ -s "$tmp" ] && printf '\n' >> "$tmp"
+            printf '%s\n%s() { source %s "$@"; }\n%s\n' \
+                "$beg" "$cmdname" "'$src'" "$end" >> "$tmp"
+            mv "$tmp" "$rc"
+            if [ "$has" = 1 ]; then
+                printf '  [=] %-18s %s already in ~/.bashrc\n' "$name" "$cmdname"
+            else
+                printf '  [+] %-18s %s -> ~/.bashrc (open a new shell or `source ~/.bashrc`)\n' "$name" "$cmdname"
+            fi
+            ;;
+        status)
+            if [ "$has" = 1 ]; then
+                printf '  [ok] %-18s %s in ~/.bashrc\n' "$name" "$cmdname"
+                STATE=ok
+            else
+                printf '  [  ] %-18s not installed\n' "$name"
+            fi
+            ;;
+        remove)
+            if [ "$has" = 1 ]; then
+                local tmp
+                tmp=$(mktemp)
+                awk -v b="$beg" -v e="$end" '
+                    index($0,b){s=1;next}
+                    s&&index($0,e){s=0;next}
+                    !s{print}
+                ' "$rc" > "$tmp"
+                mv "$tmp" "$rc"
+                printf '  [-] %-18s %s removed from ~/.bashrc\n' "$name" "$cmdname"
+            else
+                printf '  [.] %-18s nothing to remove\n' "$name"
+            fi
+            ;;
+    esac
 }
 
 # --- hook handler -------------------------------------------------------------
@@ -479,7 +548,7 @@ registry_remove() {  # name scope target project
 # entries. remove: uninstall each, then empty the registry. Entries carry
 # only install parameters — the handlers re-verify against reality.
 registry_sweep() {
-    local entries n i e tool type path mkt plg cmdname kept='[]'
+    local entries n i e tool type path mkt plg cmdname bin_src kept='[]'
     entries=$(registry_read)
     n=$(printf '%s' "$entries" | jq 'length' 2>/dev/null || printf 0)
     if [ "$n" = 0 ]; then
@@ -506,7 +575,9 @@ registry_sweep() {
             bin)
                 cmdname=$(jq -r --arg n "$tool" \
                     '.tools[] | select(.name==$n) | .command // empty' "$CATALOG")
-                handle_bin "$tool" "$path" "$cmdname" ;;
+                bin_src=$(jq -r --arg n "$tool" \
+                    '.tools[] | select(.name==$n) | if .source then "1" else "" end' "$CATALOG")
+                handle_bin "$tool" "$path" "$cmdname" "$bin_src" ;;
             plugin)
                 mkt=$(jq -r --arg n "$tool" \
                     '.tools[] | select(.name==$n) | .marketplace // empty' "$CATALOG")
@@ -586,7 +657,8 @@ printf '%s\n' "$selected" | while IFS= read -r tool; do
         config) handle_config "$name" "$path" ;;
         bin)
             cmdname=$(printf '%s' "$tool" | jq -r '.command // empty')
-            handle_bin "$name" "$path" "$cmdname"
+            bin_src=$(printf '%s' "$tool" | jq -r 'if .source then "1" else "" end')
+            handle_bin "$name" "$path" "$cmdname" "$bin_src"
             ;;
         plugin)
             mkt=$(printf '%s' "$tool" | jq -r '.marketplace // empty')

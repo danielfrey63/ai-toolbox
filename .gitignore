@@ -3,3 +3,8 @@ artefacts
 .claude/settings.local.json
 .codex/hook-log.txt
 .agents/skills/watch/HANDOFF.md
+
+# cc-profil — real profile .env files hold live API/foundry/SSH keys; only
+# the *.example templates and .managed-vars are committed.
+cc-profil/profiles/*.env
+!cc-profil/profiles/*.env.example

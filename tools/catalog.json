@@ -39,6 +39,14 @@
       "path": "toolbox.sh",
       "command": "toolbox",
       "description": "The toolbox CLI itself, as a system-wide 'toolbox' command."
+    },
+    {
+      "name": "cc-profil",
+      "type": "bin",
+      "source": true,
+      "path": "cc-profil/cc-profil.sh",
+      "command": "cc-profil",
+      "description": "Switch Claude Code env-var profiles (API key / endpoint / model)."
     }
   ]
 }
