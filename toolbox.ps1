@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.16.121'
+$APP_VERSION = '0.16.122'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -471,8 +471,11 @@ function Registry-Write([object[]]$entries) {
     } else {
         # Pipe the array so it unrolls — one JSON entry per element. Passing it
         # via -InputObject would serialise the whole array as a single object.
-        Set-Content -LiteralPath $Registry `
-            -Value (@($entries) | ConvertTo-Json -Depth 5 -AsArray)
+        # -AsArray is PS 7+; in PS 5.1 a single element unwraps to a bare object,
+        # so we wrap it back into a JSON array manually.
+        $json = @($entries) | ConvertTo-Json -Depth 5
+        if (-not $json.TrimStart().StartsWith('[')) { $json = "[$json]" }
+        Set-Content -LiteralPath $Registry -Value $json
     }
 }
 
