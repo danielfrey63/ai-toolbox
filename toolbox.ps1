@@ -23,85 +23,139 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.16.124'
+$APP_VERSION = '0.17.129'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $Catalog  = Join-Path $RepoRoot 'tools/catalog.json'
 
-function Show-Usage {
-    Write-Output @'
-toolbox — install AI-Toolbox tools into a Claude Code / Codex / agents setup.
-
-Tools are described in the catalog (tools/catalog.json) and installed by
-type-specific handlers. Run `toolbox.ps1 list` to see what is available.
+# --- help ---------------------------------------------------------------------
+# General overview + per-switch detail. Every screen ends with the same
+# switches one-liner so a user can pivot. Dispatched via `Show-Help <topic>`.
+function Show-Help([string]$topic = '') {
+    switch ($topic) {
+        { $_ -in '', '--help', '-h' } {
+            Write-Output @'
+toolbox — install AI-Toolbox tools (Claude Code / Codex / agentskills).
 
 Usage:
-  toolbox.ps1 <install|status|remove> --target <claude|codex|agents> [options]
-  toolbox.ps1 list
-  toolbox.ps1 -h|--help
+  toolbox <install|status|remove|list> [options]
+  toolbox --help [<switch>]
 
 Commands:
-  install  Install the selected tools (idempotent — safe to re-run).
-  status   Report install state — with no arguments, sweeps the registry.
-  remove   Remove the selected tools (only ever removes our own links/config).
-  list     Print the catalog — every installable tool with its type.
+  install   Install selected tools (idempotent — safe to re-run).
+  status    Report install state; with no args, sweeps the registry.
+  remove    Remove selected tools (only ever our own links/config).
+  list      Print the catalog (name, type, description).
 
-Options:
-  --target   claude | codex | agents
-             Where to install. Required, unless the selection is hook/config/bin-only.
-  --scope    global | project   Default: global.
-             global  — install under $HOME (~/.claude, ~/.codex, ~/.agents).
-             project — install under --project PATH.
-  --project  PATH    Project root for --scope project. Default: current directory.
-  --what     all | <tool-name> | <type>   Default: all.
-             Select catalog entries by exact name, by type, or all of them.
-  --tagstyle plain | namespaced   Hook installs only.
-             plain      — tag v<version>         (single-artifact repo)
-             namespaced — tag <name>/v<version>  (default; multi-artifact repo)
-  --all      status / remove only: act on every recorded install (the registry),
-             ignoring --what. status --all also prunes stale entries.
-  -h|--help  Show this help.
-
-Targets:
-  claude   Claude Code     — skills link into <scope>/.claude/skills/
-  codex    Codex CLI       — skills link into <scope>/.codex/skills/
-  agents   agentskills.io  — skills link into <scope>/.agents/skills/
-  Hooks, config files and the bin install ignore --target. Plugins do a real
-  `claude plugin` install for --target claude, else fall back to a skill-link.
-
-Catalog (tools/catalog.json):
-  The single source of truth for installable tools — each entry has a name,
-  a type and a path. Types and their install handlers:
-    skill   junction/symlink into a .{claude,codex,agents}/skills/ directory
-    hook    point a repo's core.hooksPath at the toolbox git hooks
-            (per-repo — needs --scope project; --project defaults to cwd)
-    plugin  `claude plugin` marketplace add + install (--target claude),
-            else a skill-link
-    config  symlink a global config file into ~/.claude/ (global scope only)
-    bin     install a CLI as a function in $PROFILE — `&` (exec) or `.`
-            (sourced, catalog `source: true` for env-setting tools)
-  Run `toolbox.ps1 list` to print the current catalog.
-
-Registry:
-  Every install is recorded in
-  ${XDG_CONFIG_HOME:-~/.config}/ai-toolbox/installs.json (per machine). It is
-  only a discovery index — `status --all` and every `install` re-verify each
-  entry against reality and prune stale ones.
+For switch detail:  toolbox --help <switch>      e.g.  toolbox --help --target
 
 Examples:
-  toolbox.ps1 list
-  toolbox.ps1 install --target claude   # all tools, global
-  toolbox.ps1 install --target codex --what component-audit
-  toolbox.ps1 install --what versioning-hooks --scope project   # --project = cwd
-  toolbox.ps1 status --target claude
-  toolbox.ps1 status --all              # every recorded install; prune stale
-  toolbox.ps1 remove --all               # uninstall everything recorded
-  toolbox.ps1 remove --target claude --what watch
-
-Idempotent: install re-links cleanly, remove deletes only our own links/config,
-a foreign file or directory at a target is never clobbered.
+  toolbox list
+  toolbox install --what cli
+  toolbox install --what versioning-hooks --scope project
+  toolbox status --all
 '@
+        }
+        { $_ -in '--target', 'target' } {
+            Write-Output @'
+--target <claude|codex|agents>
+  Where to install. Required, unless the selection is hook/config/bin-only.
+
+  claude   Claude Code      skills link into <scope>/.claude/skills/
+  codex    Codex CLI        skills link into <scope>/.codex/skills/
+  agents   agentskills.io   skills link into <scope>/.agents/skills/
+
+  Hooks (per-repo git config) and config/bin entries ignore --target.
+  Plugins do a real `claude plugin` install for --target claude; for other
+  targets they fall back to a skill-link.
+
+  Example:
+    toolbox install --what component-audit --target claude
+'@
+        }
+        { $_ -in '--scope', 'scope' } {
+            Write-Output @'
+--scope <global|project>          Default: global.
+  Where the install lives.
+
+  global   Under $HOME  (~/.claude, ~/.codex, ~/.agents, ~/.local/bin, …).
+  project  Under --project PATH  — for per-repo installs like the
+           versioning git-hooks or project-scoped skills.
+
+  Example:
+    toolbox install --what versioning-hooks --scope project
+'@
+        }
+        { $_ -in '--project', 'project' } {
+            Write-Output @'
+--project PATH                    Default: current directory.
+  Project root for --scope project. Pass an absolute path to point the
+  installer at a specific repo from anywhere.
+
+  Examples:
+    cd ~/Develop/myrepo; toolbox install --what versioning-hooks --scope project
+    toolbox install --what versioning-hooks --scope project --project ~/Develop/myrepo
+'@
+        }
+        { $_ -in '--what', 'what' } {
+            Write-Output @'
+--what <all|<tool-name>|<type>>   Default: all.
+  Select catalog entries by exact name, by type, or `all`.
+
+  Names are listed by `toolbox list`. Types are:
+    skill   Skill directory, linked into a CLI's skills/.
+    hook    Git hooks installed via core.hooksPath into a repo.
+    plugin  Real `claude plugin` install (target=claude) or skill-link.
+    config  Global config file (e.g. CLAUDE.md) into ~/.claude/.
+    bin     Make a CLI available system-wide (exec or sourced shell function).
+
+  Examples:
+    toolbox install --what cli                     # by name (a bin entry)
+    toolbox install --what skill --target claude   # by type
+    toolbox install --target claude                # default --what all
+'@
+        }
+        { $_ -in '--tagstyle', 'tagstyle' } {
+            Write-Output @'
+--tagstyle <plain|namespaced>     Hook installs only.
+  Sets the repo's `bumpversion.tagstyle` git config — determines how the
+  versioning post-commit hook tags releases.
+
+  plain        Tags `v<version>`           single-artifact repo (one app).
+  namespaced   Tags `<name>/v<version>`    default if unset; for repos with
+                                           multiple versioned artifacts.
+
+  Example:
+    toolbox install --what versioning-hooks --scope project --tagstyle plain
+'@
+        }
+        { $_ -in '--all', 'all' } {
+            Write-Output @'
+--all                             status / remove only.
+  Act on every recorded install (the registry), ignoring --what.
+  Bare `toolbox status` is equivalent to `status --all`.
+
+  Registry: ${XDG_CONFIG_HOME:-~/.config}/ai-toolbox/installs.json (per
+  machine) — the discovery index for project-scoped installs (hooks in
+  arbitrary repos) that cannot otherwise be enumerated.
+
+  `status --all` re-verifies every entry and prunes stale ones; `install`
+  runs the same reconcile after each install.
+
+  Examples:
+    toolbox status --all
+    toolbox remove --all     # uninstall everything recorded
+'@
+        }
+        default {
+            [Console]::Error.WriteLine("toolbox: unknown help topic: $topic")
+            [Console]::Error.WriteLine('available: --target, --scope, --project, --what, --tagstyle, --all')
+            exit 2
+        }
+    }
+    Write-Output ''
+    Write-Output 'Switches: --target  --scope  --project  --what  --tagstyle  --all  -h|--help'
 }
 
 # Print the catalog as a readable table — answers "what can I install?".
@@ -118,7 +172,7 @@ function Show-CatalogList {
 
 # --- command ------------------------------------------------------------------
 $Cmd = if ($args.Count -ge 1) { [string]$args[0] } else { '' }
-if ($Cmd -in @('-h', '--help')) { Show-Usage; exit 0 }
+if ($Cmd -in @('-h', '--help')) { Show-Help ([string]$args[1]); exit 0 }
 if ($Cmd -notin @('install', 'status', 'remove', 'list')) {
     [Console]::Error.WriteLine("toolbox: missing or unknown command (install|status|remove|list)")
     exit 2
@@ -146,7 +200,7 @@ while ($i -lt $args.Count) {
             $i += 2
         }
         '--all' { $All = $true; $i += 1 }
-        { $_ -in '-h', '--help' } { Show-Usage; exit 0 }
+        { $_ -in '-h', '--help' } { Show-Help ([string]$args[$i + 1]); exit 0 }
         default { [Console]::Error.WriteLine("toolbox: unknown option: $opt"); exit 2 }
     }
 }
