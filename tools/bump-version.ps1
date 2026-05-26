@@ -1,4 +1,4 @@
-# bump-version.ps1 — generic per-artifact version bumper for the AI-Toolbox.
+﻿# bump-version.ps1 — generic per-artifact version bumper for the AI-Toolbox.
 #
 # PowerShell port of tools/bump-version.sh for Codex / Windows. See that file
 # for the full description of artifact types and version-storage rules.

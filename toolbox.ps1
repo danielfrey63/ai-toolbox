@@ -1,4 +1,4 @@
-# toolbox.ps1 — install AI-Toolbox tools from the catalog.
+﻿# toolbox.ps1 — install AI-Toolbox tools from the catalog.
 #
 # PowerShell port of toolbox.sh for Codex / Windows. See that file for
 # the full description. Reads tools/catalog.json and dispatches per tool TYPE:
