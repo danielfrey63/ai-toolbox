@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.17.129'
+$APP_VERSION = '0.18.132'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -535,9 +535,21 @@ function Registry-Write([object[]]$entries) {
     }
 }
 
+# Normalize scope/target/project for the registry key, per tool type. Handlers
+# that ignore --target/--scope must not leak those into the key, or one install
+# can be recorded as multiple entries that differ only by an ignored field.
+function _Registry-Normalize([string]$type, [ref]$scope, [ref]$target, [ref]$project) {
+    switch ($type) {
+        'hook'   { $target.Value = '' }
+        'config' { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
+        'bin'    { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
+    }
+}
+
 # Upsert an entry, keyed by tool + scope + target + project.
 function Registry-Add([string]$tool, [string]$type, [string]$path,
                       [string]$scope, [string]$target, [string]$project) {
+    _Registry-Normalize $type ([ref]$scope) ([ref]$target) ([ref]$project)
     $kept = @(Registry-Read | Where-Object {
         -not ($_.tool -eq $tool -and $_.scope -eq $scope -and
               $_.target -eq $target -and $_.project -eq $project)
@@ -550,8 +562,9 @@ function Registry-Add([string]$tool, [string]$type, [string]$path,
 }
 
 # Drop the entry with this key — used by a non---all remove.
-function Registry-Remove([string]$tool, [string]$scope, [string]$target, [string]$project) {
+function Registry-Remove([string]$tool, [string]$type, [string]$scope, [string]$target, [string]$project) {
     if (-not (Test-Path -LiteralPath $Registry)) { return }
+    _Registry-Normalize $type ([ref]$scope) ([ref]$target) ([ref]$project)
     Registry-Write @(Registry-Read | Where-Object {
         -not ($_.tool -eq $tool -and $_.scope -eq $scope -and
               $_.target -eq $target -and $_.project -eq $project)
@@ -658,7 +671,7 @@ foreach ($tool in $selected) {
         if ($Cmd -eq 'install') {
             Registry-Add $tool.name $tool.type $tool.path $Scope $Target $Project
         } elseif ($Cmd -eq 'remove') {
-            Registry-Remove $tool.name $Scope $Target $Project
+            Registry-Remove $tool.name $tool.type $Scope $Target $Project
         }
     }
 }

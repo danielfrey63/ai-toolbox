@@ -30,7 +30,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.18.137'
+APP_VERSION='0.19.141'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -599,12 +599,23 @@ registry_read() {
     [ -f "$REGISTRY" ] && cat "$REGISTRY" 2>/dev/null || printf '[]'
 }
 
+# Normalize scope/target/project for the registry key, per tool type — handlers
+# that ignore --target/--scope must not leak those into the key, or one install
+# can be recorded as multiple entries that differ only by an ignored field.
+# Inlined into add/remove because returning three strings via stdout + read
+# would collapse empty fields under whitespace IFS.
+
 # Upsert an entry, keyed by tool + scope + target + project.
 registry_add() {  # name type path scope target project
+    local scope=$4 target=$5 project=$6
+    case "$2" in
+        hook)        target='' ;;
+        config|bin)  scope=global; target=''; project='' ;;
+    esac
     local data
     data=$(registry_read | jq \
         --arg tool "$1" --arg type "$2" --arg path "$3" \
-        --arg scope "$4" --arg target "$5" --arg project "$6" '
+        --arg scope "$scope" --arg target "$target" --arg project "$project" '
         map(select((.tool==$tool and .scope==$scope
                     and .target==$target and .project==$project) | not))
         + [{tool:$tool, type:$type, path:$path,
@@ -615,11 +626,16 @@ registry_add() {  # name type path scope target project
 }
 
 # Drop the entry with this key — used by a non---all remove.
-registry_remove() {  # name scope target project
+registry_remove() {  # name type scope target project
     [ -f "$REGISTRY" ] || return 0
+    local scope=$3 target=$4 project=$5
+    case "$2" in
+        hook)        target='' ;;
+        config|bin)  scope=global; target=''; project='' ;;
+    esac
     local data
     data=$(registry_read | jq \
-        --arg tool "$1" --arg scope "$2" --arg target "$3" --arg project "$4" '
+        --arg tool "$1" --arg scope "$scope" --arg target "$target" --arg project "$project" '
         map(select((.tool==$tool and .scope==$scope
                     and .target==$target and .project==$project) | not))
     ' 2>/dev/null) || return 0
@@ -754,7 +770,7 @@ printf '%s\n' "$selected" | while IFS= read -r tool; do
     esac
     case "$CMD" in
         install) registry_add "$name" "$type" "$path" "$SCOPE" "$TARGET" "$PROJECT" ;;
-        remove)  registry_remove "$name" "$SCOPE" "$TARGET" "$PROJECT" ;;
+        remove)  registry_remove "$name" "$type" "$SCOPE" "$TARGET" "$PROJECT" ;;
     esac
 done
 
