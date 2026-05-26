@@ -30,7 +30,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.17.132'
+APP_VERSION='0.17.133'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -115,7 +115,8 @@ EOF
 
 # Print the catalog as a readable table — answers "what can I install?".
 print_catalog_list() {
-    printf 'toolbox — available tools (%s):\n\n' "$CATALOG"
+    printf 'toolbox — available tools (%s)\n' "$CATALOG"
+    printf 'Usage: toolbox <install|status|remove|list> [--target claude|codex|agents] [--scope global|project] [--project PATH] [--what all|<name>|<type>] [--tagstyle plain|namespaced] [--all] [-h|--help]\n\n'
     printf '  %-20s %-7s %s\n' NAME TYPE DESCRIPTION
     jq -r '.tools[] | [.name, .type, .description] | @tsv' "$CATALOG" \
         | while IFS=$(printf '\t') read -r n t d; do

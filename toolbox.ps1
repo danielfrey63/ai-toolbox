@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.16.122'
+$APP_VERSION = '0.16.124'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -106,7 +106,9 @@ a foreign file or directory at a target is never clobbered.
 
 # Print the catalog as a readable table — answers "what can I install?".
 function Show-CatalogList {
-    Write-Output "toolbox — available tools ($Catalog):`n"
+    Write-Output "toolbox — available tools ($Catalog)"
+    Write-Output 'Usage: toolbox <install|status|remove|list> [--target claude|codex|agents] [--scope global|project] [--project PATH] [--what all|<name>|<type>] [--tagstyle plain|namespaced] [--all] [-h|--help]'
+    Write-Output ''
     Write-Output ('  {0,-20} {1,-7} {2}' -f 'NAME', 'TYPE', 'DESCRIPTION')
     foreach ($t in (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools) {
         Write-Output ('  {0,-20} {1,-7} {2}' -f $t.name, $t.type, $t.description)
