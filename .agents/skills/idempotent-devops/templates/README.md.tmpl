@@ -1,0 +1,50 @@
+# {{MODULE}}
+
+Idempotent setup for **{{MODULE}}** — built on the `idempotent.sh` lib pattern (check → mutate-if-needed → re-verify).
+
+## Use
+
+```bash
+bash setup-{{MODULE}}.sh help        # show usage
+bash setup-{{MODULE}}.sh verify      # check current state, change nothing
+bash setup-{{MODULE}}.sh install     # bring desired state into existence (safe to re-run)
+bash setup-{{MODULE}}.sh cleanup     # reverse install (keeps persistent data)
+bash setup-{{MODULE}}.sh purge       # cleanup + remove persistent data (confirms)
+```
+
+## Remote execution
+
+The script runs locally by default. To target a remote host:
+
+```bash
+SSH_TARGET=admin@host SSH_PORT=2222 SSH_IDENTITY=~/.ssh/admin_key \
+    bash setup-{{MODULE}}.sh install
+```
+
+`run_cmd` inside the script transparently switches between local `bash -c` and `ssh ...` based on `SSH_TARGET`.
+
+## Idempotence test
+
+```bash
+bash setup-{{MODULE}}.sh verify
+bash setup-{{MODULE}}.sh install
+bash setup-{{MODULE}}.sh install     # second run -- no [CHANGING] lines
+bash setup-{{MODULE}}.sh cleanup
+bash setup-{{MODULE}}.sh cleanup     # second run -- no [CHANGING] lines
+bash setup-{{MODULE}}.sh install
+```
+
+Pass condition: every step exits 0, and the second `install` / second `cleanup` only print `[CHECKING] ... already correct` / `already absent` — never `[CHANGING]`.
+
+## Configuration
+
+Declarative parameters live in `config.json`; secrets do not. For local secrets use a `.secrets/` directory (gitignored); for shared infra use a secret manager.
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `setup-{{MODULE}}.sh` | The setup script. Sub-commands: help/verify/install/cleanup/purge. |
+| `idempotent.sh` | The library — single-file, copy-paste-safe. Source it from the setup script. |
+| `config.json` | Declarative parameters. Optional. |
+| `README.md` | This file. |

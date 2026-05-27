@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# =============================================================================
+# setup-{{MODULE}}.sh -- idempotent setup for {{MODULE}}
+#
+# Sub-commands:
+#   help      show usage
+#   verify    check current state, change nothing
+#   install   bring desired state into existence (idempotent)
+#   cleanup   reverse install, keep persistent artifacts (if any)
+#   purge     cleanup + remove persistent artifacts (destructive, confirm)
+#
+# Usage:
+#   bash setup-{{MODULE}}.sh install
+#   bash setup-{{MODULE}}.sh verify
+#   SSH_TARGET=admin@host SSH_PORT=2222 bash setup-{{MODULE}}.sh install
+# =============================================================================
+
+APP_VERSION='0.1.0'
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source the idempotent lib. Adjust the path if you moved the lib elsewhere
+# (e.g. ../lib/idempotent.sh for multi-module projects).
+# shellcheck source=idempotent.sh
+source "${SCRIPT_DIR}/idempotent.sh"
+
+MODULE="{{MODULE}}"
+ACTION=$(parse_action "${1:-help}")
+
+# --- Module config -----------------------------------------------------------
+# Edit these to fit your target state. For declarative parameters, load them
+# from a config.json next to this script (jq required):
+#
+#   CFG="${SCRIPT_DIR}/config.json"
+#   APP_DIR=$(jq -r '.app_dir // "/opt/{{MODULE}}"' "$CFG")
+#   APP_USER=$(jq -r '.app_user // "{{MODULE}}"' "$CFG")
+APP_DIR="/opt/{{MODULE}}"
+APP_USER="{{MODULE}}"
+
+# --- Sub-commands ------------------------------------------------------------
+
+cmd_help() {
+    cat <<EOF
+${MODULE} setup -- idempotent.
+
+Usage: bash $(basename "$0") <action>
+
+Actions:
+  help      this message
+  verify    check current state, change nothing
+  install   bring desired state into existence (safe to re-run)
+  cleanup   reverse install, keep user data
+  purge     cleanup + remove user data (confirms, set FORCE=1 to skip)
+
+Environment:
+  SSH_TARGET=user@host   run against a remote host instead of locally
+  SSH_PORT=2222          non-default SSH port
+  SSH_IDENTITY=~/.ssh/k  SSH private key
+  FORCE=1                skip confirmation for destructive actions
+  LOG_FILE=/path/file    override the default log location
+EOF
+}
+
+cmd_verify() {
+    show_header "${MODULE} verify"
+    local ok=0
+    desired_state "user '${APP_USER}' exists" \
+        "run_cmd 'id ${APP_USER} >/dev/null 2>&1'" \
+        "false"  || ok=1
+    desired_state "directory ${APP_DIR} exists" \
+        "run_cmd 'test -d ${APP_DIR}'" \
+        "false"  || ok=1
+    if [[ $ok -eq 0 ]]; then
+        ok "verify: all desired states present"
+    else
+        warn "verify: drift detected -- run 'install' to reconcile"
+    fi
+    return $ok
+}
+
+cmd_install() {
+    show_header "${MODULE} install"
+
+    # EXAMPLE 1: ensure a system user exists. The check is side-effect-free;
+    # the mutation runs only on divergence.
+    desired_state "user '${APP_USER}' exists" \
+        "run_cmd 'id ${APP_USER} >/dev/null 2>&1'" \
+        "run_cmd 'useradd --system --shell /usr/sbin/nologin --home ${APP_DIR} ${APP_USER}'"
+
+    # EXAMPLE 2: ensure a directory exists with the right ownership. Note the
+    # composite check -- one desired_state per logical fact.
+    desired_state "directory ${APP_DIR} exists" \
+        "run_cmd 'test -d ${APP_DIR}'" \
+        "run_cmd 'install -d -o ${APP_USER} -g ${APP_USER} -m 0755 ${APP_DIR}'"
+
+    # Add your own desired_state calls here. Each should be:
+    #   - a one-sentence description of the desired state
+    #   - a check that exits 0 iff that state holds (no side effects)
+    #   - a mutation that brings it into existence
+
+    ok "${MODULE} install: complete"
+}
+
+cmd_cleanup() {
+    show_header "${MODULE} cleanup"
+
+    # Inverse of install -- desired_absent for each artifact. Order matters:
+    # remove things that depend on others first.
+    desired_absent "directory ${APP_DIR} absent" \
+        "run_cmd '! test -d ${APP_DIR}'" \
+        "run_cmd 'rm -rf ${APP_DIR}'"
+
+    # User is kept by default -- cleanup is non-destructive. The user lives
+    # on so any data owned by them survives a reinstall. Remove via 'purge'.
+    info "user '${APP_USER}' kept (use 'purge' to remove)"
+
+    ok "${MODULE} cleanup: complete"
+}
+
+cmd_purge() {
+    confirm_destructive \
+        "This removes user '${APP_USER}' and all their files. Irreversible."
+    cmd_cleanup
+
+    desired_absent "user '${APP_USER}' absent" \
+        "run_cmd '! id ${APP_USER} >/dev/null 2>&1'" \
+        "run_cmd 'userdel -r ${APP_USER} 2>/dev/null || true'"
+
+    ok "${MODULE} purge: complete"
+}
+
+# --- Dispatch ----------------------------------------------------------------
+
+case "$ACTION" in
+    help)    cmd_help ;;
+    verify)  cmd_verify ;;
+    install) cmd_install ;;
+    cleanup) cmd_cleanup ;;
+    purge)   cmd_purge ;;
+    *)       cmd_help; exit 1 ;;
+esac

@@ -1,0 +1,8 @@
+{
+  "_comment": "Declarative parameters for setup-{{MODULE}}.sh. Read via jq, e.g. `APP_DIR=$(jq -r '.app_dir' config.json)`. Keep this file in version control; secrets go elsewhere (.secrets/, env vars, vault).",
+  "app_dir": "/opt/{{MODULE}}",
+  "app_user": "{{MODULE}}",
+  "app_group": "{{MODULE}}",
+  "ports": [],
+  "required_packages": []
+}

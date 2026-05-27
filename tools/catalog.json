@@ -22,6 +22,12 @@
       "plugin": "watch"
     },
     {
+      "name": "idempotent-devops",
+      "type": "skill",
+      "path": ".agents/skills/idempotent-devops",
+      "description": "Scaffold + audit idempotent DevOps scripts. Ships idempotent.sh (desired_state / desired_absent / parse_action / run_cmd / confirm_destructive) plus templates and a verify-install-cleanup loop runner."
+    },
+    {
       "name": "versioning-hooks",
       "type": "hook",
       "path": "tools/githooks",
