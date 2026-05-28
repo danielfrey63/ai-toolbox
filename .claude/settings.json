@@ -21,6 +21,16 @@
             "statusMessage": "APP_VERSION bump..."
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/tools/bump-from-bash.sh\"",
+            "statusMessage": "APP_VERSION bump (bash)..."
+          }
+        ]
       }
     ]
   }
