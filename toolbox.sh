@@ -30,7 +30,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.22.148'
+APP_VERSION='0.23.150'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -755,9 +755,30 @@ printf 'toolbox %s — scope=%s target=%s what=%s\n' "$CMD" "$SCOPE" "$TARGET" "
 selected=$(jq -c --arg what "$WHAT" \
     '.tools[] | select($what == "all" or .name == $what or .type == $what)' "$CATALOG")
 if [ -z "$selected" ]; then
-    printf 'toolbox: nothing in the catalog matches --what %s\n\n' "$WHAT" >&2
-    print_catalog_list >&2
-    exit 1
+    # Prefix-match fallback: if --what is an unambiguous prefix of exactly one
+    # name or type (or "all"), resolve to that. Ambiguity is reported back so
+    # the user can re-issue the command with a longer prefix. Exact matches
+    # always win above and never reach this branch.
+    candidates=$(jq -r --arg what "$WHAT" '
+        ([.tools[] | .name, .type] + ["all"])
+        | unique
+        | .[] | select(startswith($what))
+    ' "$CATALOG")
+    count=$(printf '%s' "$candidates" | grep -c .)
+    if [ "$count" = 0 ]; then
+        printf 'toolbox: nothing in the catalog matches --what %s\n\n' "$WHAT" >&2
+        print_catalog_list >&2
+        exit 1
+    fi
+    if [ "$count" -gt 1 ]; then
+        printf 'toolbox: --what %s is ambiguous — candidates:\n' "$WHAT" >&2
+        printf '  %s\n' $candidates >&2
+        exit 2
+    fi
+    printf '  [i] --what %s -> %s\n' "$WHAT" "$candidates"
+    WHAT=$candidates
+    selected=$(jq -c --arg what "$WHAT" \
+        '.tools[] | select($what == "all" or .name == $what or .type == $what)' "$CATALOG")
 fi
 
 # --target is required unless every selected tool ignores it (hook, config, bin).

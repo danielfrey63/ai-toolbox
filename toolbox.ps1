@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.22.141'
+$APP_VERSION = '0.23.143'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -686,9 +686,27 @@ $selected = $tools | Where-Object {
     $What -eq 'all' -or $_.name -eq $What -or $_.type -eq $What
 }
 if (-not $selected) {
-    [Console]::Error.WriteLine("toolbox: nothing in the catalog matches --what $What")
-    Show-CatalogList
-    exit 1
+    # Prefix-match fallback: if --what is an unambiguous prefix of exactly one
+    # name or type (or "all"), resolve to that. Ambiguity is reported back so
+    # the user can re-issue the command with a longer prefix. Exact matches
+    # always win above and never reach this branch.
+    $pool = @($tools.name + $tools.type + 'all' | Sort-Object -Unique)
+    $candidates = @($pool | Where-Object { $_.StartsWith($What) })
+    if ($candidates.Count -eq 0) {
+        [Console]::Error.WriteLine("toolbox: nothing in the catalog matches --what $What")
+        Show-CatalogList
+        exit 1
+    }
+    if ($candidates.Count -gt 1) {
+        [Console]::Error.WriteLine("toolbox: --what $What is ambiguous — candidates:")
+        foreach ($c in $candidates) { [Console]::Error.WriteLine("  $c") }
+        exit 2
+    }
+    Write-Output "  [i] --what $What -> $($candidates[0])"
+    $What = $candidates[0]
+    $selected = $tools | Where-Object {
+        $What -eq 'all' -or $_.name -eq $What -or $_.type -eq $What
+    }
 }
 
 # --target is required unless every selected tool ignores it (hook, config, bin).
