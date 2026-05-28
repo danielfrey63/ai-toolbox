@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.20.136'
+$APP_VERSION = '0.21.139'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -425,6 +425,16 @@ function Handle-Hook([string]$name, [string]$path) {
             } else {
                 Write-Output "  [i] $name  bumpversion.tagstyle = namespaced (default) — pass --tagstyle plain for a single-artifact repo"
             }
+            # The post-commit hook creates tags; push.followTags makes the
+            # next `git push` carry them along, so tags never silently lag
+            # behind commits on the remote.
+            $curft = (git -C $prepo config --local push.followTags 2>$null)
+            if ($curft -eq 'true') {
+                Write-Output "  [=] $name  push.followTags already true"
+            } else {
+                git -C $prepo config --local push.followTags true
+                Write-Output "  [+] $name  push.followTags -> true"
+            }
             if ($fresh) { Show-ReadmeHint }
         }
         'status' {
@@ -443,6 +453,7 @@ function Handle-Hook([string]$name, [string]$path) {
                 Write-Output "  [-] $name  core.hooksPath unset ($prepo)"
             } else { Write-Output "  [.] $name  nothing to remove" }
             git -C $prepo config --local --unset bumpversion.tagstyle 2>$null
+            git -C $prepo config --local --unset push.followTags 2>$null
         }
     }
 }

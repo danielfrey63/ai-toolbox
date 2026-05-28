@@ -30,7 +30,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.21.145'
+APP_VERSION='0.22.148'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -513,6 +513,17 @@ handle_hook() {
             else
                 printf '  [i] %-18s bumpversion.tagstyle = namespaced (default) — pass --tagstyle plain for a single-artifact repo\n' "$name"
             fi
+            # The post-commit hook creates tags; push.followTags makes the
+            # next `git push` carry them along, so tags never silently lag
+            # behind commits on the remote.
+            local curft
+            curft=$(git -C "$prepo" config --local push.followTags 2>/dev/null || true)
+            if [ "$curft" = "true" ]; then
+                printf '  [=] %-18s push.followTags already true\n' "$name"
+            else
+                git -C "$prepo" config --local push.followTags true
+                printf '  [+] %-18s push.followTags -> true\n' "$name"
+            fi
             [ -n "$fresh" ] && print_readme_hint
             ;;
         status)
@@ -534,6 +545,7 @@ handle_hook() {
                 printf '  [.] %-18s nothing to remove\n' "$name"
             fi
             git -C "$prepo" config --local --unset bumpversion.tagstyle 2>/dev/null || true
+            git -C "$prepo" config --local --unset push.followTags 2>/dev/null || true
             ;;
     esac
 }
