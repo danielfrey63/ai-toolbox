@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.19.133'
+$APP_VERSION = '0.20.136'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -513,26 +513,54 @@ $cfgBase  = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path 
 $Registry = Join-Path $cfgBase 'ai-toolbox/installs.json'
 
 function Registry-Read {
-    if (Test-Path -LiteralPath $Registry) {
-        try { return @(Get-Content -LiteralPath $Registry -Raw | ConvertFrom-Json) }
-        catch { return @() }
+    if (-not (Test-Path -LiteralPath $Registry)) { return @() }
+    try { $raw = Get-Content -LiteralPath $Registry -Raw | ConvertFrom-Json }
+    catch { return @() }
+    # Heal legacy {value:[...], Count:n} envelopes that PS 5.1 leaves behind
+    # when ConvertTo-Json fails to unroll a single-element array. Flatten any
+    # such hull into its inner entries; pass real entries through unchanged.
+    $flat = @()
+    foreach ($e in @($raw)) {
+        if ($null -eq $e) { continue }
+        $isHull = $e.PSObject.Properties['value'] -and $e.PSObject.Properties['Count'] `
+            -and $e.PSObject.Properties.Count -le 2
+        if ($isHull) { $flat += @($e.value) } else { $flat += $e }
     }
-    return @()
+    # Trim whitespace from every string field — heals pre-fix entries written
+    # with stray spaces in tool/type/scope/target/project (e.g. type="bin ").
+    $clean = foreach ($e in $flat) {
+        if ($null -eq $e) { continue }
+        $out = [ordered]@{}
+        foreach ($p in $e.PSObject.Properties) {
+            if ($p.Value -is [string]) { $out[$p.Name] = $p.Value.Trim() }
+            else                       { $out[$p.Name] = $p.Value }
+        }
+        [pscustomobject]$out
+    }
+    # Dedup by key — multiple writes with whitespace-divergent fields can have
+    # produced functionally identical entries that only differ post-trim.
+    $seen = @{}; $uniq = @()
+    foreach ($e in $clean) {
+        $k = "$($e.tool)|$($e.type)|$($e.scope)|$($e.target)|$($e.project)"
+        if (-not $seen.ContainsKey($k)) { $seen[$k] = $true; $uniq += $e }
+    }
+    return $uniq
 }
 
 function Registry-Write([object[]]$entries) {
     New-Item -ItemType Directory -Path (Split-Path -Parent $Registry) -Force | Out-Null
-    if (@($entries).Count -eq 0) {
+    $entries = @($entries) | Where-Object { $_ }
+    if ($entries.Count -eq 0) {
         Set-Content -LiteralPath $Registry -Value '[]'
-    } else {
-        # Pipe the array so it unrolls — one JSON entry per element. Passing it
-        # via -InputObject would serialise the whole array as a single object.
-        # -AsArray is PS 7+; in PS 5.1 a single element unwraps to a bare object,
-        # so we wrap it back into a JSON array manually.
-        $json = @($entries) | ConvertTo-Json -Depth 5
-        if (-not $json.TrimStart().StartsWith('[')) { $json = "[$json]" }
-        Set-Content -LiteralPath $Registry -Value $json
+        return
     }
+    # Serialise each entry on its own — ConvertTo-Json never gets to see the
+    # outer array, so PS 5.1's single-element-unwrap and its {value, Count}
+    # nested-array wrap both go away. We assemble the JSON array manually.
+    $parts = foreach ($e in $entries) {
+        ConvertTo-Json -InputObject $e -Depth 5 -Compress
+    }
+    Set-Content -LiteralPath $Registry -Value ("[`n  " + ($parts -join ",`n  ") + "`n]")
 }
 
 # Normalize scope/target/project for the registry key, per tool type. Handlers
