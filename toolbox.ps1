@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.21.139'
+$APP_VERSION = '0.22.141'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -264,7 +264,12 @@ function Link-Artifact([string]$name, [string]$src, [string]$destdir) {
             } elseif ($item) {
                 [Console]::Error.WriteLine("  [!] $name  exists and is not a link — skipped"); return
             }
-            if ($IsWindows -and $isDir) {
+            # $IsWindows is a PS6+ automatic; in Windows PowerShell 5.1 it is
+            # $null/undefined. Use $env:OS, which is reliably "Windows_NT" on
+            # all PowerShell editions when running on Windows. Junctions need
+            # no admin rights, while SymbolicLink does unless Developer Mode
+            # is on — Junction is the right default for directory links here.
+            if ($env:OS -eq 'Windows_NT' -and $isDir) {
                 New-Item -ItemType Junction -Path $link -Target $src | Out-Null
             } else {
                 New-Item -ItemType SymbolicLink -Path $link -Target $src | Out-Null
