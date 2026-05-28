@@ -2,7 +2,7 @@
 name: idempotent-devops
 description: Methodology + scaffolding for idempotent, verify-then-mutate DevOps scripts. Use when the user wants to create a new setup/deploy/maintenance script, make an existing script idempotent, audit a script for non-idempotent patterns, or run a setup/cleanup script through the verify-install-cleanup loop. Brings a distilled `idempotent.sh` library (desired_state, desired_absent, parse_action, run_cmd, confirm_destructive) plus templates and audit/loop runners. Works for any project — Linux server, container deployment, local dev-env, CI maintenance.
 metadata:
-  version: "0.2.5"
+  version: "0.3.11"
 ---
 
 # Idempotent DevOps Skill

@@ -27,7 +27,7 @@
 # checking the marker at install time.
 # =============================================================================
 
-APP_VERSION='0.1.1'
+APP_VERSION='0.2.0'
 
 # --- color codes (no-op when stdout is not a TTY) -----------------------------
 if [[ -t 1 ]]; then
@@ -84,7 +84,7 @@ show_header() {
 #   cleanup | remove | delete     -> cleanup
 #   purge                         -> purge
 #   verify | check | status       -> verify
-#   help | --help | -h | (empty)  -> help
+#   help | (empty)                -> help
 #
 # Add your own actions in the caller by handling them BEFORE invoking
 # parse_action, or extend this function in a fork.
@@ -95,7 +95,7 @@ parse_action() {
         cleanup|remove|delete)          echo cleanup ;;
         purge)                          echo purge ;;
         verify|check|status)            echo verify ;;
-        help|--help|-h|"")              echo help ;;
+        help|"")                        echo help ;;
         *)
             warn "Unknown action: ${action}"
             echo help
