@@ -30,7 +30,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.19.141'
+APP_VERSION='0.20.143'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -319,7 +319,7 @@ link_artifact() {
             elif [ -e "$link" ] || [ -L "$link" ]; then
                 printf '  [? ] %-18s %s (exists, not our link)\n' "$name" "$link"
             else
-                printf '  [  ] %-18s not installed\n' "$name"
+                printf '  [ ] %-18s not installed\n' "$name"
             fi
             ;;
         remove)
@@ -433,7 +433,7 @@ handle_bin_source() {
                 printf '  [ok] %-18s %s in ~/.bashrc\n' "$name" "$cmdname"
                 STATE=ok
             else
-                printf '  [  ] %-18s not installed\n' "$name"
+                printf '  [ ] %-18s not installed\n' "$name"
             fi
             ;;
         remove)
@@ -523,7 +523,7 @@ handle_hook() {
             elif [ -n "$cur" ]; then
                 printf '  [? ] %-18s core.hooksPath = %s (not ours)\n' "$name" "$cur"
             else
-                printf '  [  ] %-18s not installed in %s\n' "$name" "$prepo"
+                printf '  [ ] %-18s not installed in %s\n' "$name" "$prepo"
             fi
             ;;
         remove)
@@ -573,7 +573,7 @@ handle_plugin() {
                 printf '  [ok] %-18s %s installed\n' "$name" "$ref"
                 STATE=ok
             else
-                printf '  [  ] %-18s %s not installed\n' "$name" "$ref"
+                printf '  [ ] %-18s %s not installed\n' "$name" "$ref"
             fi
             ;;
         remove)
@@ -647,7 +647,13 @@ registry_remove() {  # name type scope target project
 # only install parameters — the handlers re-verify against reality.
 registry_sweep() {
     local entries n i e tool type path mkt plg cmdname bin_src kept='[]'
-    entries=$(registry_read)
+    # Heal pre-fix entries that snuck in with stray whitespace in tool/type/etc.
+    # by trimming all string fields, then drop exact-duplicate keys.
+    entries=$(registry_read | jq '
+        def trim: if type == "string" then sub("^[[:space:]]+"; "") | sub("[[:space:]]+$"; "") else . end;
+        map(with_entries(.value |= trim))
+        | unique_by([.tool, .type, .scope, .target, .project])
+    ' 2>/dev/null)
     n=$(printf '%s' "$entries" | jq 'length' 2>/dev/null || printf 0)
     if [ "$n" = 0 ]; then
         printf '  (registry empty — nothing recorded)\n'

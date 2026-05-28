@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.18.132'
+$APP_VERSION = '0.19.133'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -278,7 +278,7 @@ function Link-Artifact([string]$name, [string]$src, [string]$destdir) {
             } elseif ($item) {
                 Write-Output "  [? ] $name  $link (exists, not our link)"
             } else {
-                Write-Output "  [  ] $name  not installed"
+                Write-Output "  [ ] $name  not installed"
             }
         }
         'remove' {
@@ -355,7 +355,7 @@ function Handle-Bin([string]$name, [string]$path, [string]$command, [bool]$sourc
                 Write-Output "  [ok] $name  $command in `$PROFILE"
                 $script:State = 'ok'
             } else {
-                Write-Output "  [  ] $name  not installed"
+                Write-Output "  [ ] $name  not installed"
             }
         }
         'remove' {
@@ -435,7 +435,7 @@ function Handle-Hook([string]$name, [string]$path) {
                 $script:State = 'ok'
             }
             elseif ($cur) { Write-Output "  [? ] $name  core.hooksPath = $cur (not ours)" }
-            else { Write-Output "  [  ] $name  not installed in $prepo" }
+            else { Write-Output "  [ ] $name  not installed in $prepo" }
         }
         'remove' {
             if ($cur -eq $hooksdir) {
@@ -487,7 +487,7 @@ function Handle-Plugin([string]$name, [string]$path, [string]$marketplace, [stri
                 Write-Output "  [ok] $name  $ref installed"
                 $script:State = 'ok'
             }
-            else { Write-Output "  [  ] $name  $ref not installed" }
+            else { Write-Output "  [ ] $name  $ref not installed" }
         }
         'remove' {
             Push-Location $pdir

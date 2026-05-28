@@ -25,7 +25,7 @@
       "name": "idempotent-devops",
       "type": "skill",
       "path": ".agents/skills/idempotent-devops",
-      "description": "Scaffold + audit idempotent DevOps scripts. Ships idempotent.sh (desired_state / desired_absent / parse_action / run_cmd / confirm_destructive) plus templates and a verify-install-cleanup loop runner."
+      "description": "Scaffold, audit or verify-loop idempotent DevOps scripts."
     },
     {
       "name": "versioning-hooks",
