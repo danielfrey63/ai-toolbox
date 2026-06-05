@@ -30,7 +30,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.23.150'
+APP_VERSION='0.24.156'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -83,7 +83,9 @@ _help_target() {
   codex    Codex CLI        skills link into <scope>/.codex/skills/
   agents   agentskills.io   skills link into <scope>/.agents/skills/
 
-  Hooks (per-repo git config) and config/bin entries ignore --target.
+  Config/bin entries ignore --target. Hooks honour --target claude (also
+  patches the project's .claude/settings.json with an edit-bump PostToolUse
+  hook); --target codex|agents is not yet supported for the edit-bump path.
   Plugins do a real `claude plugin` install for --target claude; for other
   targets they fall back to a skill-link.
 
@@ -456,7 +458,13 @@ handle_bin_source() {
 
 # --- hook handler -------------------------------------------------------------
 # Installs the versioning git-hooks into a repo by pointing its core.hooksPath
-# at the toolbox hook directory. Per-repo: needs --scope project, ignores --target.
+# at the toolbox hook directory. Per-repo: needs --scope project.
+# Honours --target claude: in that case also installs the edit-bump
+# PostToolUse hook into <prepo>/.claude/settings.json (idempotent, via the
+# two-stage heuristic implemented in _claude_hook_install above).
+# --target codex|agents prints a "not yet supported" note for that aspect.
+# Whether the claude hook is expected on later status runs is tracked in
+# git config (bumpversion.claudehook).
 
 # Printed after a fresh hook install — a README snippet for the target repo so
 # contributors know to activate the hooks too (git hooks are never cloned).
@@ -472,6 +480,101 @@ print_readme_hint() {
            <ai-toolbox>/toolbox.sh install --what versioning-hooks \
              --scope project
 EOF
+}
+
+# ── Claude-Code PostToolUse helpers (used by handle_hook when --target claude) ──
+# The git hooks above cover commit-time bumps; the Claude-Code edit-driven bump
+# is a separate concern that lives in <prepo>/.claude/settings.json. These
+# helpers keep that file in sync — idempotent, with a two-stage heuristic so
+# foreign PostToolUse hooks survive a remove.
+#
+# Heuristic:
+#   1. command-string contains 'bump-version.sh'
+#   2. the script behind that path carries an `APP_VERSION=` declaration at
+#      line start (the AI-Toolbox self-marker). Skipped if the file isn't
+#      reachable, so re-installs after a repo move still match on stage 1.
+
+# Canonical command we install — sibling-of-project layout (<prepo>/../ai-toolbox).
+_claude_hook_command() {  # void → string
+    printf 'bash "$(git rev-parse --show-toplevel)/../ai-toolbox/tools/bump-version.sh"'
+}
+
+# Stage-2 marker check on the referenced bumper script.
+_claude_hook_verify_marker() {  # prepo
+    local guess="$1/../ai-toolbox/tools/bump-version.sh"
+    [ -f "$guess" ] || return 0   # unreachable → accept stage-1 alone
+    grep -qE '^\$?APP_VERSION[[:space:]]*=' "$guess"
+}
+
+# Idempotent install of our PostToolUse:Edit|Write hook.
+_claude_hook_install() {  # name prepo
+    local name=$1 prepo=$2
+    local settings="$prepo/.claude/settings.json"
+    mkdir -p "$prepo/.claude"
+    [ -f "$settings" ] || printf '{}\n' > "$settings"
+    local present
+    present=$(jq -r '
+        (.hooks.PostToolUse // [])
+        | map(select(((.hooks // [])
+                      | map(select(.command | tostring | test("bump-version\\.sh")))
+                      | length) > 0))
+        | length
+    ' "$settings" 2>/dev/null) || present=0
+    if [ "${present:-0}" -ge 1 ]; then
+        printf '  [=] %-18s claude PostToolUse already present\n' "$name"
+        return 0
+    fi
+    local cmd tmp
+    cmd=$(_claude_hook_command)
+    tmp=$(jq --arg cmd "$cmd" '
+        .hooks = (.hooks // {})
+        | .hooks.PostToolUse = ((.hooks.PostToolUse // []) + [{
+            matcher: "Edit|Write",
+            hooks: [{ type: "command", command: $cmd, statusMessage: "Version-Bump (AI-Toolbox)..." }]
+        }])
+    ' "$settings") || return 1
+    printf '%s\n' "$tmp" > "$settings"
+    printf '  [+] %-18s claude PostToolUse -> %s\n' "$name" "$settings"
+}
+
+# Echo 'yes' | 'no' | 'no-settings' for the project's PostToolUse state.
+_claude_hook_state() {  # prepo → string
+    local settings="$1/.claude/settings.json"
+    [ -f "$settings" ] || { printf 'no-settings'; return; }
+    local match
+    match=$(jq -r '
+        (.hooks.PostToolUse // [])
+        | map(select(((.hooks // [])
+                      | map(select(.command | tostring | test("bump-version\\.sh")))
+                      | length) > 0))
+        | length
+    ' "$settings" 2>/dev/null) || match=0
+    [ "${match:-0}" -ge 1 ] && printf 'yes' || printf 'no'
+}
+
+# Remove our PostToolUse entries — guarded by the two-stage heuristic.
+_claude_hook_remove() {  # name prepo
+    local name=$1 prepo=$2
+    local settings="$prepo/.claude/settings.json"
+    [ -f "$settings" ] || return 0
+    if ! _claude_hook_verify_marker "$prepo"; then
+        printf '  [!] %-18s claude PostToolUse: target script lacks APP_VERSION marker, refusing to remove\n' "$name"
+        return 0
+    fi
+    local tmp
+    tmp=$(jq '
+        if .hooks.PostToolUse then
+            .hooks.PostToolUse |= map(
+                select(((.hooks // [])
+                        | map(select(.command | tostring | test("bump-version\\.sh")))
+                        | length) == 0)
+            )
+            | if (.hooks.PostToolUse | length) == 0 then del(.hooks.PostToolUse) else . end
+            | if (.hooks | length) == 0 then del(.hooks) else . end
+        else . end
+    ' "$settings") || return 1
+    printf '%s\n' "$tmp" > "$settings"
+    printf '  [-] %-18s claude PostToolUse removed (%s)\n' "$name" "$settings"
 }
 
 handle_hook() {
@@ -524,6 +627,19 @@ handle_hook() {
                 git -C "$prepo" config --local push.followTags true
                 printf '  [+] %-18s push.followTags -> true\n' "$name"
             fi
+            # --target claude: also install the Claude-Code PostToolUse hook
+            # so per-edit BUILD bumps work. We track the "claude was requested"
+            # bit in git config so `status` knows to expect the settings hook
+            # even when the registry entry itself is target-agnostic.
+            case "$TARGET" in
+                claude)
+                    _claude_hook_install "$name" "$prepo"
+                    git -C "$prepo" config --local bumpversion.claudehook true
+                    ;;
+                codex|agents)
+                    printf '  [.] %-18s edit-bump PostToolUse not yet supported for --target %s\n' "$name" "$TARGET"
+                    ;;
+            esac
             [ -n "$fresh" ] && print_readme_hint
             ;;
         status)
@@ -533,8 +649,33 @@ handle_hook() {
                 STATE=ok
             elif [ -n "$cur" ]; then
                 printf '  [? ] %-18s core.hooksPath = %s (not ours)\n' "$name" "$cur"
+                STATE=
             else
                 printf '  [ ] %-18s not installed in %s\n' "$name" "$prepo"
+                STATE=
+            fi
+            # When this install was requested with --target claude (or has been
+            # ever — flag persists), the claude PostToolUse hook is part of the
+            # contract. A missing entry there is reported as a partial install
+            # so `status --all` surfaces it.
+            local wants_claude
+            wants_claude=$(git -C "$prepo" config --local --bool bumpversion.claudehook 2>/dev/null || true)
+            if [ "$wants_claude" = "true" ]; then
+                local clstate
+                clstate=$(_claude_hook_state "$prepo")
+                case "$clstate" in
+                    yes)
+                        printf '       %-18s + claude PostToolUse: present\n' ''
+                        ;;
+                    no)
+                        printf '  [! ] %-18s claude PostToolUse: MISSING from %s/.claude/settings.json\n' "$name" "$prepo"
+                        STATE=partial
+                        ;;
+                    no-settings)
+                        printf '  [! ] %-18s claude PostToolUse: MISSING (.claude/settings.json absent in %s)\n' "$name" "$prepo"
+                        STATE=partial
+                        ;;
+                esac
             fi
             ;;
         remove)
@@ -546,6 +687,11 @@ handle_hook() {
             fi
             git -C "$prepo" config --local --unset bumpversion.tagstyle 2>/dev/null || true
             git -C "$prepo" config --local --unset push.followTags 2>/dev/null || true
+            # Remove the claude PostToolUse hook if the flag says we installed it.
+            if [ "$(git -C "$prepo" config --local --bool bumpversion.claudehook 2>/dev/null || true)" = "true" ]; then
+                _claude_hook_remove "$name" "$prepo"
+                git -C "$prepo" config --local --unset bumpversion.claudehook 2>/dev/null || true
+            fi
             ;;
     esac
 }
@@ -716,8 +862,11 @@ registry_sweep() {
             # bin entries are kept regardless of the verdict — their install
             # mechanism is port-specific (bash symlink vs pwsh $PROFILE), so a
             # cross-port status check cannot tell "gone" apart from "installed
-            # by the other port".
-            if [ "$STATE" = ok ] || [ "$type" = bin ]; then
+            # by the other port". `partial` means the primary install (e.g.
+            # git-hook) is intact but a secondary aspect (e.g. claude
+            # PostToolUse) is missing — keep the entry so the user has a
+            # punch-list to re-run install against, don't prune it.
+            if [ "$STATE" = ok ] || [ "$STATE" = partial ] || [ "$type" = bin ]; then
                 kept=$(printf '%s' "$kept" | jq -c --argjson e "$e" '. + [$e]')
             else
                 printf '      -> pruned from registry (no longer installed)\n'
