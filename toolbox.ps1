@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.23.143'
+$APP_VERSION = '0.24.148'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -66,7 +66,9 @@ Examples:
   codex    Codex CLI        skills link into <scope>/.codex/skills/
   agents   agentskills.io   skills link into <scope>/.agents/skills/
 
-  Hooks (per-repo git config) and config/bin entries ignore --target.
+  Config/bin entries ignore --target. Hooks honour --target claude (also
+  patches the project's .claude/settings.json with an edit-bump PostToolUse
+  hook); --target codex|agents is not yet supported for the edit-bump path.
   Plugins do a real `claude plugin` install for --target claude; for other
   targets they fall back to a skill-link.
 
@@ -393,6 +395,110 @@ function Show-ReadmeHint {
 '@
 }
 
+# ── Claude-Code PostToolUse helpers (used by Handle-Hook when --target claude) ──
+# Mirror of the Bash helpers in toolbox.sh — same two-stage heuristic:
+#   1. command-string contains 'bump-version.sh'
+#   2. the script behind that path carries an APP_VERSION= declaration at line
+#      start (the AI-Toolbox self-marker). Skipped if the file is unreachable.
+
+function Get-ClaudeHookCommand { 'bash "$(git rev-parse --show-toplevel)/../ai-toolbox/tools/bump-version.sh"' }
+
+function Test-ClaudeHookMarker([string]$prepo) {
+    $guess = Join-Path $prepo '../ai-toolbox/tools/bump-version.sh'
+    if (-not (Test-Path -LiteralPath $guess)) { return $true }   # unreachable → accept stage-1
+    return [bool](Select-String -LiteralPath $guess -Pattern '^\$?APP_VERSION\s*=' -Quiet)
+}
+
+function _Read-ClaudeSettings([string]$prepo) {
+    $settings = Join-Path $prepo '.claude/settings.json'
+    if (-not (Test-Path -LiteralPath $settings)) { return $null }
+    try { return Get-Content -LiteralPath $settings -Raw | ConvertFrom-Json -Depth 20 } catch { return $null }
+}
+
+function _Write-ClaudeSettings([string]$prepo, $obj) {
+    $settings = Join-Path $prepo '.claude/settings.json'
+    $claudeDir = Split-Path -LiteralPath $settings -Parent
+    if (-not (Test-Path -LiteralPath $claudeDir)) { New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null }
+    ($obj | ConvertTo-Json -Depth 20) | Set-Content -LiteralPath $settings -Encoding UTF8
+}
+
+# Echo 'yes' | 'no' | 'no-settings' for the project's PostToolUse state.
+function Get-ClaudeHookState([string]$prepo) {
+    $json = _Read-ClaudeSettings $prepo
+    if (-not $json) { return 'no-settings' }
+    if (-not $json.PSObject.Properties.Match('hooks').Count) { return 'no' }
+    if (-not $json.hooks.PSObject.Properties.Match('PostToolUse').Count) { return 'no' }
+    foreach ($entry in @($json.hooks.PostToolUse)) {
+        if ($entry.PSObject.Properties.Match('hooks').Count) {
+            foreach ($h in @($entry.hooks)) {
+                if ($h.command -match 'bump-version\.sh') { return 'yes' }
+            }
+        }
+    }
+    return 'no'
+}
+
+# Idempotent install of our PostToolUse:Edit|Write hook.
+function Install-ClaudeHook([string]$name, [string]$prepo) {
+    if ((Get-ClaudeHookState $prepo) -eq 'yes') {
+        Write-Output "  [=] $name  claude PostToolUse already present"
+        return
+    }
+    $json = _Read-ClaudeSettings $prepo
+    if (-not $json) { $json = [pscustomobject]@{} }
+    if (-not $json.PSObject.Properties.Match('hooks').Count) {
+        $json | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{}) -Force
+    }
+    if (-not $json.hooks.PSObject.Properties.Match('PostToolUse').Count) {
+        $json.hooks | Add-Member -NotePropertyName PostToolUse -NotePropertyValue @() -Force
+    }
+    $entry = [pscustomobject]@{
+        matcher = 'Edit|Write'
+        hooks   = @([pscustomobject]@{
+            type          = 'command'
+            command       = Get-ClaudeHookCommand
+            statusMessage = 'Version-Bump (AI-Toolbox)...'
+        })
+    }
+    $json.hooks.PostToolUse = @(@($json.hooks.PostToolUse) + @($entry))
+    _Write-ClaudeSettings $prepo $json
+    $settings = Join-Path $prepo '.claude/settings.json'
+    Write-Output "  [+] $name  claude PostToolUse -> $settings"
+}
+
+# Remove our PostToolUse entries — guarded by the two-stage marker check.
+function Remove-ClaudeHook([string]$name, [string]$prepo) {
+    $settings = Join-Path $prepo '.claude/settings.json'
+    if (-not (Test-Path -LiteralPath $settings)) { return }
+    if (-not (Test-ClaudeHookMarker $prepo)) {
+        Write-Output "  [!] $name  claude PostToolUse: target script lacks APP_VERSION marker, refusing to remove"
+        return
+    }
+    $json = _Read-ClaudeSettings $prepo
+    if (-not $json -or -not $json.PSObject.Properties.Match('hooks').Count -or
+        -not $json.hooks.PSObject.Properties.Match('PostToolUse').Count) { return }
+    $kept = @()
+    foreach ($entry in @($json.hooks.PostToolUse)) {
+        $hasOurs = $false
+        if ($entry.PSObject.Properties.Match('hooks').Count) {
+            foreach ($h in @($entry.hooks)) {
+                if ($h.command -match 'bump-version\.sh') { $hasOurs = $true; break }
+            }
+        }
+        if (-not $hasOurs) { $kept += $entry }
+    }
+    if ($kept.Count -eq 0) {
+        $json.hooks.PSObject.Properties.Remove('PostToolUse')
+        if ($json.hooks.PSObject.Properties.Name.Count -eq 0) {
+            $json.PSObject.Properties.Remove('hooks')
+        }
+    } else {
+        $json.hooks.PostToolUse = $kept
+    }
+    _Write-ClaudeSettings $prepo $json
+    Write-Output "  [-] $name  claude PostToolUse removed ($settings)"
+}
+
 function Handle-Hook([string]$name, [string]$path) {
     $hooksdir = Join-Path $RepoRoot $path
     if ($Scope -ne 'project') {
@@ -440,17 +546,50 @@ function Handle-Hook([string]$name, [string]$path) {
                 git -C $prepo config --local push.followTags true
                 Write-Output "  [+] $name  push.followTags -> true"
             }
+            # --target claude: also install the Claude-Code PostToolUse hook
+            # so per-edit BUILD bumps work. The "claude was requested" bit is
+            # tracked in git config (bumpversion.claudehook) so status knows
+            # to expect the settings hook on later runs.
+            switch ($Target) {
+                'claude' {
+                    Install-ClaudeHook $name $prepo
+                    git -C $prepo config --local bumpversion.claudehook true | Out-Null
+                }
+                'codex'  { Write-Output "  [.] $name  edit-bump PostToolUse not yet supported for --target codex" }
+                'agents' { Write-Output "  [.] $name  edit-bump PostToolUse not yet supported for --target agents" }
+            }
             if ($fresh) { Show-ReadmeHint }
         }
         'status' {
+            # Single-line status: the claude PostToolUse verdict is folded
+            # into the `(tagstyle=…)` suffix when the bumpversion.claudehook
+            # flag is set on this repo. Missing entries flip the row marker
+            # to [! ] and bump $script:State to 'partial' (not 'gone' — the
+            # primary git-hook is fine, just the secondary aspect is incomplete).
+            $clSuffix = ''
+            $clState = ''
+            $wantsClaude = (git -C $prepo config --local --bool bumpversion.claudehook 2>$null)
+            if ($wantsClaude -eq 'true') {
+                $clState = Get-ClaudeHookState $prepo
+                switch ($clState) {
+                    'yes'         { $clSuffix = ', claude=present' }
+                    'no'          { $clSuffix = ', claude=missing-from-settings' }
+                    'no-settings' { $clSuffix = ', claude=missing-no-settings' }
+                }
+            }
             if ($cur -eq $hooksdir) {
                 $curts = (git -C $prepo config --local bumpversion.tagstyle 2>$null)
                 if (-not $curts) { $curts = 'namespaced' }
-                Write-Output "  [ok] $name  $prepo (tagstyle=$curts)"
-                $script:State = 'ok'
+                if ($clState -eq 'no' -or $clState -eq 'no-settings') {
+                    Write-Output "  [! ] $name  $prepo (tagstyle=$curts$clSuffix)"
+                    $script:State = 'partial'
+                } else {
+                    Write-Output "  [ok] $name  $prepo (tagstyle=$curts$clSuffix)"
+                    $script:State = 'ok'
+                }
             }
-            elseif ($cur) { Write-Output "  [? ] $name  core.hooksPath = $cur (not ours)" }
-            else { Write-Output "  [ ] $name  not installed in $prepo" }
+            elseif ($cur) { Write-Output "  [? ] $name  core.hooksPath = $cur (not ours)$clSuffix" }
+            else          { Write-Output "  [ ] $name  not installed in $prepo$clSuffix" }
         }
         'remove' {
             if ($cur -eq $hooksdir) {
@@ -459,6 +598,11 @@ function Handle-Hook([string]$name, [string]$path) {
             } else { Write-Output "  [.] $name  nothing to remove" }
             git -C $prepo config --local --unset bumpversion.tagstyle 2>$null
             git -C $prepo config --local --unset push.followTags 2>$null
+            # Remove the claude PostToolUse hook if the flag says we installed it.
+            if ((git -C $prepo config --local --bool bumpversion.claudehook 2>$null) -eq 'true') {
+                Remove-ClaudeHook $name $prepo
+                git -C $prepo config --local --unset bumpversion.claudehook 2>$null
+            }
         }
     }
 }
@@ -653,7 +797,10 @@ function Registry-Sweep {
             # bin entries are kept regardless — the install mechanism is
             # port-specific (bash symlink vs pwsh $PROFILE), so a cross-port
             # check cannot tell "gone" from "installed by the other port".
-            if ($script:State -eq 'ok' -or $e.type -eq 'bin') { $kept += $e }
+            # `partial` means the primary install (e.g. git-hook) is intact
+            # but a secondary aspect (claude PostToolUse) is missing — keep
+            # the entry so the user has a punch-list, don't prune it.
+            if ($script:State -eq 'ok' -or $script:State -eq 'partial' -or $e.type -eq 'bin') { $kept += $e }
             else { Write-Output '      -> pruned from registry (no longer installed)' }
         }
     }
