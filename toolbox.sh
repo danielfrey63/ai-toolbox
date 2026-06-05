@@ -30,7 +30,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.24.156'
+APP_VERSION='0.25.158'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -643,39 +643,37 @@ handle_hook() {
             [ -n "$fresh" ] && print_readme_hint
             ;;
         status)
+            # When this install was requested with --target claude (the flag
+            # bumpversion.claudehook persists in git config), the claude
+            # PostToolUse hook is part of the contract. The verdict is folded
+            # into the single status line so each registry entry stays at one
+            # row — `claude=present` decorates the `(tagstyle=…)` suffix,
+            # `claude=missing-…` flips the row marker to `[! ]` and bumps
+            # STATE=partial so `status --all` surfaces it on a punch list.
+            local cl_suffix='' cl_state=''
+            if [ "$(git -C "$prepo" config --local --bool bumpversion.claudehook 2>/dev/null || true)" = "true" ]; then
+                cl_state=$(_claude_hook_state "$prepo")
+                case "$cl_state" in
+                    yes)         cl_suffix=', claude=present' ;;
+                    no)          cl_suffix=', claude=missing-from-settings' ;;
+                    no-settings) cl_suffix=', claude=missing-no-settings' ;;
+                esac
+            fi
             if [ "$cur" = "$hooksdir" ]; then
                 curts=$(git -C "$prepo" config --local bumpversion.tagstyle 2>/dev/null || true)
-                printf '  [ok] %-18s %s (tagstyle=%s)\n' "$name" "$prepo" "${curts:-namespaced}"
-                STATE=ok
+                if [ "$cl_state" = "no" ] || [ "$cl_state" = "no-settings" ]; then
+                    printf '  [! ] %-18s %s (tagstyle=%s%s)\n' "$name" "$prepo" "${curts:-namespaced}" "$cl_suffix"
+                    STATE=partial
+                else
+                    printf '  [ok] %-18s %s (tagstyle=%s%s)\n' "$name" "$prepo" "${curts:-namespaced}" "$cl_suffix"
+                    STATE=ok
+                fi
             elif [ -n "$cur" ]; then
-                printf '  [? ] %-18s core.hooksPath = %s (not ours)\n' "$name" "$cur"
+                printf '  [? ] %-18s core.hooksPath = %s (not ours)%s\n' "$name" "$cur" "$cl_suffix"
                 STATE=
             else
-                printf '  [ ] %-18s not installed in %s\n' "$name" "$prepo"
+                printf '  [ ] %-18s not installed in %s%s\n' "$name" "$prepo" "$cl_suffix"
                 STATE=
-            fi
-            # When this install was requested with --target claude (or has been
-            # ever — flag persists), the claude PostToolUse hook is part of the
-            # contract. A missing entry there is reported as a partial install
-            # so `status --all` surfaces it.
-            local wants_claude
-            wants_claude=$(git -C "$prepo" config --local --bool bumpversion.claudehook 2>/dev/null || true)
-            if [ "$wants_claude" = "true" ]; then
-                local clstate
-                clstate=$(_claude_hook_state "$prepo")
-                case "$clstate" in
-                    yes)
-                        printf '       %-18s + claude PostToolUse: present\n' ''
-                        ;;
-                    no)
-                        printf '  [! ] %-18s claude PostToolUse: MISSING from %s/.claude/settings.json\n' "$name" "$prepo"
-                        STATE=partial
-                        ;;
-                    no-settings)
-                        printf '  [! ] %-18s claude PostToolUse: MISSING (.claude/settings.json absent in %s)\n' "$name" "$prepo"
-                        STATE=partial
-                        ;;
-                esac
             fi
             ;;
         remove)
