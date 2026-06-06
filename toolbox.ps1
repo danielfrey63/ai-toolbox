@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.27.155'
+$APP_VERSION = '0.28.159'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -730,8 +730,12 @@ function Registry-Write([object[]]$entries) {
 # that ignore --target/--scope must not leak those into the key, or one install
 # can be recorded as multiple entries that differ only by an ignored field.
 function _Registry-Normalize([string]$type, [ref]$scope, [ref]$target, [ref]$project) {
+    # config/bin are always global, repo-agnostic; their target is meaningless.
+    # hook keeps target in the key — the claude PostToolUse patching in
+    # .claude/settings.json is target-specific even though core.hooksPath is
+    # repo-wide, so the same repo can legitimately carry several hook entries
+    # (target="" = bare git-hook, target="claude" = git-hook + claude patch).
     switch ($type) {
-        'hook'   { $target.Value = '' }
         'config' { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
         'bin'    { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
     }
@@ -773,16 +777,23 @@ function Registry-Remove([string]$tool, [string]$type, [string]$scope, [string]$
 # entries. remove: uninstall each, then empty the registry. Entries carry
 # only install parameters — the handlers re-verify against reality.
 function Registry-Sweep {
-    # Heal legacy entries: (1) re-apply per-type field normalization so
-    # pre-d4be626 entries (e.g. a hook with target="claude" left over from
-    # before --target was filtered out for hooks) collapse against their
-    # normalized twins; (2) normalize project paths to forward-slash + no
-    # trailing slash so a `D:\foo` and `D:/foo` pair collapses to one entry.
-    # Then dedup. Mirrors the jq healing pass in registry_sweep (sh port).
+    # Heal legacy entries:
+    #   (1) Re-apply per-type field normalization for config/bin (they are
+    #       repo-agnostic and always global) so any legacy non-empty target/
+    #       project/scope on them collapses. Hook entries are left alone — for
+    #       hooks `target` is meaningful (the claude PostToolUse patching is
+    #       target-specific) and stays in the key.
+    #   (2) Normalize project paths to forward slashes, no trailing slash, so
+    #       `D:\foo` and `D:/foo/` pairs collapse to one entry. Symmetric with
+    #       _Registry-Normalize.
+    #   (3) Dedup by exact key.
+    #   (4) Hook-target conflict resolution: same repo with both target="" and
+    #       target="claude" picks the entry that matches reality (probed via
+    #       Get-ClaudeHookState). The other entry is the artifact.
+    # Mirrors the jq pipeline + _heal_hook_targets in registry_sweep (sh port).
     $raw = @(Registry-Read)
     foreach ($e in $raw) {
         switch ($e.type) {
-            'hook'   { $e.target = '' }
             'config' { $e.scope = 'global'; $e.target = ''; $e.project = '' }
             'bin'    { $e.scope = 'global'; $e.target = ''; $e.project = '' }
         }
@@ -791,14 +802,34 @@ function Registry-Sweep {
         }
     }
     $seen = @{}
-    $entries = @()
+    $deduped = @()
     foreach ($e in $raw) {
         $key = '{0}|{1}|{2}|{3}|{4}' -f $e.tool, $e.type, $e.scope, $e.target, $e.project
         if (-not $seen.ContainsKey($key)) {
             $seen[$key] = $true
-            $entries += $e
+            $deduped += $e
         }
     }
+    # Hook-target conflict resolution. Group same-repo hook entries (same
+    # tool/scope/project, differing only in target). For each group probe
+    # reality — does the project carry our claude PostToolUse? — and produce
+    # one winner whose target matches reality. Falls back to first entry if
+    # no exact match exists, and re-stamps its target to the expected value,
+    # so a lone legacy entry with the wrong target gets healed in place.
+    $entries = @($deduped | Where-Object { $_.type -ne 'hook' })
+    $hookGroups = $deduped | Where-Object { $_.type -eq 'hook' } |
+        Group-Object { "$($_.tool)|$($_.scope)|$($_.project)" }
+    foreach ($g in $hookGroups) {
+        $group = @($g.Group)
+        $proj = $group[0].project
+        $state = if ($proj) { Get-ClaudeHookState $proj } else { 'no' }
+        $wantTarget = if ($state -eq 'yes') { 'claude' } else { '' }
+        $match = @($group | Where-Object { $_.target -eq $wantTarget })
+        $winner = if ($match.Count -gt 0) { $match[0] } else { $group[0] }
+        $winner.target = $wantTarget
+        $entries += $winner
+    }
+    $entries = @($entries | Sort-Object tool, scope, target, project)
     if ($entries.Count -eq 0) {
         Write-Output '  (registry empty — nothing recorded)'
         if ($Cmd -eq 'remove') { Registry-Write @() }

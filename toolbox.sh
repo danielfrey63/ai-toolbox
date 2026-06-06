@@ -30,7 +30,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.27.164'
+APP_VERSION='0.28.170'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -764,8 +764,12 @@ registry_read() {
 # Upsert an entry, keyed by tool + scope + target + project.
 registry_add() {  # name type path scope target project
     local scope=$4 target=$5 project=$6
+    # config/bin are always global, repo-agnostic; their target is meaningless.
+    # hook keeps target in the key — the claude PostToolUse patching in
+    # .claude/settings.json is target-specific even though core.hooksPath is
+    # repo-wide, so the same repo can legitimately have multiple hook entries
+    # (target="" = bare git-hook, target="claude" = git-hook + claude patch).
     case "$2" in
-        hook)        target='' ;;
         config|bin)  scope=global; target=''; project='' ;;
     esac
     # Path keys: '/' separators + no trailing slash — Windows can pass either
@@ -793,7 +797,6 @@ registry_remove() {  # name type scope target project
     [ -f "$REGISTRY" ] || return 0
     local scope=$3 target=$4 project=$5
     case "$2" in
-        hook)        target='' ;;
         config|bin)  scope=global; target=''; project='' ;;
     esac
     if [ -n "$project" ]; then
@@ -809,6 +812,41 @@ registry_remove() {  # name type scope target project
     printf '%s\n' "$data" > "$REGISTRY"
 }
 
+# Hook-target conflict resolution: for each repo represented by multiple hook
+# entries (only differing in target), pick the entry that reflects reality —
+# probe the project's .claude/settings.json. If our PostToolUse is patched in,
+# the claude-bearing entry wins; otherwise the bare target="" entry wins.
+# Single-entry groups pass through unchanged. Non-hook entries pass through.
+_heal_hook_targets() {  # entries_json → healed_json
+    local entries=$1 out='[]' groups gn gi g project cs expected winner
+    # Non-hook entries first, unchanged.
+    out=$(printf '%s' "$entries" | jq '[.[] | select(.type != "hook")]')
+    # Group hook entries by (tool, scope, project) — same-repo entries that
+    # only differ in target. For each group, probe reality (does the project
+    # carry our claude PostToolUse?) and produce one winner whose target
+    # matches reality. Falls back to first entry if no exact target match
+    # exists in the group — and re-stamps its target to the expected value,
+    # so a lone legacy entry with the wrong target gets healed in place.
+    groups=$(printf '%s' "$entries" | jq -c '
+        [.[] | select(.type == "hook")]
+        | group_by([.tool, .scope, .project])
+    ')
+    gn=$(printf '%s' "$groups" | jq 'length')
+    gi=0
+    while [ "$gi" -lt "$gn" ]; do
+        g=$(printf '%s' "$groups" | jq -c ".[$gi]")
+        gi=$((gi + 1))
+        project=$(printf '%s' "$g" | jq -r '.[0].project')
+        cs=$(_claude_hook_state "$project" 2>/dev/null || printf 'no')
+        if [ "$cs" = yes ]; then expected='claude'; else expected=''; fi
+        winner=$(printf '%s' "$g" | jq -c --arg t "$expected" '
+            (map(select(.target == $t)) + [.[0]]) | .[0] | .target = $t
+        ')
+        out=$(printf '%s' "$out" | jq -c --argjson w "$winner" '. + [$w]')
+    done
+    printf '%s\n' "$out" | jq 'sort_by(.tool, .scope, .target, .project)'
+}
+
 # Run $CMD against every registry entry. status: verify, report, prune stale
 # entries. remove: uninstall each, then empty the registry. Entries carry
 # only install parameters — the handlers re-verify against reality.
@@ -818,14 +856,16 @@ registry_sweep() {
     #   1. {value:[...], Count:n} hulls from PS 5.1 ConvertTo-Json on single-
     #      element arrays — flatten them into their inner entries.
     #   2. Stray whitespace in tool/type/scope/… (e.g. type="bin ") — trim it.
-    #   3. Per-type field leakage on legacy entries — pre-d4be626 hook entries
-    #      kept whatever --target was passed (e.g. target="claude"), but the
-    #      hook handler ignores --target; re-apply the per-call normalization
-    #      so they collapse against entries with target="".
+    #   3. Per-type field leakage on config/bin — they are repo-agnostic and
+    #      always global; re-apply the registry_add normalization so any
+    #      legacy entry with a non-empty target/project/scope collapses.
+    #      (hook entries keep target — it's part of the key.)
     #   4. Mixed project-path forms — backslashes vs forward slashes, with or
     #      without a trailing slash. Symmetric with the per-call normalization
     #      in registry_add (sh) and _Registry-Normalize (ps1).
     #   5. Functionally identical entries that only differ by the above — dedup.
+    # The post-pass below this jq filter resolves hook-target conflicts (same
+    # repo with both target="" and target="claude") by probing reality.
     entries=$(registry_read | jq '
         def unwrap: if type == "object" and has("value") and has("Count")
                        and (keys | length) <= 2
@@ -834,8 +874,7 @@ registry_sweep() {
                   then sub("^[[:space:]]+"; "") | sub("[[:space:]]+$"; "")
                   else . end;
         def normtype:
-            if .type == "hook" then .target = ""
-            elif .type == "config" or .type == "bin"
+            if .type == "config" or .type == "bin"
                 then .scope = "global" | .target = "" | .project = ""
             else . end;
         def normproj: if has("project") and (.project // "") != ""
@@ -847,6 +886,14 @@ registry_sweep() {
         | map(normproj)
         | unique_by([.tool, .type, .scope, .target, .project])
     ' 2>/dev/null)
+    # Hook-target conflict resolution: pre-d4be626 (and the brief target=""
+    # forced era after) can leave one repo recorded twice — once as the bare
+    # git-hook (target="") and once as the claude-integrated entry
+    # (target="claude"). Probe the project's .claude/settings.json: if our
+    # PostToolUse is actually patched in, keep target="claude" and drop
+    # target=""; if not, keep target="" and drop target="claude". A repo
+    # with only one entry passes through untouched.
+    entries=$(_heal_hook_targets "$entries")
     n=$(printf '%s' "$entries" | jq 'length' 2>/dev/null || printf 0)
     if [ "$n" = 0 ]; then
         printf '  (registry empty — nothing recorded)\n'
