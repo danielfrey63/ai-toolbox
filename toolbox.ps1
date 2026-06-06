@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.24.148'
+$APP_VERSION = '0.25.150'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -417,7 +417,10 @@ function _Read-ClaudeSettings([string]$prepo) {
 
 function _Write-ClaudeSettings([string]$prepo, $obj) {
     $settings = Join-Path $prepo '.claude/settings.json'
-    $claudeDir = Split-Path -LiteralPath $settings -Parent
+    # PS 5.1 splits Split-Path's parameter sets — `-LiteralPath` + `-Parent` is
+    # rejected ("Parameter set cannot be resolved"). -Parent is the default, so
+    # drop it; works on both 5.1 and 7.x.
+    $claudeDir = Split-Path -LiteralPath $settings
     if (-not (Test-Path -LiteralPath $claudeDir)) { New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null }
     ($obj | ConvertTo-Json -Depth 20) | Set-Content -LiteralPath $settings -Encoding UTF8
 }
