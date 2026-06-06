@@ -30,7 +30,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.26.162'
+APP_VERSION='0.27.164'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -814,14 +814,18 @@ registry_remove() {  # name type scope target project
 # only install parameters — the handlers re-verify against reality.
 registry_sweep() {
     local entries n i e tool type path mkt plg cmdname bin_src kept='[]'
-    # Heal four legacy registry pathologies in one pass:
+    # Heal five legacy registry pathologies in one pass:
     #   1. {value:[...], Count:n} hulls from PS 5.1 ConvertTo-Json on single-
     #      element arrays — flatten them into their inner entries.
     #   2. Stray whitespace in tool/type/scope/… (e.g. type="bin ") — trim it.
-    #   3. Mixed project-path forms — backslashes vs forward slashes, with or
+    #   3. Per-type field leakage on legacy entries — pre-d4be626 hook entries
+    #      kept whatever --target was passed (e.g. target="claude"), but the
+    #      hook handler ignores --target; re-apply the per-call normalization
+    #      so they collapse against entries with target="".
+    #   4. Mixed project-path forms — backslashes vs forward slashes, with or
     #      without a trailing slash. Symmetric with the per-call normalization
     #      in registry_add (sh) and _Registry-Normalize (ps1).
-    #   4. Functionally identical entries that only differ by the above — dedup.
+    #   5. Functionally identical entries that only differ by the above — dedup.
     entries=$(registry_read | jq '
         def unwrap: if type == "object" and has("value") and has("Count")
                        and (keys | length) <= 2
@@ -829,11 +833,17 @@ registry_sweep() {
         def trim: if type == "string"
                   then sub("^[[:space:]]+"; "") | sub("[[:space:]]+$"; "")
                   else . end;
+        def normtype:
+            if .type == "hook" then .target = ""
+            elif .type == "config" or .type == "bin"
+                then .scope = "global" | .target = "" | .project = ""
+            else . end;
         def normproj: if has("project") and (.project // "") != ""
                       then .project |= (gsub("\\\\"; "/") | sub("/+$"; ""))
                       else . end;
         [.[] | unwrap]
         | map(with_entries(.value |= trim))
+        | map(normtype)
         | map(normproj)
         | unique_by([.tool, .type, .scope, .target, .project])
     ' 2>/dev/null)

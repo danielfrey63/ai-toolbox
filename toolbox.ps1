@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.26.153'
+$APP_VERSION = '0.27.155'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -773,13 +773,19 @@ function Registry-Remove([string]$tool, [string]$type, [string]$scope, [string]$
 # entries. remove: uninstall each, then empty the registry. Entries carry
 # only install parameters — the handlers re-verify against reality.
 function Registry-Sweep {
-    # Heal legacy entries: normalize project path separators ('/' only, no
-    # trailing slash) and dedup. Without this, the same repo can sit in the
-    # registry twice as `D:\foo` and `D:/foo` — happens on Windows whenever
-    # one entry came from Resolve-Path (backslashes) and another from git
-    # rev-parse (forward slashes). Mirrors the jq healing pass in the sh port.
+    # Heal legacy entries: (1) re-apply per-type field normalization so
+    # pre-d4be626 entries (e.g. a hook with target="claude" left over from
+    # before --target was filtered out for hooks) collapse against their
+    # normalized twins; (2) normalize project paths to forward-slash + no
+    # trailing slash so a `D:\foo` and `D:/foo` pair collapses to one entry.
+    # Then dedup. Mirrors the jq healing pass in registry_sweep (sh port).
     $raw = @(Registry-Read)
     foreach ($e in $raw) {
+        switch ($e.type) {
+            'hook'   { $e.target = '' }
+            'config' { $e.scope = 'global'; $e.target = ''; $e.project = '' }
+            'bin'    { $e.scope = 'global'; $e.target = ''; $e.project = '' }
+        }
         if ($e.PSObject.Properties.Match('project').Count -and $e.project) {
             $e.project = ($e.project -replace '\\', '/') -replace '/+$', ''
         }
