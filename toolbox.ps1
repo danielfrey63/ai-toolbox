@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.25.150'
+$APP_VERSION = '0.26.153'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -735,6 +735,13 @@ function _Registry-Normalize([string]$type, [ref]$scope, [ref]$target, [ref]$pro
         'config' { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
         'bin'    { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
     }
+    # Path keys: '/' separators + no trailing slash. Resolve-Path on Windows
+    # gives backslashes, `git rev-parse --show-toplevel` gives forward slashes,
+    # raw user input may have a trailing slash — without normalization the
+    # same repo would get keyed multiple ways. Symmetric with the sh port.
+    if ($project.Value) {
+        $project.Value = ($project.Value -replace '\\', '/') -replace '/+$', ''
+    }
 }
 
 # Upsert an entry, keyed by tool + scope + target + project.
@@ -766,7 +773,26 @@ function Registry-Remove([string]$tool, [string]$type, [string]$scope, [string]$
 # entries. remove: uninstall each, then empty the registry. Entries carry
 # only install parameters — the handlers re-verify against reality.
 function Registry-Sweep {
-    $entries = @(Registry-Read)
+    # Heal legacy entries: normalize project path separators ('/' only, no
+    # trailing slash) and dedup. Without this, the same repo can sit in the
+    # registry twice as `D:\foo` and `D:/foo` — happens on Windows whenever
+    # one entry came from Resolve-Path (backslashes) and another from git
+    # rev-parse (forward slashes). Mirrors the jq healing pass in the sh port.
+    $raw = @(Registry-Read)
+    foreach ($e in $raw) {
+        if ($e.PSObject.Properties.Match('project').Count -and $e.project) {
+            $e.project = ($e.project -replace '\\', '/') -replace '/+$', ''
+        }
+    }
+    $seen = @{}
+    $entries = @()
+    foreach ($e in $raw) {
+        $key = '{0}|{1}|{2}|{3}|{4}' -f $e.tool, $e.type, $e.scope, $e.target, $e.project
+        if (-not $seen.ContainsKey($key)) {
+            $seen[$key] = $true
+            $entries += $e
+        }
+    }
     if ($entries.Count -eq 0) {
         Write-Output '  (registry empty — nothing recorded)'
         if ($Cmd -eq 'remove') { Registry-Write @() }

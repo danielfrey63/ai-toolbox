@@ -30,7 +30,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.25.158'
+APP_VERSION='0.26.162'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -768,6 +768,13 @@ registry_add() {  # name type path scope target project
         hook)        target='' ;;
         config|bin)  scope=global; target=''; project='' ;;
     esac
+    # Path keys: '/' separators + no trailing slash — Windows can pass either
+    # form (Resolve-Path gives '\', git rev-parse gives '/') and raw input may
+    # have a trailing slash. Symmetric with the PS port (_Registry-Normalize).
+    if [ -n "$project" ]; then
+        project=${project//\\//}
+        while [ "${project%/}" != "$project" ]; do project=${project%/}; done
+    fi
     local data
     data=$(registry_read | jq \
         --arg tool "$1" --arg type "$2" --arg path "$3" \
@@ -789,6 +796,10 @@ registry_remove() {  # name type scope target project
         hook)        target='' ;;
         config|bin)  scope=global; target=''; project='' ;;
     esac
+    if [ -n "$project" ]; then
+        project=${project//\\//}
+        while [ "${project%/}" != "$project" ]; do project=${project%/}; done
+    fi
     local data
     data=$(registry_read | jq \
         --arg tool "$1" --arg scope "$scope" --arg target "$target" --arg project "$project" '
@@ -803,11 +814,14 @@ registry_remove() {  # name type scope target project
 # only install parameters — the handlers re-verify against reality.
 registry_sweep() {
     local entries n i e tool type path mkt plg cmdname bin_src kept='[]'
-    # Heal three legacy registry pathologies in one pass:
+    # Heal four legacy registry pathologies in one pass:
     #   1. {value:[...], Count:n} hulls from PS 5.1 ConvertTo-Json on single-
     #      element arrays — flatten them into their inner entries.
     #   2. Stray whitespace in tool/type/scope/… (e.g. type="bin ") — trim it.
-    #   3. Functionally identical entries that only differed by whitespace — dedup.
+    #   3. Mixed project-path forms — backslashes vs forward slashes, with or
+    #      without a trailing slash. Symmetric with the per-call normalization
+    #      in registry_add (sh) and _Registry-Normalize (ps1).
+    #   4. Functionally identical entries that only differ by the above — dedup.
     entries=$(registry_read | jq '
         def unwrap: if type == "object" and has("value") and has("Count")
                        and (keys | length) <= 2
@@ -815,8 +829,12 @@ registry_sweep() {
         def trim: if type == "string"
                   then sub("^[[:space:]]+"; "") | sub("[[:space:]]+$"; "")
                   else . end;
+        def normproj: if has("project") and (.project // "") != ""
+                      then .project |= (gsub("\\\\"; "/") | sub("/+$"; ""))
+                      else . end;
         [.[] | unwrap]
         | map(with_entries(.value |= trim))
+        | map(normproj)
         | unique_by([.tool, .type, .scope, .target, .project])
     ' 2>/dev/null)
     n=$(printf '%s' "$entries" | jq 'length' 2>/dev/null || printf 0)
