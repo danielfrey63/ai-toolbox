@@ -432,17 +432,34 @@ def diarize_pyannote_local(
     """Run pyannote.audio locally. Heavy: downloads model on first use.
 
     Requires:
-      - `pyannote.audio` Python package: `pip install pyannote.audio`
+      - `pyannote.audio` Python package. Battle-tested pin set (4.x needs
+        torchcodec, whose DLL loading is broken on Windows, plus an extra
+        gated HF repo for its PLDA data):
+            pip install "pyannote.audio<4" "torch==2.6.*" "torchaudio==2.6.*" \
+                "huggingface_hub<1.0" matplotlib soundfile
+        For GPU, pip needs the explicit build tag to swap a CPU wheel:
+            pip install "torch==2.6.0+cu124" "torchaudio==2.6.0+cu124" \
+                --index-url https://download.pytorch.org/whl/cu124
+        Prefer a dedicated venv - the pins above conflict with environments
+        that carry a recent transformers/torchvision.
       - HuggingFace token in $HF_TOKEN / $HUGGINGFACE_TOKEN, AND license
-        acceptance for the pyannote/speaker-diarization-3.1 model on the
-        Hugging Face website.
+        acceptance for BOTH gated repos on the Hugging Face website:
+        pyannote/speaker-diarization-3.1 and pyannote/segmentation-3.0.
+
+    Speaker count is intentionally left on auto: forcing num_speakers makes
+    the clustering collapse onto the dominant voice on far-field/single-mic
+    recordings (observed: 95% one speaker on a real 2-person meeting, while
+    auto separated cleanly into mergeable clusters). Surplus clusters are
+    cheap - Claude merges/labels them later from transcript context.
     """
     try:
         from pyannote.audio import Pipeline  # type: ignore
     except ImportError as exc:
         raise SystemExit(
             "pyannote.audio is not installed. Install with: "
-            "`pip install pyannote.audio` (heavy; pulls in PyTorch). "
+            '`pip install "pyannote.audio<4" "torch==2.6.*" "torchaudio==2.6.*" '
+            '"huggingface_hub<1.0" matplotlib soundfile` (heavy; see docstring '
+            "for the GPU variant; use a dedicated venv). "
             "Or use --diarize assemblyai / pyannote-api for a cloud backend. "
             f"({exc})"
         )
@@ -452,14 +469,55 @@ def diarize_pyannote_local(
         raise SystemExit(
             "HF_TOKEN missing - pyannote.audio needs a Hugging Face token "
             "to download the diarization model. Set HF_TOKEN in your env or "
-            "in ~/.config/watch/.env. Also accept the model license at "
-            "https://huggingface.co/pyannote/speaker-diarization-3.1."
+            "in ~/.config/watch/.env. Also accept the model licenses at "
+            "https://huggingface.co/pyannote/speaker-diarization-3.1 and "
+            "https://huggingface.co/pyannote/segmentation-3.0."
         )
 
+    import torch  # pyannote.audio guarantees torch is present
+
+    # torch>=2.6 flips torch.load to weights_only=True, which rejects the
+    # pyannote 3.x checkpoints (official, trusted HF repos). Restore the
+    # legacy behaviour only for the duration of the model load.
+    _orig_torch_load = torch.load
+
+    def _load_full(*args, **kwargs):
+        kwargs["weights_only"] = False
+        return _orig_torch_load(*args, **kwargs)
+
     print(f"[watch] loading {PYANNOTE_MODEL} locally (first run downloads ~1 GB)...", file=sys.stderr)
-    pipeline = Pipeline.from_pretrained(PYANNOTE_MODEL, use_auth_token=hf_token)
-    print(f"[watch] running pyannote.audio on {audio_path.name}...", file=sys.stderr)
-    diarization = pipeline(str(audio_path))
+    torch.load = _load_full
+    try:
+        try:
+            pipeline = Pipeline.from_pretrained(PYANNOTE_MODEL, token=hf_token)
+        except TypeError:
+            # pyannote<3.4 / older hub combos still expect use_auth_token=
+            pipeline = Pipeline.from_pretrained(PYANNOTE_MODEL, use_auth_token=hf_token)
+    finally:
+        torch.load = _orig_torch_load
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    pipeline.to(torch.device(device))
+
+    # Feed audio in-memory: pyannote's own file decoding (torchaudio /
+    # torchcodec depending on version) is fragile on Windows. soundfile
+    # reads the mono 16 kHz audio that watch.py extracts just fine; fall
+    # back to path input where soundfile is unavailable.
+    audio_input: object = str(audio_path)
+    try:
+        import soundfile as sf  # type: ignore
+
+        data, sample_rate = sf.read(str(audio_path), dtype="float32")
+        waveform = torch.from_numpy(data)
+        if waveform.ndim == 2:  # (time, channels) -> mono
+            waveform = waveform.mean(dim=1)
+        audio_input = {"waveform": waveform.unsqueeze(0), "sample_rate": sample_rate}
+    except Exception as exc:  # noqa: BLE001 - any decode issue falls back
+        print(f"[watch] soundfile preload unavailable ({exc}); "
+              "letting pyannote decode the file itself", file=sys.stderr)
+
+    print(f"[watch] running pyannote.audio on {audio_path.name} ({device})...", file=sys.stderr)
+    diarization = pipeline(audio_input)
 
     turns: list[dict] = []
     for turn, _, speaker in diarization.itertracks(yield_label=True):
