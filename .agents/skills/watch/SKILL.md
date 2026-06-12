@@ -64,6 +64,7 @@ Within a single session, you can skip Step 0 on follow-up `/watch` calls — onc
 
 - User pastes a video URL (YouTube, Vimeo, X, TikTok, Twitch clip, most yt-dlp-supported sites) and asks about it.
 - User points at a local video file (`.mp4`, `.mov`, `.mkv`, `.webm`, etc.) and asks about it.
+- User points at a local **audio** file (`.m4a`, `.mp3`, `.wav`, voice memos, meeting recordings) — the frame stages are skipped automatically; transcription, diarization, and the report pipeline run normally. Combine `--whisper whisper-local --diarize pyannote-local` for fully on-device processing of confidential recordings.
 - User types `/watch <url-or-path> [question]`.
 
 ## Recommended limits

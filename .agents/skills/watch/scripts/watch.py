@@ -452,6 +452,18 @@ def main() -> int:
     meta = get_metadata(video_path)
     full_duration = meta["duration_seconds"]
 
+    # Audio-only sources (.m4a voice memos, .mp3, podcast files, ...) carry
+    # no video stream - every frame stage (scdet, sampling, extraction)
+    # would fail on them. Skip frames wholesale; the transcript + diarization
+    # + report pipeline is fully functional without them.
+    audio_only = not meta.get("has_video", True)
+    if audio_only:
+        print(
+            "[watch] audio-only source (no video stream) - skipping frame "
+            "extraction; transcript/diarization pipeline runs normally",
+            file=sys.stderr,
+        )
+
     start_sec = parse_time(args.start)
     end_sec = parse_time(args.end)
 
@@ -512,7 +524,7 @@ def main() -> int:
     cut_times: list[float] = []
     cut_threshold: float | None = None
     threshold_is_auto = args.scene_threshold is None
-    if not args.no_scene:
+    if not args.no_scene and not audio_only:
         thr_label = "auto" if threshold_is_auto else f"{args.scene_threshold:g}"
         print(
             f"[watch] detecting cuts (scdet threshold {thr_label}, "
@@ -537,11 +549,12 @@ def main() -> int:
 
     # Gap-fill regular timestamps per chunk against the cuts that fall in it.
     regular_timestamps: list[float] = []
-    for cs, ce, _cfps, ctarget in chunk_plans:
-        chunk_cuts = [c for c in cut_times if cs <= c < ce]
-        regular_timestamps.extend(
-            gap_fill_timestamps(chunk_cuts, cs, ce, ctarget)
-        )
+    if not audio_only:
+        for cs, ce, _cfps, ctarget in chunk_plans:
+            chunk_cuts = [c for c in cut_times if cs <= c < ce]
+            regular_timestamps.extend(
+                gap_fill_timestamps(chunk_cuts, cs, ce, ctarget)
+            )
     # Note: this prints the *candidate* count. Dedup (if enabled) runs at
     # the end of extract_at_timestamps and will reduce this number; that
     # final figure appears in a later [watch] dedup line. Wording made

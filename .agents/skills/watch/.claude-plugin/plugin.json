@@ -1,6 +1,6 @@
 {
   "name": "watch",
-  "version": "0.8.20",
+  "version": "0.9.21",
   "description": "Let Claude watch a video. Downloads with yt-dlp, extracts gap-filled frames + scdet-detected scene cuts (with settle-delay) with ffmpeg, auto-chunks long videos for dense per-chunk coverage, transcribes via captions / Whisper / AssemblyAI / pyannote diarization (with speaker-name substitution), aggregates resources, and produces a three-file persistent report (protocol + transcript + analysis) with clickable file:// links.",
   "author": {
     "name": "Bradley Bonanno"

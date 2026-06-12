@@ -114,6 +114,7 @@ def get_metadata(video_path: str) -> dict:
         "codec": video_stream.get("codec_name"),
         "size_bytes": int(fmt.get("size") or 0),
         "has_audio": audio_stream is not None,
+        "has_video": bool(video_stream),
         "creation_time": creation_time,
     }
 
