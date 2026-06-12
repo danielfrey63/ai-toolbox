@@ -96,10 +96,11 @@ def pick_backend(preferred: str | None) -> str | None:
     """Resolve `--diarize` to a concrete backend.
 
     `preferred` is one of: None, "auto", "assemblyai", "pyannote-api",
-    "pyannote-local". In "auto" mode we try, in order:
-        1. AssemblyAI    (if ASSEMBLYAI_API_KEY)
+    "pyannote-local". In "auto" mode we try, LOCAL FIRST - nothing leaves
+    the machine unless local processing is unavailable:
+        1. pyannote local (if HF_TOKEN available; managed venv self-provisions)
         2. pyannote.ai   (if PYANNOTE_API_KEY)
-        3. pyannote local (if pyannote.audio installed AND HF_TOKEN available)
+        3. AssemblyAI    (if ASSEMBLYAI_API_KEY)
     Returns the chosen backend name, or None if nothing is configured.
 
     **Explicit choices** (anything other than None/"auto") are now validated
@@ -112,12 +113,12 @@ def pick_backend(preferred: str | None) -> str | None:
     if preferred is None:
         return None
     if preferred == "auto":
-        if _load_env_value("ASSEMBLYAI_API_KEY"):
-            return "assemblyai"
-        if _load_env_value("PYANNOTE_API_KEY"):
-            return "pyannote-api"
         if _has_pyannote_local() and (_load_env_value("HF_TOKEN") or _load_env_value("HUGGINGFACE_TOKEN")):
             return "pyannote-local"
+        if _load_env_value("PYANNOTE_API_KEY"):
+            return "pyannote-api"
+        if _load_env_value("ASSEMBLYAI_API_KEY"):
+            return "assemblyai"
         return None
 
     # Explicit backend choice - validate the matching credential now so the

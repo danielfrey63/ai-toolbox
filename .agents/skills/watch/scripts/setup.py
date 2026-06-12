@@ -815,17 +815,17 @@ def run_venv_worker(script_name: str, args: list[str],
 def _diarize_backends_configured() -> list[str]:
     """Return diarization backends that have their credentials in place.
 
-    Same priority order as diarize.pick_backend("auto"). Reports
-    *configurability*, not "is the library actually importable" - keep
-    setup.py free of optional-dependency probing.
+    Same priority order as diarize.pick_backend("auto") - local first.
+    Reports *configurability*, not "is the library actually importable" -
+    keep setup.py free of optional-dependency probing.
     """
     out: list[str] = []
-    if _read_env_key("ASSEMBLYAI_API_KEY"):
-        out.append("assemblyai")
-    if _read_env_key("PYANNOTE_API_KEY"):
-        out.append("pyannote-api")
     if _read_env_key("HF_TOKEN") or _read_env_key("HUGGINGFACE_TOKEN"):
         out.append("pyannote-local")
+    if _read_env_key("PYANNOTE_API_KEY"):
+        out.append("pyannote-api")
+    if _read_env_key("ASSEMBLYAI_API_KEY"):
+        out.append("assemblyai")
     return out
 
 

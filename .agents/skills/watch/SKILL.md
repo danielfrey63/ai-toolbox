@@ -1,6 +1,6 @@
 ---
 name: watch
-description: Watch a video (URL or local path). Downloads with yt-dlp, extracts gap-filled frames + scdet-detected cuts (settle-delayed for stable post-transition content), auto-chunks long videos for dense per-chunk coverage, transcribes via captions / Whisper / AssemblyAI / pyannote diarization (with Claude-driven speaker-to-name substitution), and produces a three-file persistent report (`<base>.{md,protocol.md,transcript.md}` next to local sources or under `./watch/<YYYY-MM-DD>-<slug>/` for URLs) plus a Summary that hits the chat with clickable file:// links.
+description: Watch a video or transcribe an audio file (URL or local path; .m4a/.mp3 voice memos and meeting recordings skip the frame stages automatically). Downloads with yt-dlp, extracts gap-filled frames + scdet-detected cuts, auto-chunks long videos, and transcribes via captions or a LOCAL-FIRST cascade (on-device faster-whisper by default, cloud backends as fallback) with speaker diarization ON by default (on-device pyannote, Claude-driven speaker-to-name substitution). Produces a persistent report (`<base>.{md,protocol.md,transcript.md}` plus `transcript-kompakt.md` when diarized) and a Summary that hits the chat with clickable file:// links.
 argument-hint: "<video-url-or-path> [question]"
 allowed-tools: Bash, Read, AskUserQuestion
 homepage: https://github.com/danielfrey63/ai-toolbox
@@ -64,7 +64,7 @@ Within a single session, you can skip Step 0 on follow-up `/watch` calls — onc
 
 - User pastes a video URL (YouTube, Vimeo, X, TikTok, Twitch clip, most yt-dlp-supported sites) and asks about it.
 - User points at a local video file (`.mp4`, `.mov`, `.mkv`, `.webm`, etc.) and asks about it.
-- User points at a local **audio** file (`.m4a`, `.mp3`, `.wav`, voice memos, meeting recordings) — the frame stages are skipped automatically; transcription, diarization, and the report pipeline run normally. Combine `--whisper whisper-local --diarize pyannote-local` for fully on-device processing of confidential recordings.
+- User points at a local **audio** file (`.m4a`, `.mp3`, `.wav`, voice memos, meeting recordings) — the frame stages are skipped automatically; transcription, diarization, and the report pipeline run normally. The defaults are already fully on-device (whisper-local + pyannote-local), so confidential recordings need no extra flags.
 - User types `/watch <url-or-path> [question]`.
 
 ## Recommended limits
@@ -91,9 +91,7 @@ Optional flags:
 - `--start T` / `--end T` — focus on a section. Accepts `SS`, `MM:SS`, or `HH:MM:SS`. When either is set, fps auto-scales denser (see "Focusing on a section" below).
 - `--max-frames N` — cap on regular frames per chunk (default 80, hard max 100). In single-chunk modes (focused or `--no-chunk`) this is also the global cap.
 - `--no-chunk` — disable auto-chunking for long videos. Reverts to the old single-pass sparse behavior (100 frames spread thinly across the whole video).
-- `--diarize [BACKEND]` — enable speaker diarization. Output transcript lines become `[MM:SS] [<speaker>] text`. Backends:
-  - **omitted** — diarization off (default; pure Whisper transcript).
-  - **`--diarize`** (no value) — auto-pick the first configured backend, in order: AssemblyAI → pyannote.ai → pyannote local.
+- `--diarize [BACKEND]` — speaker diarization. Output transcript lines become `[MM:SS] [<speaker>] text`. **ON by default** (auto mode): the first configured backend runs, **local first** — pyannote local (HF_TOKEN) → pyannote.ai → AssemblyAI; when none is configured, the run degrades silently to a plain transcript. If the chosen auto backend fails, the cascade falls through to the next configured one. `--no-diarize` turns diarization off; an explicit `--diarize <backend>` pins exactly that backend (no cascade, fails loudly). Backends:
   - **`--diarize assemblyai`** — cloud, all-in-one. Replaces Whisper: one API call returns transcription + speaker labels. Uses `universal-3-pro` (fallback `universal-2`) and `language_detection: true` by default — handles multilingual content (DE-CH + EN + FR/IT references) without an explicit language hint. Needs `ASSEMBLYAI_API_KEY` in env or `.env`; optionally `ASSEMBLYAI_REGION=eu` for EU data residency. ~$0.37/h.
   - **`--diarize pyannote-api`** — cloud pyannote.ai (diarization-only). Runs alongside Whisper; the script aligns speaker turns to Whisper segments by overlap. Needs `PYANNOTE_API_KEY`. Cheaper than AssemblyAI.
   - **`--diarize pyannote-local`** — local pyannote.audio. Free, fully on-device (nothing leaves the machine — the right choice for confidential recordings). Zero manual setup: the heavy ML stack lives in a **managed venv** at `~/.config/watch/venv/`, provisioned idempotently on first use (or explicitly via `setup.py --venv`); the diarization itself runs as a worker subprocess (`pyannote_worker.py`) inside that venv, so the host Python is never touched. GPU is auto-detected (nvidia-smi → cu124 wheels; a 41-min recording diarizes in ~90 s on GPU vs ~36 min on CPU). Requirements that remain with the user: a Hugging Face token (`HF_TOKEN`) plus license acceptance for **both** gated repos: `pyannote/speaker-diarization-3.1` *and* `pyannote/segmentation-3.0`. Speaker count stays on auto by design — forcing `num_speakers` collapses onto the dominant voice on single-mic recordings (observed: 95% one speaker on a real 2-person meeting); surplus mini-clusters are merged/labeled afterwards by Claude from transcript context. Diarization aligns to the Whisper transcript.
@@ -101,7 +99,7 @@ Optional flags:
 - `--resolution W` — change frame width in px (default 512; bump to 1024 only if the user needs to read on-screen text)
 - `--fps F` — override auto-fps (clamped to 2 fps max)
 - `--out-dir DIR` — keep working files somewhere specific (default: an auto-generated tmp dir)
-- `--whisper azure-diarize|groq|openai|whisper-local` — force a specific transcription backend (auto order: azure-diarize → groq → openai → whisper-local). `whisper-local` = faster-whisper fully on-device in the managed venv (`~/.config/watch/venv/`, self-provisions on first use, GPU auto-detected) — no key, nothing leaves the machine; the right choice for confidential recordings.
+- `--whisper azure-diarize|groq|openai|whisper-local` — pin a specific transcription backend (no cascade, fails loudly). Default is a **local-first cascade**: whisper-local → azure-diarize → groq → openai — each backend that fails falls through to the next configured one. `whisper-local` = faster-whisper fully on-device in the managed venv (`~/.config/watch/venv/`, self-provisions on first use, GPU auto-detected) — no key, nothing leaves the machine.
 - `--no-whisper` — disable the Whisper fallback entirely (frames-only if no captions)
 - `--no-scene` — disable scdet-based cut detection (default: enabled with auto-tuned threshold, see "Scene cut detection" below)
 - `--scene-threshold F` — override the auto-detected scdet threshold (default: auto via knee-point on the score distribution; lower = more sensitive)
@@ -397,13 +395,13 @@ Skip the compact file for non-diarized transcripts — without speakers it would
 The script gets a timestamped transcript in one of two ways:
 
 1. **Native captions (free, preferred).** yt-dlp pulls manual or auto-generated subtitles from the source platform if available.
-2. **STT fallback.** If no captions came back (or the source is a local file), the script extracts audio (`ffmpeg -vn -ac 1 -ar 16000 -b:a 64k`, ~0.5 MB/min) and runs the first configured backend (auto order):
+2. **STT cascade, local first.** If no captions came back (or the source is a local file), the script extracts audio (`ffmpeg -vn -ac 1 -ar 16000 -b:a 64k`, ~0.5 MB/min) and tries the configured backends in order — each failure cascades to the next:
+   - **whisper-local** (DEFAULT) — faster-whisper **fully on-device** (large-v3 on CUDA, medium/int8 CPU fallback) in the managed venv; always available, no key, self-provisions on first use. Nothing leaves the machine.
    - **Azure** — `gpt-4o-transcribe-diarize` on a private tenant (transcription + speakers in one call). Needs `AZURE_TRANSCRIBE_DIARIZE_URL` + `_KEY`.
    - **Groq** — `whisper-large-v3` cloud API. Cheaper/faster than OpenAI. Get a key at console.groq.com/keys.
    - **OpenAI** — `whisper-1` cloud API. Get a key at platform.openai.com/api-keys.
-   - **whisper-local** — faster-whisper **fully on-device** (large-v3 on CUDA, medium/int8 CPU fallback) in the managed venv; always available, no key, self-provisions on first use. Auto-selected only when no cloud backend is configured; force with `--whisper whisper-local` for confidential recordings.
 
-Keys live in `~/.config/watch/.env`. Override the auto order with `--whisper <backend>`. Use `--no-whisper` to skip the fallback entirely.
+Keys live in `~/.config/watch/.env`. `--whisper <backend>` pins one backend and disables the cascade. Use `--no-whisper` to skip the fallback entirely.
 
 **Iteration caching:** with a stable `--out-dir DIR`, the STT result (`segments.json`) and diarization turns (`turns.json`) are cached in the work dir — a re-run against the same dir skips both expensive steps. Default temp work dirs are fresh per run.
 

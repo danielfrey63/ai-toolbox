@@ -935,16 +935,16 @@ class WhisperLocalBackend(STTBackend):
             )
 
 
-# Backend factories in auto-selection priority order - the private Azure
-# backend first, so /watch prefers it whenever it is configured; the local
-# backend last, as the always-available zero-key fallback (self-provisions
-# its venv on first use). Factories (not instances) so construction - and
+# Backend factories in auto-selection priority order - LOCAL FIRST: nothing
+# leaves the machine unless the local path actually fails, then the cascade
+# moves on to the configured cloud backends (private Azure tenant before the
+# public Whisper APIs). Factories (not instances) so construction - and
 # config lookup - is deferred until a backend is actually chosen.
 BACKEND_FACTORIES = {
+    "whisper-local": lambda: WhisperLocalBackend(),
     "azure-diarize": lambda: AzureDiarizeBackend(),
     "groq": lambda: WhisperBackend("groq"),
     "openai": lambda: WhisperBackend("openai"),
-    "whisper-local": lambda: WhisperLocalBackend(),
 }
 
 
@@ -977,6 +977,25 @@ def select_backend(preferred: str | None = None) -> STTBackend | None:
         if ok:
             return backend
     return None
+
+
+def select_backends(preferred: str | None = None) -> list[STTBackend]:
+    """Resolve the STT cascade: every backend to try, in order.
+
+    With `preferred`, the user pinned one backend - no cascade (explicit
+    choices fail loudly, they don't silently degrade). Otherwise return ALL
+    configured backends in BACKEND_FACTORIES order; the caller tries them
+    one after another until a transcription succeeds.
+    """
+    if preferred:
+        return [select_backend(preferred)]
+    out: list[STTBackend] = []
+    for name in BACKEND_FACTORIES:
+        backend = get_backend(name)
+        ok, _ = backend.available()
+        if ok:
+            out.append(backend)
+    return out
 
 
 def _plan_chunks(

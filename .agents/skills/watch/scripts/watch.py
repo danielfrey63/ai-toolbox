@@ -212,7 +212,7 @@ from frames import (  # noqa: E402
 )
 from resources import collect as collect_resources, format_section as format_resources  # noqa: E402
 from transcribe import filter_range, format_transcript, parse_vtt  # noqa: E402
-from stt import extract_audio, select_backend, transcribe_video  # noqa: E402
+from stt import extract_audio, select_backend, select_backends, transcribe_video  # noqa: E402
 
 
 def main() -> int:
@@ -340,17 +340,26 @@ def main() -> int:
         "--diarize",
         nargs="?",
         const="auto",
-        default=None,
+        default="auto",
         choices=["auto", "assemblyai", "pyannote-api", "pyannote-local"],
-        help="Enable speaker diarization. With no value: auto-pick the best "
-             "available backend (AssemblyAI > pyannote.ai > pyannote local). "
-             "Explicit choices: 'assemblyai' (cloud, transcription + diarization "
-             "in one call - replaces Whisper), 'pyannote-api' (cloud pyannote.ai, "
-             "diarization aligned to Whisper transcript), 'pyannote-local' "
-             "(pyannote.audio locally; needs pyannote.audio package + HF_TOKEN). "
-             "Requires the matching API key in ~/.config/watch/.env when not local.",
+        help="Speaker diarization backend. DEFAULT: auto - ON whenever a "
+             "backend is configured, local first (pyannote local with "
+             "HF_TOKEN > pyannote.ai > AssemblyAI); silently off when "
+             "nothing is configured. Explicit choices pin one backend: "
+             "'pyannote-local' (fully on-device, managed venv), "
+             "'pyannote-api' (cloud pyannote.ai), 'assemblyai' (cloud, "
+             "transcription + diarization in one call - replaces Whisper). "
+             "Use --no-diarize to turn diarization off.",
+    )
+    ap.add_argument(
+        "--no-diarize",
+        action="store_true",
+        help="Disable speaker diarization (overrides the on-by-default auto mode).",
     )
     args = ap.parse_args()
+
+    if args.no_diarize:
+        args.diarize = None
 
     max_frames = min(args.max_frames, 100)
 
@@ -401,19 +410,19 @@ def main() -> int:
         else "stt=NONE (no transcription backend configured)"
     )
     diarize_avail = []
-    if _load_diarize_env("ASSEMBLYAI_API_KEY"):
-        diarize_avail.append("assemblyai")
-    if _load_diarize_env("PYANNOTE_API_KEY"):
-        diarize_avail.append("pyannote-api")
     if _load_diarize_env("HF_TOKEN") or _load_diarize_env("HUGGINGFACE_TOKEN"):
         diarize_avail.append("pyannote-local")
+    if _load_diarize_env("PYANNOTE_API_KEY"):
+        diarize_avail.append("pyannote-api")
+    if _load_diarize_env("ASSEMBLYAI_API_KEY"):
+        diarize_avail.append("assemblyai")
     diarize_status = (
         f"diarize available: {', '.join(diarize_avail)}"
         if diarize_avail else "diarize: no backend configured"
     )
     diarize_active = (
         f"diarize requested: {args.diarize}"
-        if args.diarize else "diarize: off (--diarize to enable)"
+        if args.diarize else "diarize: off (--no-diarize set)"
     )
     print(f"[watch] transcript: {stt_status} | {diarize_active}", file=sys.stderr)
     if args.diarize:
@@ -606,13 +615,15 @@ def main() -> int:
         key=lambda f: (f["timestamp_seconds"], f.get("kind") == "cut"),
     )
 
-    # `--diarize` without a value auto-picks the first configured backend.
+    # Diarization is on by default (auto = local first). When nothing is
+    # configured, default-auto degrades silently to a plain transcript;
+    # only an *explicit* --diarize on the command line earns a warning.
     diarize_backend = pick_diarize_backend(args.diarize)
-    if args.diarize and diarize_backend is None:
+    if args.diarize and diarize_backend is None and "--diarize" in sys.argv:
         print(
             "[watch] --diarize requested but no backend configured - set "
-            "ASSEMBLYAI_API_KEY, PYANNOTE_API_KEY, or install pyannote.audio. "
-            "Continuing without diarization.",
+            "HF_TOKEN (pyannote local), PYANNOTE_API_KEY, or "
+            "ASSEMBLYAI_API_KEY. Continuing without diarization.",
             file=sys.stderr,
         )
 
@@ -679,20 +690,23 @@ def main() -> int:
             print(f"[watch] ignoring corrupt segments.json ({exc})", file=sys.stderr)
 
     if not transcript_segments and not args.no_whisper:
-        stt_backend = None
+        stt_cascade: list = []
         try:
-            stt_backend = select_backend(args.whisper or None)
+            stt_cascade = select_backends(args.whisper or None)
         except SystemExit as exc:
             # --whisper X was set explicitly but X is not configured.
             print(f"[watch] {exc}", file=sys.stderr)
-        if stt_backend is None and args.whisper is None:
+        if not stt_cascade and args.whisper is None:
             setup_py = SCRIPT_DIR / "setup.py"
             print(
                 "[watch] no subtitles and no transcription backend configured - "
                 f"run `python3 {setup_py}` to enable transcription",
                 file=sys.stderr,
             )
-        if stt_backend is not None:
+        # Cascade: local first (BACKEND_FACTORIES order), each failure falls
+        # through to the next configured backend. An explicit --whisper pins
+        # the cascade to that single backend - no silent degradation.
+        for i, stt_backend in enumerate(stt_cascade):
             try:
                 all_segments, used_backend = transcribe_video(
                     video_path,
@@ -708,12 +722,33 @@ def main() -> int:
                 transcript_source = f"transcript ({used_backend})"
                 # Transcription extracted the audio as a side effect - reuse it.
                 audio_path = work / "audio.mp3"
+                break
             except SystemExit as exc:
-                print(f"[watch] transcription failed: {exc}", file=sys.stderr)
+                nxt = stt_cascade[i + 1].name if i + 1 < len(stt_cascade) else None
+                if nxt:
+                    print(
+                        f"[watch] {stt_backend.name} failed ({exc}) - "
+                        f"cascading to {nxt}",
+                        file=sys.stderr,
+                    )
+                else:
+                    print(f"[watch] transcription failed: {exc}", file=sys.stderr)
 
     # Pyannote runs alongside Whisper and aligns to the transcript;
     # AssemblyAI already delivered speakers above.
     if transcript_segments and diarize_backend in ("pyannote-api", "pyannote-local"):
+        # Cascade: the chosen backend first, then - in auto mode only - the
+        # other configured pyannote variant. An explicit --diarize pin never
+        # degrades silently. (AssemblyAI is not a post-hoc candidate: it
+        # replaces the whole transcription and is handled earlier.)
+        from diarize import _load_env_value as _denv
+        diarize_cascade = [diarize_backend]
+        if args.diarize == "auto":
+            if (diarize_backend == "pyannote-local" and _denv("PYANNOTE_API_KEY")):
+                diarize_cascade.append("pyannote-api")
+            elif (diarize_backend == "pyannote-api"
+                    and (_denv("HF_TOKEN") or _denv("HUGGINGFACE_TOKEN"))):
+                diarize_cascade.append("pyannote-local")
         try:
             if audio_path is None or not audio_path.exists():
                 audio_path = extract_audio(video_path, work / "audio.mp3")
@@ -732,10 +767,23 @@ def main() -> int:
                 except ValueError as exc:
                     print(f"[watch] ignoring corrupt turns.json ({exc})", file=sys.stderr)
             if turns is None:
-                if diarize_backend == "pyannote-api":
-                    turns = diarize_pyannote_api(audio_path)
-                else:
-                    turns = diarize_pyannote_local(audio_path)
+                for i, candidate in enumerate(diarize_cascade):
+                    try:
+                        if candidate == "pyannote-api":
+                            turns = diarize_pyannote_api(audio_path)
+                        else:
+                            turns = diarize_pyannote_local(audio_path)
+                        diarize_backend = candidate
+                        break
+                    except SystemExit as exc:
+                        if i + 1 < len(diarize_cascade):
+                            print(
+                                f"[watch] {candidate} failed ({exc}) - "
+                                f"cascading to {diarize_cascade[i + 1]}",
+                                file=sys.stderr,
+                            )
+                        else:
+                            raise
                 turns_cache.write_text(json.dumps(turns), encoding="utf-8")
             transcript_segments = align_speakers(transcript_segments, turns)
             speakers = sorted({t["speaker"] for t in turns}) if turns else []
