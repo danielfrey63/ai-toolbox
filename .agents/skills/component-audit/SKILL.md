@@ -2,7 +2,7 @@
 name: component-audit
 description: Audit a codebase for component-orientation drift — finds DOM/UI-construction bypasses, hand-rolled patterns that should go through shared factories, and refactor opportunities, then routes them through the right component. Use after any UI-touching change, or when the user asks to "verify component consistency", "check for duplication", "audit the components". Works on any project — reads the project's component inventory from `.claude/component-inventory.md` (or a path passed as argument).
 metadata:
-  version: "0.2.7"
+  version: "0.3.8"
 ---
 
 # Component-Audit Skill
@@ -107,8 +107,9 @@ Do NOT modify files. Read-only.
 If the project has no inventory and the user wants one, propose:
 
 1. Quickly survey the target file(s) for repeated patterns (DOM-construction helpers, factory-like functions returning markup, layout-CSS classes referenced from JS).
-2. Draft `.claude/component-inventory.md` with the structure above — factories you observed, bypass-grep recipes derived from their distinctive markers.
-3. Show the draft, let the user confirm/edit, then commit it.
+2. Pick the path so the inventory ends up in version control: if `git check-ignore .claude/component-inventory.md` reports the path as ignored (many repos gitignore `.claude/` wholesale), write `COMPONENT_INVENTORY.md` in the project root instead — it is resolution step 3 and stays committable without .gitignore surgery. The inventory is a living document tied to the codebase; a machine-local copy silently rots.
+3. Draft the inventory with the structure above — factories you observed, bypass-grep recipes derived from their distinctive markers.
+4. Show the draft, let the user confirm/edit, then commit it.
 
 Don't run the audit on a bootstrapped inventory until the user has reviewed it — false-positive-heavy audits waste the refactor turn.
 
