@@ -4,6 +4,7 @@
 Modes:
   setup.py --check      Silent preflight. Exit 0 if ready, 2/3/4 on failure.
   setup.py --json       Machine-readable status for Claude to parse.
+  setup.py --venv       Provision/repair the managed ML venv (pyannote/whisper local).
   setup.py              Installer. Auto-installs deps, scaffolds .env, marks SETUP_COMPLETE.
 
 Design:
@@ -44,6 +45,35 @@ IS_WINDOWS = platform.system() == "Windows"
 # binaries (chmod +x on Unix, .exe on Windows), not config. Same directory on
 # both platforms so the path scripts hand to subprocess is trivially portable.
 WATCH_BIN_DIR = Path.home() / ".watch" / "bin"
+
+# ===========================================================================
+# Managed venv for the local ML backends (pyannote-local, whisper-local).
+#
+# The pyannote/faster-whisper dependency stack is too fragile to import into
+# whatever Python happens to run watch.py (battle-tested on Windows: pyannote
+# 4.x torchcodec DLLs, torch>=2.6 weights_only, hub 1.x API breaks, conflicts
+# with any env carrying recent transformers/torchvision). So the heavy code
+# runs in *worker subprocesses* inside a skill-owned venv, provisioned
+# idempotently next to the rest of the skill state in ~/.config/watch/.
+# The host process stays stdlib-only.
+# ===========================================================================
+VENV_DIR = CONFIG_DIR / "venv"
+VENV_MARKER = VENV_DIR / ".provisioned.json"
+
+# Battle-tested pin set - change it and provisioning self-heals on the next
+# ensure_venv() because the marker signature no longer matches.
+VENV_PINS = [
+    "pyannote.audio==3.3.2",   # 4.x is broken on Windows + extra gated repo
+    "huggingface_hub==0.25.2", # 1.x drops use_auth_token paths pyannote needs
+    "matplotlib",              # imported unconditionally by pyannote 3.x
+    "soundfile",               # in-memory decode, bypasses torchaudio backends
+    "faster-whisper==1.2.1",   # local Whisper via ctranslate2 (torch-free)
+]
+TORCH_PINS_CPU = ["torch==2.6.0", "torchaudio==2.6.0"]
+# pip refuses to swap an installed CPU wheel for CUDA without the explicit
+# build tag, hence the +cu124 pins plus the dedicated index.
+TORCH_PINS_GPU = ["torch==2.6.0+cu124", "torchaudio==2.6.0+cu124"]
+TORCH_GPU_INDEX = "https://download.pytorch.org/whl/cu124"
 
 # Auto-download sources (Linux+Windows). macOS still routes through Homebrew.
 # All three are stable URLs that always point at the current release; no
@@ -637,6 +667,151 @@ def _install_hint_windows(missing: list[str]) -> str:
     return "\n  ".join(hints) if hints else "nothing to install"
 
 
+def venv_python() -> Path:
+    """Path of the managed venv's interpreter (existence not guaranteed)."""
+    sub = ("Scripts", "python.exe") if IS_WINDOWS else ("bin", "python")
+    return VENV_DIR.joinpath(*sub)
+
+
+def _gpu_available() -> bool:
+    """CUDA GPU present? nvidia-smi on PATH and answering is good enough."""
+    smi = shutil.which("nvidia-smi")
+    if not smi:
+        return False
+    try:
+        return subprocess.run(
+            [smi, "-L"], capture_output=True, timeout=10
+        ).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _venv_signature(gpu: bool) -> str:
+    """Fingerprint of the desired venv state - pins + torch flavor + python."""
+    import hashlib
+
+    payload = json.dumps({
+        "pins": VENV_PINS,
+        "torch": TORCH_PINS_GPU if gpu else TORCH_PINS_CPU,
+        "python": f"{sys.version_info.major}.{sys.version_info.minor}",
+    }, sort_keys=True)
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+def venv_status() -> dict:
+    """Desired-state check: {'ready': bool, 'reason': str, 'gpu': bool}."""
+    gpu = _gpu_available()
+    if not venv_python().exists():
+        return {"ready": False, "reason": "venv missing", "gpu": gpu}
+    try:
+        marker = json.loads(VENV_MARKER.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"ready": False, "reason": "marker missing/corrupt", "gpu": gpu}
+    if marker.get("signature") != _venv_signature(gpu):
+        return {"ready": False, "reason": "pins or GPU availability changed", "gpu": gpu}
+    return {"ready": True, "reason": "", "gpu": gpu}
+
+
+def cmd_provision_venv(force: bool = False) -> int:
+    """Create/repair the managed ML venv. Idempotent: no-op when ready.
+
+    Mutations only happen when the actual state differs from the desired
+    state (or --force). Safe to re-run after an aborted install - pip's
+    wheel cache makes the retry cheap.
+    """
+    status = venv_status()
+    if status["ready"] and not force:
+        sys.stderr.write(f"[setup] ML venv ready: {VENV_DIR}\n")
+        return 0
+
+    gpu = status["gpu"]
+    flavor = "GPU (cu124)" if gpu else "CPU"
+    sys.stderr.write(
+        f"[setup] provisioning ML venv ({flavor}) at {VENV_DIR} "
+        f"({status['reason'] or 'forced'}) - one-time download, "
+        f"{'~2.5 GB' if gpu else '~300 MB'}...\n"
+    )
+
+    # Recreate from scratch when the interpreter is missing or the marker
+    # records a different Python - in-place pip surgery across interpreter
+    # versions is not worth debugging.
+    py_now = f"{sys.version_info.major}.{sys.version_info.minor}"
+    marker_py = None
+    try:
+        marker_py = json.loads(VENV_MARKER.read_text(encoding="utf-8")).get("python")
+    except (OSError, ValueError):
+        pass
+    if not venv_python().exists() or (marker_py and marker_py != py_now) or force:
+        if VENV_DIR.exists():
+            shutil.rmtree(VENV_DIR)
+        result = subprocess.run([sys.executable, "-m", "venv", str(VENV_DIR)])
+        if result.returncode != 0:
+            sys.stderr.write("[setup] ERROR: venv creation failed\n")
+            return 1
+
+    pip = [str(venv_python()), "-m", "pip", "install", "--quiet"]
+    # torch first (own index for GPU) so nothing pulls a CPU torch as a dep.
+    torch_cmd = pip + (TORCH_PINS_GPU + ["--index-url", TORCH_GPU_INDEX] if gpu
+                       else TORCH_PINS_CPU)
+    if subprocess.run(torch_cmd).returncode != 0:
+        sys.stderr.write("[setup] ERROR: torch install failed\n")
+        return 1
+    if subprocess.run(pip + VENV_PINS).returncode != 0:
+        sys.stderr.write("[setup] ERROR: ML pins install failed\n")
+        return 1
+
+    VENV_MARKER.write_text(json.dumps({
+        "signature": _venv_signature(gpu),
+        "gpu": gpu,
+        "python": py_now,
+        "pins": VENV_PINS + (TORCH_PINS_GPU if gpu else TORCH_PINS_CPU),
+    }, indent=2), encoding="utf-8")
+    sys.stderr.write(f"[setup] ML venv ready: {VENV_DIR}\n")
+    return 0
+
+
+def ensure_venv() -> Path:
+    """Return the venv's python, provisioning on demand. SystemExit on failure.
+
+    This is the lazy entry point the worker launchers (diarize.py, stt.py)
+    call - first use of a local backend triggers the one-time provisioning.
+    """
+    if not venv_status()["ready"]:
+        if cmd_provision_venv() != 0:
+            raise SystemExit(
+                "managed ML venv provisioning failed - re-run "
+                f"`python {Path(__file__).resolve()} --venv` to retry/repair"
+            )
+    return venv_python()
+
+
+def run_venv_worker(script_name: str, args: list[str],
+                    env_extra: dict[str, str] | None = None) -> str:
+    """Run a worker script inside the managed venv, return its stdout.
+
+    Worker contract: JSON result on stdout, progress on stderr (inherited so
+    the user sees it live). Non-zero exit raises SystemExit with the tail of
+    the captured stdout for context.
+    """
+    worker = Path(__file__).resolve().parent / script_name
+    env = dict(os.environ)
+    if env_extra:
+        env.update(env_extra)
+    result = subprocess.run(
+        [str(ensure_venv()), str(worker), *args],
+        stdout=subprocess.PIPE,  # JSON result; stderr stays live on the console
+        text=True,
+        encoding="utf-8",
+        env=env,
+    )
+    if result.returncode != 0:
+        raise SystemExit(
+            f"{script_name} failed (exit {result.returncode}): "
+            f"{(result.stdout or '')[-500:]}"
+        )
+    return result.stdout
+
+
 def _diarize_backends_configured() -> list[str]:
     """Return diarization backends that have their credentials in place.
 
@@ -659,10 +834,16 @@ def _status() -> dict:
     missing = _check_binaries()
     has_key, backend = _have_api_key()
     diarize_configured = _diarize_backends_configured()
+    venv = venv_status()
+    # A ready ML venv is a full transcription path of its own (whisper-local),
+    # so "no cloud key" no longer blocks readiness when the venv is in place.
+    has_transcription = has_key or venv["ready"]
+    if not has_key and venv["ready"]:
+        backend = "whisper-local"
 
-    if not missing and has_key:
+    if not missing and has_transcription:
         status = "ready"
-    elif missing and not has_key:
+    elif missing and not has_transcription:
         status = "needs_install_and_key"
     elif missing:
         status = "needs_install"
@@ -676,6 +857,8 @@ def _status() -> dict:
         "whisper_backend": backend,
         "has_api_key": has_key,
         "diarize_configured": diarize_configured,
+        "local_venv": {"ready": venv["ready"], "gpu": venv["gpu"],
+                       "path": str(VENV_DIR)},
         "config_file": str(CONFIG_FILE),
         "platform": platform.system(),
     }
@@ -699,10 +882,16 @@ def cmd_check() -> int:
     s = _status()
 
     # Itemise all missing keys, with category. Specific names so the user
-    # knows exactly what to set, not just "something is missing".
+    # knows exactly what to set, not just "something is missing". A ready
+    # ML venv (whisper-local) satisfies the transcription requirement
+    # without any cloud key.
     missing_required: list[str] = []
-    if not _read_env_key("GROQ_API_KEY") and not _read_env_key("OPENAI_API_KEY"):
-        missing_required.append("GROQ_API_KEY or OPENAI_API_KEY")
+    if (not _read_env_key("GROQ_API_KEY") and not _read_env_key("OPENAI_API_KEY")
+            and not s["local_venv"]["ready"]):
+        missing_required.append(
+            "GROQ_API_KEY or OPENAI_API_KEY (or `setup.py --venv` for "
+            "fully local whisper-local)"
+        )
 
     missing_optional: list[str] = []
     if not _diarize_is_dismissed():
@@ -756,11 +945,12 @@ def cmd_check() -> int:
 
     sys.stderr.flush()
 
-    if s["missing_binaries"] and not s["has_api_key"]:
+    has_transcription = s["has_api_key"] or s["local_venv"]["ready"]
+    if s["missing_binaries"] and not has_transcription:
         return 4
     if s["missing_binaries"]:
         return 2
-    if not s["has_api_key"]:
+    if not has_transcription:
         return 3
     # Required features OK, only optional missing -> success exit code,
     # but with the info already printed above.
@@ -873,7 +1063,7 @@ def _print_diarize_status() -> None:
          "https://www.pyannote.ai/",
          have_pyannote),
         ("HF_TOKEN",
-         "pyannote local - runs on your machine (needs `pip install pyannote.audio`)",
+         "pyannote local - fully on-device (managed venv, auto-provisioned on first use)",
          "https://huggingface.co/pyannote/speaker-diarization-3.1",
          have_hf),
     ]
@@ -915,6 +1105,9 @@ def main() -> int:
         if arg == "--install-binaries":
             force = "--force" in sys.argv[2:]
             return cmd_install_binaries(force=force)
+        if arg == "--venv":
+            force = "--force" in sys.argv[2:]
+            return cmd_provision_venv(force=force)
         if arg == "--skip-diarize":
             return cmd_skip_diarize()
     return cmd_install()

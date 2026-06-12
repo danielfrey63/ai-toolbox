@@ -900,14 +900,51 @@ class AzureDiarizeBackend(STTBackend):
         )
 
 
+class WhisperLocalBackend(STTBackend):
+    """faster-whisper in the managed ML venv - fully on-device transcription.
+
+    No API key, nothing leaves the machine: the right default for
+    confidential recordings. Heavy lifting happens in
+    `whisper_local_worker.py` inside the venv that setup.ensure_venv()
+    provisions on first use (large-v3 on CUDA, medium/int8 CPU fallback).
+    ctranslate2 streams arbitrary-length audio, so no chunking is needed.
+    """
+
+    name = "whisper-local"
+    chunk_by = None  # faster-whisper handles arbitrary length itself
+    diarization = "none"
+
+    def available(self) -> tuple[bool, str]:
+        # Always available: the venv self-provisions on first use (with
+        # clear progress on stderr). Sits last in BACKEND_FACTORIES so
+        # auto-selection prefers configured cloud backends.
+        return True, ""
+
+    def transcribe_one(self, audio_path: Path) -> list[dict]:
+        import json as _json
+
+        from setup import run_venv_worker
+
+        stdout = run_venv_worker("whisper_local_worker.py", [str(audio_path)])
+        try:
+            return _json.loads(stdout)
+        except ValueError as exc:
+            raise SystemExit(
+                f"whisper_local_worker returned invalid JSON ({exc}): "
+                f"{stdout[-300:]}"
+            )
+
+
 # Backend factories in auto-selection priority order - the private Azure
-# backend first, so /watch prefers it whenever it is configured. Factories
-# (not instances) so construction - and config lookup - is deferred until a
-# backend is actually chosen.
+# backend first, so /watch prefers it whenever it is configured; the local
+# backend last, as the always-available zero-key fallback (self-provisions
+# its venv on first use). Factories (not instances) so construction - and
+# config lookup - is deferred until a backend is actually chosen.
 BACKEND_FACTORIES = {
     "azure-diarize": lambda: AzureDiarizeBackend(),
     "groq": lambda: WhisperBackend("groq"),
     "openai": lambda: WhisperBackend("openai"),
+    "whisper-local": lambda: WhisperLocalBackend(),
 }
 
 

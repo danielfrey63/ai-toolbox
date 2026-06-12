@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import atexit
 import datetime
+import json
 import math
 import re
 import shutil
@@ -233,10 +234,12 @@ def main() -> int:
     )
     ap.add_argument(
         "--whisper",
-        choices=["azure-diarize", "groq", "openai"],
+        choices=["azure-diarize", "groq", "openai", "whisper-local"],
         default=None,
         help="Force a specific transcription backend. Default: prefer "
-             "azure-diarize (private, when configured), then Groq, then OpenAI.",
+             "azure-diarize (private, when configured), then Groq, then "
+             "OpenAI, then whisper-local (fully on-device faster-whisper in "
+             "the managed venv; no key needed, self-provisions on first use).",
     )
     ap.add_argument(
         "--whisper-workers",
@@ -641,6 +644,27 @@ def main() -> int:
                 )
             diarize_backend = None
 
+    # Segment cache: with a stable --out-dir, a re-run (e.g. after a failed
+    # diarization pass or to iterate on analysis) skips the expensive STT
+    # step entirely. Default temp work dirs are fresh, so this is opt-in.
+    seg_cache = work / "segments.json"
+    if not transcript_segments and not args.no_whisper and seg_cache.exists():
+        try:
+            cached = json.loads(seg_cache.read_text(encoding="utf-8"))
+            all_segments = cached["segments"]
+            used_backend = cached.get("backend", "unknown")
+            transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
+            transcript_source = f"transcript ({used_backend}, cached)"
+            print(
+                f"[watch] segments.json cache hit ({len(all_segments)} segments, "
+                f"{used_backend}) - skipping transcription",
+                file=sys.stderr,
+            )
+            if (work / "audio.mp3").exists():
+                audio_path = work / "audio.mp3"
+        except (ValueError, KeyError) as exc:
+            print(f"[watch] ignoring corrupt segments.json ({exc})", file=sys.stderr)
+
     if not transcript_segments and not args.no_whisper:
         stt_backend = None
         try:
@@ -663,6 +687,10 @@ def main() -> int:
                     backend=stt_backend.name,
                     parallel_uploads=args.whisper_workers,
                 )
+                seg_cache.write_text(
+                    json.dumps({"backend": used_backend, "segments": all_segments}),
+                    encoding="utf-8",
+                )
                 transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
                 transcript_source = f"transcript ({used_backend})"
                 # Transcription extracted the audio as a side effect - reuse it.
@@ -676,10 +704,26 @@ def main() -> int:
         try:
             if audio_path is None or not audio_path.exists():
                 audio_path = extract_audio(video_path, work / "audio.mp3")
-            if diarize_backend == "pyannote-api":
-                turns = diarize_pyannote_api(audio_path)
-            else:
-                turns = diarize_pyannote_local(audio_path)
+            # Turn cache: same contract as segments.json - a stable --out-dir
+            # makes diarization re-runs free.
+            turns_cache = work / "turns.json"
+            turns = None
+            if turns_cache.exists():
+                try:
+                    turns = json.loads(turns_cache.read_text(encoding="utf-8"))
+                    print(
+                        f"[watch] turns.json cache hit ({len(turns)} turns) - "
+                        "skipping diarization",
+                        file=sys.stderr,
+                    )
+                except ValueError as exc:
+                    print(f"[watch] ignoring corrupt turns.json ({exc})", file=sys.stderr)
+            if turns is None:
+                if diarize_backend == "pyannote-api":
+                    turns = diarize_pyannote_api(audio_path)
+                else:
+                    turns = diarize_pyannote_local(audio_path)
+                turns_cache.write_text(json.dumps(turns), encoding="utf-8")
             transcript_segments = align_speakers(transcript_segments, turns)
             speakers = sorted({t["speaker"] for t in turns}) if turns else []
             tag = f"{diarize_backend} ({len(speakers)} speakers)"

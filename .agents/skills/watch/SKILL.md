@@ -95,18 +95,12 @@ Optional flags:
   - **`--diarize`** (no value) — auto-pick the first configured backend, in order: AssemblyAI → pyannote.ai → pyannote local.
   - **`--diarize assemblyai`** — cloud, all-in-one. Replaces Whisper: one API call returns transcription + speaker labels. Uses `universal-3-pro` (fallback `universal-2`) and `language_detection: true` by default — handles multilingual content (DE-CH + EN + FR/IT references) without an explicit language hint. Needs `ASSEMBLYAI_API_KEY` in env or `.env`; optionally `ASSEMBLYAI_REGION=eu` for EU data residency. ~$0.37/h.
   - **`--diarize pyannote-api`** — cloud pyannote.ai (diarization-only). Runs alongside Whisper; the script aligns speaker turns to Whisper segments by overlap. Needs `PYANNOTE_API_KEY`. Cheaper than AssemblyAI.
-  - **`--diarize pyannote-local`** — local pyannote.audio. Free, fully on-device (nothing leaves the machine — the right choice for confidential recordings), but heavy. Battle-tested setup (Windows-proof):
-    - Use a **dedicated venv** — the pins below conflict with environments carrying a recent transformers/torchvision.
-    - `pip install "pyannote.audio<4" "torch==2.6.*" "torchaudio==2.6.*" "huggingface_hub<1.0" matplotlib soundfile`. pyannote 4.x is broken on Windows (torchcodec DLL loading) and pulls an *additional* gated HF repo (`speaker-diarization-community-1`) for PLDA data — stay on 3.x.
-    - GPU: pip refuses to swap a CPU wheel for a CUDA one without the explicit build tag — `pip install "torch==2.6.0+cu124" "torchaudio==2.6.0+cu124" --index-url https://download.pytorch.org/whl/cu124`. Worth it: a 41-min recording diarizes in ~90 s on GPU vs ~36 min on CPU.
-    - Hugging Face token (`HF_TOKEN`) plus license acceptance for **both** gated repos: `pyannote/speaker-diarization-3.1` *and* `pyannote/segmentation-3.0`.
-    - **Never force `num_speakers`** — on far-field/single-mic recordings it collapses onto the dominant voice (observed: 95% one speaker on a real 2-person meeting). Auto clustering separates cleanly; it may emit surplus mini-clusters, which Claude merges/labels afterwards from transcript context.
-    - Diarization runs locally, then aligns to the Whisper transcript.
+  - **`--diarize pyannote-local`** — local pyannote.audio. Free, fully on-device (nothing leaves the machine — the right choice for confidential recordings). Zero manual setup: the heavy ML stack lives in a **managed venv** at `~/.config/watch/venv/`, provisioned idempotently on first use (or explicitly via `setup.py --venv`); the diarization itself runs as a worker subprocess (`pyannote_worker.py`) inside that venv, so the host Python is never touched. GPU is auto-detected (nvidia-smi → cu124 wheels; a 41-min recording diarizes in ~90 s on GPU vs ~36 min on CPU). Requirements that remain with the user: a Hugging Face token (`HF_TOKEN`) plus license acceptance for **both** gated repos: `pyannote/speaker-diarization-3.1` *and* `pyannote/segmentation-3.0`. Speaker count stays on auto by design — forcing `num_speakers` collapses onto the dominant voice on single-mic recordings (observed: 95% one speaker on a real 2-person meeting); surplus mini-clusters are merged/labeled afterwards by Claude from transcript context. Diarization aligns to the Whisper transcript.
   - Identifying *which name* maps to `A`/`B`/`SPEAKER_00` is done later by Claude using address patterns in the transcript (see Step 4 Inventar → Personen & Stimmen). For **audio-only sources** (no frames as ground truth), role/content evidence substitutes for frame evidence: a label that consistently owns a known person's responsibilities ("I'll prepare the compliance slide") plus at least one address-pattern hit qualifies as high-confidence; document the reasoning in the transcript header. Surplus diarization clusters that map to no one stay as bare letters with a header note.
 - `--resolution W` — change frame width in px (default 512; bump to 1024 only if the user needs to read on-screen text)
 - `--fps F` — override auto-fps (clamped to 2 fps max)
 - `--out-dir DIR` — keep working files somewhere specific (default: an auto-generated tmp dir)
-- `--whisper groq|openai` — force a specific Whisper backend (default: prefer Groq if both keys exist)
+- `--whisper azure-diarize|groq|openai|whisper-local` — force a specific transcription backend (auto order: azure-diarize → groq → openai → whisper-local). `whisper-local` = faster-whisper fully on-device in the managed venv (`~/.config/watch/venv/`, self-provisions on first use, GPU auto-detected) — no key, nothing leaves the machine; the right choice for confidential recordings.
 - `--no-whisper` — disable the Whisper fallback entirely (frames-only if no captions)
 - `--no-scene` — disable scdet-based cut detection (default: enabled with auto-tuned threshold, see "Scene cut detection" below)
 - `--scene-threshold F` — override the auto-detected scdet threshold (default: auto via knee-point on the score distribution; lower = more sensitive)
@@ -385,6 +379,16 @@ Result: a reader opens `<base>.transcript.md` and sees `[12:34] [Urs] …` inste
 
 If the transcript came from VTT captions or pure Whisper (no `[A]/[B]/…` labels in the first place), skip this substitution step entirely.
 
+**Compact transcript (only when diarized).** After the speaker-name mapping, write a fourth companion `<base>.transcript-kompakt.md`: an editorially polished, condensed rendition of the diarized transcript. The raw transcript already merges consecutive same-speaker segments into turns — the compact file adds the human layer on top:
+
+- One block per substantive statement: `**[MM:SS] <Name>:** <polished text>`, timestamp = start of the turn.
+- Fix STT misrecognitions you can resolve from context (the Konsistenz-Check results), normalize dialect garbles into clean standard language, drop pure fillers and bare acknowledgements ("Ja.", "Genau.") by folding them into the surrounding flow.
+- Group the blocks under `## <Thema>` headings in chronological order, mirroring the conversation's phases.
+- Header: source, duration, participants, a note that the file is editorially condensed, and a pointer to `<base>.transcript.md` as the verbatim reference.
+- Attribute leftover unsure-cluster labels by context where the content makes the speaker obvious; otherwise keep the bare letter.
+
+Skip the compact file for non-diarized transcripts — without speakers it would just duplicate the transcript.
+
 **Step 6 — clean up.** The script prints a working directory at the end. If the user isn't going to ask follow-ups about this video, delete it with `rm -rf <dir>`. **If `--save-md` produced the three companion files (`<base>.md` + `<base>.protocol.md` + `<base>.transcript.md`), they live outside the work dir and are preserved** by the cleanup. If the user might follow up, leave the work dir in place too.
 
 ## Transcription
@@ -392,11 +396,15 @@ If the transcript came from VTT captions or pure Whisper (no `[A]/[B]/…` label
 The script gets a timestamped transcript in one of two ways:
 
 1. **Native captions (free, preferred).** yt-dlp pulls manual or auto-generated subtitles from the source platform if available.
-2. **Whisper API fallback.** If no captions came back (or the source is a local file), the script extracts audio (`ffmpeg -vn -ac 1 -ar 16000 -b:a 64k`, ~0.5 MB/min) and uploads it to whichever Whisper API has a key configured:
-   - **Groq** — `whisper-large-v3`. Preferred default: cheaper, faster. Get a key at console.groq.com/keys.
-   - **OpenAI** — `whisper-1`. Fallback. Get a key at platform.openai.com/api-keys.
+2. **STT fallback.** If no captions came back (or the source is a local file), the script extracts audio (`ffmpeg -vn -ac 1 -ar 16000 -b:a 64k`, ~0.5 MB/min) and runs the first configured backend (auto order):
+   - **Azure** — `gpt-4o-transcribe-diarize` on a private tenant (transcription + speakers in one call). Needs `AZURE_TRANSCRIBE_DIARIZE_URL` + `_KEY`.
+   - **Groq** — `whisper-large-v3` cloud API. Cheaper/faster than OpenAI. Get a key at console.groq.com/keys.
+   - **OpenAI** — `whisper-1` cloud API. Get a key at platform.openai.com/api-keys.
+   - **whisper-local** — faster-whisper **fully on-device** (large-v3 on CUDA, medium/int8 CPU fallback) in the managed venv; always available, no key, self-provisions on first use. Auto-selected only when no cloud backend is configured; force with `--whisper whisper-local` for confidential recordings.
 
-Both keys live in `~/.config/watch/.env`. The script prefers Groq when both are set; override with `--whisper openai` to force OpenAI. Use `--no-whisper` to skip the fallback entirely.
+Keys live in `~/.config/watch/.env`. Override the auto order with `--whisper <backend>`. Use `--no-whisper` to skip the fallback entirely.
+
+**Iteration caching:** with a stable `--out-dir DIR`, the STT result (`segments.json`) and diarization turns (`turns.json`) are cached in the work dir — a re-run against the same dir skips both expensive steps. Default temp work dirs are fresh per run.
 
 ### Long videos: auto-split with overlap
 
@@ -436,6 +444,7 @@ If you already watched a video this session and the user asks a follow-up, do **
 - Writes the downloaded video, frames, audio, audio chunks (when splitting), and an intermediate transcript to a working directory under the system temp dir (or `--out-dir` if specified) so Claude can `Read` them
 - When `--save-md PATH` is used (or auto-defaulted for local-file sources), writes three companion files (the main `<base>.md` with a stub that Claude appends Summary + Analysis to, `<base>.protocol.md` with metadata + frames + resources, `<base>.transcript.md` with the transcript), all **outside the work dir** and preserved after cleanup
 - Reads / creates `~/.config/watch/.env` (mode `0600`) to store the Whisper API key(s) and a `SETUP_COMPLETE` marker. As a fallback, also reads `.env` in the current working directory
+- Creates / repairs a managed Python venv at `~/.config/watch/venv/` (pinned ML stack for the local backends: pyannote.audio, faster-whisper, torch — CUDA wheels when nvidia-smi is present) and runs `pyannote_worker.py` / `whisper_local_worker.py` inside it as subprocesses; the Python running watch.py is never modified
 
 **What this skill does NOT do:**
 - Does not upload the video itself to any API — only the extracted audio goes out, and only when native captions are missing AND Whisper is not disabled with `--no-whisper`
@@ -444,6 +453,6 @@ If you already watched a video this session and the user asks a follow-up, do **
 - Does not log, cache, or write API keys to stdout, stderr, or output files
 - Does not persist anything outside the working directory and `~/.config/watch/.env` — clean up the working directory when you're done (Step 5)
 
-**Bundled scripts:** `scripts/watch.py` (entry point), `scripts/download.py` (yt-dlp wrapper), `scripts/frames.py` (ffmpeg frame extraction + scdet cut detection), `scripts/transcribe.py` (caption selection + Whisper orchestration), `scripts/stt.py` (speech-to-text - Groq / OpenAI clients), `scripts/resources.py` (URL extraction from description + transcript, grouped by category), `scripts/setup.py` (preflight + installer)
+**Bundled scripts:** `scripts/watch.py` (entry point), `scripts/download.py` (yt-dlp wrapper), `scripts/frames.py` (ffmpeg frame extraction + scdet cut detection), `scripts/transcribe.py` (caption selection + Whisper orchestration), `scripts/stt.py` (pluggable speech-to-text backends - Azure / Groq / OpenAI / whisper-local), `scripts/diarize.py` (diarization backends + alignment), `scripts/pyannote_worker.py` + `scripts/whisper_local_worker.py` (run inside the managed venv, never imported by the host), `scripts/resources.py` (URL extraction from description + transcript, grouped by category), `scripts/setup.py` (preflight + installer + venv provisioning)
 
 Review scripts before first use to verify behavior.
