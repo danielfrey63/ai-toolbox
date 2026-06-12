@@ -2,7 +2,7 @@
 name: component-audit
 description: Audit a codebase for component-orientation drift — finds DOM/UI-construction bypasses, hand-rolled patterns that should go through shared factories, and refactor opportunities, then routes them through the right component. Use after any UI-touching change, or when the user asks to "verify component consistency", "check for duplication", "audit the components". Works on any project — reads the project's component inventory from `.claude/component-inventory.md` (or a path passed as argument).
 metadata:
-  version: "0.1.5"
+  version: "0.2.7"
 ---
 
 # Component-Audit Skill
@@ -63,6 +63,12 @@ The factories list is the human-readable map. The bypass patterns drive the agen
    - Which factory now owns it
    - What was deleted
 
+7. **Loop until clean (optional).** When the user asks for a loop ("run until no substantial findings remain"), repeat steps 2–6 as rounds. The exit criterion is the audit's severity verdict: stop when a round reports **zero substantial findings**. Rules per round:
+   - Update the inventory BETWEEN rounds — every extracted factory, extended option and accepted exception goes in before the next audit prompt is built, otherwise the next round re-flags the previous round's own output.
+   - Commit each round separately (one verified, revertable step per round).
+   - Minor/cosmetic findings may be fixed opportunistically in a round, but they do not keep the loop alive on their own.
+   - Run a final confirmation round (reduced search breadth is fine) that spot-checks the earlier fixes and confirms the zero-substantial verdict.
+
 ## Audit Prompt Template (for the spawned agent)
 
 Fill the `{{…}}` placeholders from the inventory before passing to the agent.
@@ -89,8 +95,9 @@ Known legitimate exceptions (do NOT re-report):
 
 Report format:
   - Group findings under the numbered categories above.
-  - For each finding: file:line, 5-word summary, one of "bypass" / "extend X" / "factory candidate (N similar sites)" / "exception", suggested refactor target.
-  - End with a one-line verdict (e.g. "3 bypasses, 1 extension opportunity, 1 factory candidate, 2 exceptions").
+  - For each finding: file:line, 5-word summary, one of "bypass" / "extend X" / "factory candidate (N similar sites)" / "exception", a severity judgement "substantial" / "minor", suggested refactor target.
+  - Severity rubric: "substantial" = duplicated construction logic, inline styling that imitates or should be a CSS class, or any pattern that will drift (3+ sites, bulk static styles); "minor" = cosmetic single-property issues or inconsistencies with no drift risk.
+  - End with a one-line verdict that counts severities first (e.g. "2 substantial, 3 minor — 3 bypasses, 1 extension opportunity, 1 factory candidate").
 
 Do NOT modify files. Read-only.
 ```
