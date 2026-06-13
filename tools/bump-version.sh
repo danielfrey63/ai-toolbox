@@ -23,6 +23,8 @@
 #   (default) bump BUILD (3rd) — driven by the per-edit PostToolUse hook
 #   --build   bump BUILD (3rd) explicitly
 #   --minor   bump MINOR (2nd), BUILD untouched
+#   --major   bump MAJOR (1st), MINOR+BUILD carried unchanged (CLI-only — a
+#             major bump is a deliberate human decision, never hook-driven)
 #   --commit  bump MINOR+BUILD together — driven by the pre-commit hook
 #   --target  print the resolved artifact file without bumping
 #   --get     print the artifact's current version (type-aware, no mutation)
@@ -38,7 +40,7 @@
 # Always exits 0 (except on a usage error) — a non-artifact edit is a silent
 # no-op, so it is hook-safe.
 
-APP_VERSION='0.4.13'
+APP_VERSION='0.5.18'
 set -u
 
 INIT_VERSION='0.0.1'
@@ -54,13 +56,14 @@ while [ $# -gt 0 ]; do
 bump-version — generic per-artifact version bumper for the AI-Toolbox.
 
 Usage:
-  bump-version.sh [--build|--minor|--commit|--target|--get] <file>
+  bump-version.sh [--build|--minor|--major|--commit|--target|--get] <file>
   bump-version.sh -h|--help
   <hook-json> | bump-version.sh [--build|--commit]
 
 Options:
   --build   Bump the BUILD segment (3rd). Default. Used by the per-edit hook.
   --minor   Bump the MINOR segment (2nd), leaving BUILD untouched.
+  --major   Bump the MAJOR segment (1st), carrying MINOR and BUILD unchanged.
   --commit  Bump MINOR and BUILD together. Used by the pre-commit hook.
   --target  Print the resolved artifact file without bumping anything.
   --get     Print the artifact's current version (type-aware, no mutation).
@@ -85,6 +88,7 @@ EOF
             exit 0 ;;
         --build)  SEGMENT=build; shift ;;
         --minor)  SEGMENT=minor; shift ;;
+        --major)  SEGMENT=major; shift ;;
         --commit) SEGMENT=commit; shift ;;
         --target) MODE=target; shift ;;
         --get)    MODE=get; shift ;;
@@ -129,6 +133,7 @@ bump_version() {
         *[!0-9-]*|*--*|-*|*-) printf '%s' "$INIT_VERSION"; return ;;
     esac
     case "$SEGMENT" in
+        major)  printf '%s.%s.%s' "$((major + 1))" "$minor" "$build" ;;
         minor)  printf '%s.%s.%s' "$major" "$((minor + 1))" "$build" ;;
         commit) printf '%s.%s.%s' "$major" "$((minor + 1))" "$((build + 1))" ;;
         *)      printf '%s.%s.%s' "$major" "$minor" "$((build + 1))" ;;

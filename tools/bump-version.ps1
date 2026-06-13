@@ -14,6 +14,8 @@
 #   (default) bump BUILD (3rd) — driven by the per-edit PostToolUse hook
 #   --build   bump BUILD (3rd) explicitly
 #   --minor   bump MINOR (2nd), BUILD untouched
+#   --major   bump MAJOR (1st), MINOR+BUILD carried unchanged (CLI-only — a
+#             major bump is a deliberate human decision, never hook-driven)
 #   --commit  bump MINOR+BUILD together — driven by the pre-commit hook
 #   --target  print the resolved artifact file without bumping
 #   --get     print the artifact's current version (type-aware, no mutation)
@@ -22,7 +24,7 @@
 # as a CLI, or a Codex / Claude Code PostToolUse hook JSON payload on stdin. Always
 # exits 0 (except on a usage error).
 
-$APP_VERSION = '0.4.13'
+$APP_VERSION = '0.5.18'
 $ErrorActionPreference = 'Stop'
 
 $InitVersion = '0.0.1'
@@ -41,13 +43,14 @@ if ($args | Where-Object { $_ -in @('-h', '--help', '-Help', '/?') }) {
 bump-version — generic per-artifact version bumper for the AI-Toolbox.
 
 Usage:
-  bump-version.ps1 [--build|--minor|--commit|--target|--get] <file>
+  bump-version.ps1 [--build|--minor|--major|--commit|--target|--get] <file>
   bump-version.ps1 -h|--help
   <hook-json> | bump-version.ps1 [--build|--commit]
 
 Options:
   --build   Bump the BUILD segment (3rd). Default. Used by the per-edit hook.
   --minor   Bump the MINOR segment (2nd), leaving BUILD untouched.
+  --major   Bump the MAJOR segment (1st), carrying MINOR and BUILD unchanged.
   --commit  Bump MINOR and BUILD together. Used by the pre-commit hook.
   --target  Print the resolved artifact file without bumping anything.
   --get     Print the artifact's current version (type-aware, no mutation).
@@ -78,6 +81,7 @@ foreach ($a in $args) {
     switch -Regex ([string]$a) {
         '^--build$'  { $script:Segment = 'build'; break }
         '^--minor$'  { $script:Segment = 'minor'; break }
+        '^--major$'  { $script:Segment = 'major'; break }
         '^--commit$' { $script:Segment = 'commit'; break }
         '^--target$' { $mode = 'target'; break }
         '^--get$'    { $mode = 'get'; break }
@@ -91,6 +95,7 @@ function Bump-Version([string]$v) {
     $p = $v -split '\.'
     if ($p.Count -ne 3 -or ($p | Where-Object { $_ -notmatch '^\d+$' })) { return $InitVersion }
     switch ($script:Segment) {
+        'major'  { return '{0}.{1}.{2}' -f ([int]$p[0] + 1), $p[1], $p[2] }
         'minor'  { return '{0}.{1}.{2}' -f $p[0], ([int]$p[1] + 1), $p[2] }
         'commit' { return '{0}.{1}.{2}' -f $p[0], ([int]$p[1] + 1), ([int]$p[2] + 1) }
     }
