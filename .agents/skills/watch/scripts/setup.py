@@ -893,17 +893,14 @@ def cmd_check() -> int:
             "fully local whisper-local)"
         )
 
-    missing_optional: list[str] = []
-    if not _diarize_is_dismissed():
-        if not _read_env_key("ASSEMBLYAI_API_KEY"):
-            missing_optional.append("ASSEMBLYAI_API_KEY")
-        if not _read_env_key("PYANNOTE_API_KEY"):
-            missing_optional.append("PYANNOTE_API_KEY")
-        if not _read_env_key("HF_TOKEN") and not _read_env_key("HUGGINGFACE_TOKEN"):
-            missing_optional.append("HF_TOKEN")
+    # Diarization is optional and local-first. Only nag when NO backend is
+    # configured at all - if even one is wired (HF_TOKEN -> pyannote-local,
+    # or a cloud key), diarization already works and the rest are mere
+    # alternatives, not "needed".
+    suggest_diarize = not _diarize_is_dismissed() and not s["diarize_configured"]
 
     # Fully ready -> stay silent (Claude's per-turn preflight shouldn't spam).
-    if not s["missing_binaries"] and not missing_required and not missing_optional:
+    if not s["missing_binaries"] and not missing_required and not suggest_diarize:
         return 0
 
     installer = Path(__file__).resolve()
@@ -921,26 +918,16 @@ def cmd_check() -> int:
             f"Run: python3 {installer}\n"
         )
 
-    if missing_optional:
-        # When all three diarize backends are unconfigured, recommend the
-        # easiest path (AssemblyAI = one cloud key, transcription + speaker
-        # labels in one call) rather than presenting all three equally.
-        # Reduces decision fatigue for users who don't already have a
-        # preference.
-        if len(missing_optional) == 3:
-            suggestion = (
-                " (suggest ASSEMBLYAI_API_KEY for the simplest one-step setup; "
-                "PYANNOTE_API_KEY / HF_TOKEN are alternatives. Run "
-                "`setup.py --skip-diarize` to silence this hint.)"
-            )
-        else:
-            suggestion = (
-                " (run `setup.py --skip-diarize` to silence this hint)"
-            )
+    if suggest_diarize:
+        # Local-first nudge: HF_TOKEN unlocks free, on-device diarization;
+        # the cloud keys are alternatives. Transcription works regardless.
         sys.stderr.write(
-            f"[watch] optional keys not set: {', '.join(missing_optional)} "
-            f"(needed for --diarize backends; transcription still works without)"
-            f"{suggestion}\n"
+            "[watch] speaker diarization is off (no backend configured). "
+            "For free, on-device diarization add HF_TOKEN to "
+            "~/.config/watch/.env and accept the pyannote licenses; "
+            "PYANNOTE_API_KEY / ASSEMBLYAI_API_KEY are cloud alternatives. "
+            "Transcription works without any of these. Run "
+            "`setup.py --skip-diarize` to silence this hint.\n"
         )
 
     sys.stderr.flush()
