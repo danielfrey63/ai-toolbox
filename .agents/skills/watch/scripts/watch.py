@@ -356,6 +356,13 @@ def main() -> int:
         action="store_true",
         help="Disable speaker diarization (overrides the on-by-default auto mode).",
     )
+    ap.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Ignore persisted intermediates (<base>.segments.json / "
+             ".turns.json) and re-transcribe + re-diarize from scratch. By "
+             "default a re-run against the same output reuses them (idempotent).",
+    )
     args = ap.parse_args()
 
     if args.no_diarize:
@@ -368,6 +375,10 @@ def main() -> int:
     save_md_path: Path | None = None
     protocol_path: Path | None = None
     transcript_path: Path | None = None
+    # Persistent intermediate caches next to the output — enable idempotent
+    # re-runs (skip STT + diarization when the source is reprocessed).
+    seg_store: Path | None = None
+    turns_store: Path | None = None
     if args.save_md:
         save_md_path = Path(args.save_md).expanduser().resolve()
     elif not args.no_save_md and not is_url(args.source):
@@ -457,6 +468,8 @@ def main() -> int:
             base = save_md_path.stem
         protocol_path = save_md_path.parent / f"{base}.protocol.md"
         transcript_path = save_md_path.parent / f"{base}.transcript.md"
+        seg_store = save_md_path.parent / f"{base}.segments.json"
+        turns_store = save_md_path.parent / f"{base}.turns.json"
 
     meta = get_metadata(video_path)
     full_duration = meta["duration_seconds"]
@@ -668,26 +681,28 @@ def main() -> int:
                 )
             diarize_backend = None
 
-    # Segment cache: with a stable --out-dir, a re-run (e.g. after a failed
-    # diarization pass or to iterate on analysis) skips the expensive STT
-    # step entirely. Default temp work dirs are fresh, so this is opt-in.
-    seg_cache = work / "segments.json"
-    if not transcript_segments and not args.no_whisper and seg_cache.exists():
+    # Segment cache for idempotent re-runs. When the output is persisted
+    # (default for local files / save_md), the cache sits next to it as
+    # <base>.segments.json and survives across runs - reprocessing the same
+    # source skips the expensive STT step. With --no-save-md it falls back to
+    # the ephemeral work dir. --fresh forces a clean re-transcription.
+    seg_cache = seg_store or (work / "segments.json")
+    if not args.fresh and not transcript_segments and not args.no_whisper and seg_cache.exists():
         try:
             cached = json.loads(seg_cache.read_text(encoding="utf-8"))
             all_segments = cached["segments"]
             used_backend = cached.get("backend", "unknown")
             transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
-            transcript_source = f"transcript ({used_backend}, cached)"
+            transcript_source = f"transcript ({used_backend}, resumed)"
             print(
-                f"[watch] segments.json cache hit ({len(all_segments)} segments, "
-                f"{used_backend}) - skipping transcription",
+                f"[watch] resuming from {seg_cache.name} ({len(all_segments)} "
+                f"segments, {used_backend}) - skipping transcription",
                 file=sys.stderr,
             )
             if (work / "audio.mp3").exists():
                 audio_path = work / "audio.mp3"
         except (ValueError, KeyError) as exc:
-            print(f"[watch] ignoring corrupt segments.json ({exc})", file=sys.stderr)
+            print(f"[watch] ignoring corrupt {seg_cache.name} ({exc})", file=sys.stderr)
 
     if not transcript_segments and not args.no_whisper:
         stt_cascade: list = []
@@ -714,6 +729,7 @@ def main() -> int:
                     backend=stt_backend.name,
                     parallel_uploads=args.whisper_workers,
                 )
+                seg_cache.parent.mkdir(parents=True, exist_ok=True)
                 seg_cache.write_text(
                     json.dumps({"backend": used_backend, "segments": all_segments}),
                     encoding="utf-8",
@@ -750,23 +766,25 @@ def main() -> int:
                     and (_denv("HF_TOKEN") or _denv("HUGGINGFACE_TOKEN"))):
                 diarize_cascade.append("pyannote-local")
         try:
-            if audio_path is None or not audio_path.exists():
-                audio_path = extract_audio(video_path, work / "audio.mp3")
-            # Turn cache: same contract as segments.json - a stable --out-dir
-            # makes diarization re-runs free.
-            turns_cache = work / "turns.json"
+            # Turn cache: same idempotency contract as the segment cache -
+            # persisted next to the output as <base>.turns.json, reused on
+            # re-runs unless --fresh.
+            turns_cache = turns_store or (work / "turns.json")
             turns = None
-            if turns_cache.exists():
+            if not args.fresh and turns_cache.exists():
                 try:
                     turns = json.loads(turns_cache.read_text(encoding="utf-8"))
                     print(
-                        f"[watch] turns.json cache hit ({len(turns)} turns) - "
-                        "skipping diarization",
+                        f"[watch] resuming from {turns_cache.name} ({len(turns)} "
+                        "turns) - skipping diarization",
                         file=sys.stderr,
                     )
                 except ValueError as exc:
-                    print(f"[watch] ignoring corrupt turns.json ({exc})", file=sys.stderr)
+                    print(f"[watch] ignoring corrupt {turns_cache.name} ({exc})", file=sys.stderr)
             if turns is None:
+                # Only now do we need the audio (resume skips extraction).
+                if audio_path is None or not audio_path.exists():
+                    audio_path = extract_audio(video_path, work / "audio.mp3")
                 for i, candidate in enumerate(diarize_cascade):
                     try:
                         if candidate == "pyannote-api":
@@ -784,6 +802,7 @@ def main() -> int:
                             )
                         else:
                             raise
+                turns_cache.parent.mkdir(parents=True, exist_ok=True)
                 turns_cache.write_text(json.dumps(turns), encoding="utf-8")
             transcript_segments = align_speakers(transcript_segments, turns)
             speakers = sorted({t["speaker"] for t in turns}) if turns else []

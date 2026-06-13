@@ -99,6 +99,7 @@ Optional flags:
 - `--resolution W` — change frame width in px (default 512; bump to 1024 only if the user needs to read on-screen text)
 - `--fps F` — override auto-fps (clamped to 2 fps max)
 - `--out-dir DIR` — keep working files somewhere specific (default: an auto-generated tmp dir)
+- `--fresh` — ignore persisted `<base>.segments.json` / `.turns.json` and re-transcribe + re-diarize from scratch (default behaviour reuses them for idempotent re-runs)
 - `--whisper azure-diarize|groq|openai|whisper-local` — pin a specific transcription backend (no cascade, fails loudly). Default is a **local-first cascade**: whisper-local → azure-diarize → groq → openai — each backend that fails falls through to the next configured one. `whisper-local` = faster-whisper fully on-device in the managed venv (`~/.config/watch/venv/`, self-provisions on first use, GPU auto-detected) — no key, nothing leaves the machine.
 - `--no-whisper` — disable the Whisper fallback entirely (frames-only if no captions)
 - `--no-scene` — disable scdet-based cut detection (default: enabled with auto-tuned threshold, see "Scene cut detection" below)
@@ -403,7 +404,7 @@ The script gets a timestamped transcript in one of two ways:
 
 Keys live in `~/.config/watch/.env`. `--whisper <backend>` pins one backend and disables the cascade. Use `--no-whisper` to skip the fallback entirely.
 
-**Iteration caching:** with a stable `--out-dir DIR`, the STT result (`segments.json`) and diarization turns (`turns.json`) are cached in the work dir — a re-run against the same dir skips both expensive steps. Default temp work dirs are fresh per run.
+**Idempotent re-runs (resume):** when the output is persisted (the default for local files, or any `--save-md`), the STT result and diarization turns are written next to it as `<base>.segments.json` and `<base>.turns.json`. Reprocessing the same source reuses them — the expensive STT + diarization steps are skipped (a 41-min recording resumes in ~1 s) and the pipeline goes straight to alignment, rendering, and (Claude's) cleanup. This makes "re-clean an existing transcript" or "re-render after a tweak" free. Pass `--fresh` to ignore the persisted intermediates and re-transcribe + re-diarize from scratch. With `--no-save-md` the caches live only in the ephemeral work dir (so use `--out-dir DIR` if you want them to survive).
 
 ### Long videos: auto-split with overlap
 

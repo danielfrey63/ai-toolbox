@@ -1019,24 +1019,21 @@ def cmd_install() -> int:
     _interactive_keys_prompt()
 
     has_key, backend = _have_api_key()
+    # Local-first: transcription always works via whisper-local once the
+    # binaries are present (the managed venv self-provisions on first use),
+    # so setup is "ready" with no cloud key. Cloud keys are optional upgrades.
+    _write_setup_complete()
     if has_key:
-        _write_setup_complete()
-        print(f"[setup] ready. whisper backend: {backend}")
-        if installed_deps:
-            print("[setup] installed dependencies; /watch is fully set up.")
-        _print_diarize_status()
-        return 0
-
-    print("")
-    print("[setup] one step left: add a Whisper API key.")
-    print("")
-    print(f"  Edit {CONFIG_FILE} and set either:")
-    print("    GROQ_API_KEY=...    (preferred - cheaper, faster; get one at console.groq.com/keys)")
-    print("    OPENAI_API_KEY=...  (fallback; get one at platform.openai.com/api-keys)")
-    print("")
-    print("  Without a key, /watch still works but videos without captions come back frames-only.")
+        print(f"[setup] ready. transcription: {backend} (cloud) + whisper-local on-device fallback.")
+    else:
+        print("[setup] ready. transcription runs on-device via whisper-local - "
+              "no key needed; the managed venv self-provisions on the first /watch run.")
+        print(f"  Optional cloud upgrades - edit {CONFIG_FILE}:")
+        print("    GROQ_API_KEY / OPENAI_API_KEY   (faster Whisper via cloud)")
+    if installed_deps:
+        print("[setup] installed dependencies; /watch is fully set up.")
     _print_diarize_status()
-    return 3
+    return 0
 
 
 def _print_diarize_status() -> None:

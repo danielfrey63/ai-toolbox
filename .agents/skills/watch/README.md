@@ -49,7 +49,8 @@ Claude is great at reading and synthesizing — but until now, video was the one
 8. **Frames + transcript + resources are handed to Claude.** Each entry in the merged frame list is tagged `[REG]` (regular gap-filled) or `[CUT]` (scdet-detected). Claude `Read`s every frame path in parallel — JPEGs render directly as images in its context.
 9. **Claude answers grounded in what's actually on screen and in the audio.** Not "based on the description" or "according to the title." It saw the frames. It heard the transcript. It surfaces the relevant URLs from `## Resources` so you can click through. It answers the way someone who watched the video would.
 10. **The persistent report is three companion files — four when diarized.** For local sources, they sit next to the video (`videos/test.mp4` → `videos/test.{md,protocol.md,transcript.md}`). For URL sources, they land in `./watch/<YYYY-MM-DD>-<slug>/<slug>.{md,protocol.md,transcript.md}` in your current working directory — sortable by date, per-video subfolder, `.gitignore`-friendly (`watch/` covers it). The `.md` file has Claude's Summary + Analysis; `.protocol.md` has metadata + the frame list; `.transcript.md` has the timestamped transcript (with speaker names when diarized). For diarized runs, Claude additionally writes `<base>.transcript-kompakt.md` — an editorially condensed version: one polished block per statement, STT garbles fixed, fillers dropped, grouped by topic. Override with `--save-md PATH`, disable with `--no-save-md`.
-11. **Cleanup.** The script prints a working directory at the end. The three saved companion files persist; the temp work_dir gets removed.
+11. **Idempotent intermediates.** Alongside the report, the raw STT segments and diarization turns are persisted as `<base>.segments.json` / `<base>.turns.json`. Reprocessing the same source reuses them — STT + diarization are skipped (a 41-min recording resumes in ~1 s), so re-cleaning a transcript or re-rendering after an edit is effectively free. `--fresh` forces a clean re-run.
+12. **Cleanup.** The script prints a working directory at the end. The saved companion files (report + intermediates) persist; the temp work_dir gets removed.
 
 ## Frame budget — why it matters
 
@@ -186,7 +187,8 @@ Other knobs (passed to `scripts/watch.py`):
 - `--scene-settle-seconds S` — seconds after a detected cut to wait before extracting (default 1.0). Lets UI transitions render so cut frames don't land on loading-state pixels. Set to 0 for the old just-before-cut behavior.
 - `--whisper azure-diarize|groq|openai|whisper-local` — pin a specific transcription backend (no cascade). Default: local-first cascade `whisper-local` → `azure-diarize` → `groq` → `openai`, each failure falling through to the next configured backend.
 - `--no-whisper` — disable transcription entirely; frames only.
-- `--out-dir DIR` — keep working files somewhere specific (default: auto-generated tmp dir). With a stable dir, the STT result (`segments.json`) and diarization turns (`turns.json`) are cached — re-runs skip both expensive steps.
+- `--fresh` — ignore persisted `<base>.segments.json` / `.turns.json` and re-transcribe + re-diarize from scratch. The default reuses them, so reprocessing the same source (e.g. to re-clean a transcript or re-render after a tweak) resumes in ~1 s instead of re-running STT + diarization.
+- `--out-dir DIR` — keep working files somewhere specific (default: auto-generated tmp dir). The persisted intermediates live next to the saved report; this flag only affects the ephemeral work dir.
 - `--save-md PATH` — override the auto-save location (defaults: `<video-stem>.md` next to local sources; `./watch/<YYYY-MM-DD>-<slug>/<slug>.md` for URL sources).
 - `--no-save-md` — disable auto-save entirely (frames + transcript only in temp work_dir).
 
