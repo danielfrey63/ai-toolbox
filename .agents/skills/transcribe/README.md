@@ -1,10 +1,10 @@
-# /watch
+# /transcribe
 
-**Give Claude the ability to watch any video.**
+**Give Claude the ability to transcribe — and watch — any video or audio file.**
 
-`/watch` is a skill + Claude Code plugin maintained as part of the
+`/transcribe` is a skill + Claude Code plugin maintained as part of the
 [AI-Toolbox](https://github.com/danielfrey63/ai-toolbox), at
-`.agents/skills/watch/`. See [Install](#install) below for Claude Code,
+`.agents/skills/transcribe/`. See [Install](#install) below for Claude Code,
 Codex and claude.ai (web).
 
 Zero config to start — `yt-dlp` and `ffmpeg` install on first run via `brew` on macOS (Linux/Windows auto-download standalone binaries). Captions cover most public videos for free. When a video has no captions, transcription runs **fully on-device by default** (faster-whisper in a managed venv, GPU auto-detected) — no API key required, nothing leaves your machine. Cloud backends are an optional upgrade, not a prerequisite.
@@ -13,10 +13,10 @@ Zero config to start — `yt-dlp` and `ffmpeg` install on first run via `brew` o
 
 Claude can read a webpage, run a script, browse a repo. What it can't do, out of the box, is *watch a video*. You paste a YouTube link and it has to either guess from the title or pull a transcript that's missing 90% of what's on screen.
 
-With `/watch` you can paste a URL or a local path, ask a question, and Claude downloads the video, extracts frames at an auto-scaled rate, pulls a timestamped transcript (free captions when available, Whisper API as fallback), and `Read`s every frame as an image. By the time it answers, it has *seen* the video and *heard* the audio.
+With `/transcribe` you can paste a URL or a local path, ask a question, and Claude downloads the video, extracts frames at an auto-scaled rate, pulls a timestamped transcript (free captions when available, Whisper API as fallback), and `Read`s every frame as an image. By the time it answers, it has *seen* the video and *heard* the audio.
 
 ```
-/watch https://youtu.be/dQw4w9WgXcQ what happens at the 30 second mark?
+/transcribe https://youtu.be/dQw4w9WgXcQ what happens at the 30 second mark?
 ```
 
 ## Why this exists
@@ -25,17 +25,17 @@ I built this because I'm constantly using video to keep up with content. If I se
 
 The other half is summarization. Most YouTube videos don't deserve 20 minutes of my attention. I hand the URL to Claude, it pulls the transcript, and tells me what actually happened. If the visual matters, frames come along too. If it's a podcast or a talking head, transcript is enough.
 
-Claude is great at reading and synthesizing — but until now, video was the one input I couldn't hand it. Pasting a YouTube link got you nothing useful. `/watch` closes that gap.
+Claude is great at reading and synthesizing — but until now, video was the one input I couldn't hand it. Pasting a YouTube link got you nothing useful. `/transcribe` closes that gap.
 
 ## What people actually use it for
 
-**Analyze someone else's content.** `/watch https://youtu.be/<viral-video> what hook did they open with?` Claude looks at the first frames, reads the opening transcript, breaks down the structure. Same for ad creative, competitor launches, podcast intros, anything where the *how* matters as much as the *what*.
+**Analyze someone else's content.** `/transcribe https://youtu.be/<viral-video> what hook did they open with?` Claude looks at the first frames, reads the opening transcript, breaks down the structure. Same for ad creative, competitor launches, podcast intros, anything where the *how* matters as much as the *what*.
 
-**Diagnose a bug from a video.** Someone sends you a screen recording of something broken. `/watch bug-repro.mov what's going wrong?` Claude watches the recording, finds the frame where the issue appears, describes what's on screen, often catches the cause without you ever opening the file.
+**Diagnose a bug from a video.** Someone sends you a screen recording of something broken. `/transcribe bug-repro.mov what's going wrong?` Claude watches the recording, finds the frame where the issue appears, describes what's on screen, often catches the cause without you ever opening the file.
 
-**Summarize a video.** `/watch https://youtu.be/<long-thing> summarize this` does the obvious thing — pulls the structure, the key moments, what was actually said and shown. Faster than watching at 2x.
+**Summarize a video.** `/transcribe https://youtu.be/<long-thing> summarize this` does the obvious thing — pulls the structure, the key moments, what was actually said and shown. Faster than watching at 2x.
 
-**Transcribe a meeting recording or voice memo.** `/watch meeting.m4a` works on pure audio — the frame stages skip automatically, and the default pipeline (local Whisper + local speaker diarization) turns a 41-minute recording into a speaker-labeled, timestamped transcript plus a condensed editorial version, without a single byte leaving your machine. Built for confidential recordings.
+**Transcribe a meeting recording or voice memo.** `/transcribe meeting.m4a` works on pure audio — the frame stages skip automatically, and the default pipeline (local Whisper + local speaker diarization) turns a 41-minute recording into a speaker-labeled, timestamped transcript plus a condensed editorial version, without a single byte leaving your machine. Built for confidential recordings.
 
 ## How it works
 
@@ -78,7 +78,7 @@ Four separate sub-steps, in order:
 
 - **Resources** — every `https://` link in the description + transcript is deduped, normalized (tracking params stripped), and grouped (Projects / Docs / Articles / Videos / Social / Other), each annotated with its origin (`description` or `transcript@MM:SS`).
 - **Hand-off & answer** — frames (tagged `[REG]` gap-filled / `[CUT]` scene-cut) + transcript + resources go to Claude; it `Read`s every frame as an image and answers grounded in what's actually on screen and in the audio — not the title or description.
-- **Report** — three companion files next to local sources (`test.mp4` → `test.{md,protocol.md,transcript.md}`) or under `./watch/<YYYY-MM-DD>-<slug>/` for URLs; the `.md` carries Summary + Analysis, `.protocol.md` the metadata + frame list, `.transcript.md` the timestamped (and speaker-labeled) transcript. Diarized runs get a fourth `transcript-kompakt.md` — editorially condensed: one polished block per statement, STT garbles fixed, fillers dropped, grouped by topic. `--save-md PATH`, `--no-save-md`.
+- **Report** — three companion files next to local sources (`test.mp4` → `test.{md,protocol.md,transcript.md}`) or under `./transcribe/<YYYY-MM-DD>-<slug>/` for URLs; the `.md` carries Summary + Analysis, `.protocol.md` the metadata + frame list, `.transcript.md` the timestamped (and speaker-labeled) transcript. Diarized runs get a fourth `transcript-kompakt.md` — editorially condensed: one polished block per statement, STT garbles fixed, fillers dropped, grouped by topic. `--save-md PATH`, `--no-save-md`.
 - **Idempotent intermediates** — raw STT segments + diarization turns persist as `<base>.segments.json` / `.turns.json`; reprocessing the same source resumes in ~1 s (skips stage 4's STT + diarization). `--fresh` forces a clean re-run.
 - **Cleanup** — the temp work_dir is removed; the saved companions (report + intermediates) persist.
 
@@ -102,8 +102,8 @@ When the user names a moment ("around 2:30", "the last 30 seconds", "from 0:45 t
 
 ## Install
 
-`/watch` lives in the [AI-Toolbox](https://github.com/danielfrey63/ai-toolbox)
-at `.agents/skills/watch/`. Clone the toolbox first:
+`/transcribe` lives in the [AI-Toolbox](https://github.com/danielfrey63/ai-toolbox)
+at `.agents/skills/transcribe/`. Clone the toolbox first:
 
 ```bash
 git clone https://github.com/danielfrey63/ai-toolbox.git
@@ -113,23 +113,23 @@ git clone https://github.com/danielfrey63/ai-toolbox.git
 
 | Surface | Install |
 |---------|---------|
-| **Claude Code** | `/plugin marketplace add <ai-toolbox>/.agents/skills/watch` then `/plugin install watch@watch` |
-| **Codex** | Symlink the skill into `~/.codex/skills/watch` (see below) |
-| **claude.ai** (web) | Build `dist/watch.skill` with `scripts/build-skill.sh`, upload it under Settings → Capabilities → Skills |
+| **Claude Code** | `/plugin marketplace add <ai-toolbox>/.agents/skills/transcribe` then `/plugin install transcribe@transcribe` |
+| **Codex** | Symlink the skill into `~/.codex/skills/transcribe` (see below) |
+| **claude.ai** (web) | Build `dist/transcribe.skill` with `scripts/build-skill.sh`, upload it under Settings → Capabilities → Skills |
 | **Other skill clients** | The skill sits on the cross-client `.agents/skills/` path — point the client at it or symlink it |
 
 ### Claude Code
 
-`watch/` is its own single-plugin marketplace. Register it as a local
+`transcribe/` is its own single-plugin marketplace. Register it as a local
 marketplace and install:
 
 ```
-/plugin marketplace add <ai-toolbox>/.agents/skills/watch
-/plugin install watch@watch
+/plugin marketplace add <ai-toolbox>/.agents/skills/transcribe
+/plugin install transcribe@transcribe
 ```
 
 After editing the skill, refresh the installed copy with
-`/plugin marketplace update watch` then `/plugin update watch@watch`.
+`/plugin marketplace update transcribe` then `/plugin update transcribe@transcribe`.
 
 ### Codex
 
@@ -137,12 +137,12 @@ Codex discovers skills under `~/.codex/skills/`. Symlink the toolbox copy so
 it stays in sync:
 
 ```bash
-ln -s <ai-toolbox>/.agents/skills/watch ~/.codex/skills/watch
+ln -s <ai-toolbox>/.agents/skills/transcribe ~/.codex/skills/transcribe
 ```
 
 ### claude.ai (web)
 
-1. Build the upload bundle: `bash scripts/build-skill.sh` → `dist/watch.skill`.
+1. Build the upload bundle: `bash scripts/build-skill.sh` → `dist/transcribe.skill`.
 2. Go to Settings → Capabilities → Skills.
 3. Click `+` and drop the file in.
 
@@ -150,15 +150,15 @@ Enable "Code execution and file creation" under Capabilities first — the skill
 
 ## First run
 
-On the first `/watch` call, the skill runs `scripts/setup.py --check`. If `ffmpeg` / `yt-dlp` aren't on your PATH, or no Whisper API key is set, it walks you through fixing it:
+On the first `/transcribe` call, the skill runs `scripts/setup.py --check`. If `ffmpeg` / `yt-dlp` aren't on your PATH, or no Whisper API key is set, it walks you through fixing it:
 
 - **macOS** — auto-runs `brew install ffmpeg yt-dlp`.
 - **Linux** — prints the exact `apt` / `dnf` / `pipx` commands.
 - **Windows** — prints the `winget` / `pip` commands.
-- **API keys** — scaffolds `~/.config/watch/.env` (mode `0600`) from `.env.example` with commented placeholders for every backend: `GROQ_API_KEY` / `OPENAI_API_KEY`, the private Azure `gpt-4o-transcribe-diarize` + `claude-opus-4-7` endpoints, and the speaker-diarization backends. **None of these are required** — the local backends carry transcription (and, with a free `HF_TOKEN`, diarization) on their own.
-- **Managed ML venv** — the local backends (whisper-local, pyannote-local) run as worker subprocesses inside a pinned venv at `~/.config/watch/venv/`, provisioned automatically on first use (or explicitly via `setup.py --venv`). GPU is auto-detected (CUDA wheels); your own Python environments are never touched. The pin set lives in `setup.py` (`VENV_PINS`) and the venv self-heals when it changes.
+- **API keys** — scaffolds `~/.config/transcribe/.env` (mode `0600`) from `.env.example` with commented placeholders for every backend: `GROQ_API_KEY` / `OPENAI_API_KEY`, the private Azure `gpt-4o-transcribe-diarize` + `claude-opus-4-7` endpoints, and the speaker-diarization backends. **None of these are required** — the local backends carry transcription (and, with a free `HF_TOKEN`, diarization) on their own.
+- **Managed ML venv** — the local backends (whisper-local, pyannote-local) run as worker subprocesses inside a pinned venv at `~/.config/transcribe/venv/`, provisioned automatically on first use (or explicitly via `setup.py --venv`). GPU is auto-detected (CUDA wheels); your own Python environments are never touched. The pin set lives in `setup.py` (`VENV_PINS`) and the venv self-heals when it changes.
 
-After setup, preflight is silent and `/watch` just works. The check is a sub-100ms lookup, so it doesn't slow you down on subsequent runs.
+After setup, preflight is silent and `/transcribe` just works. The check is a sub-100ms lookup, so it doesn't slow you down on subsequent runs.
 
 ## Bring your own keys
 
@@ -181,28 +181,28 @@ Captions cover the majority of public videos for free. The STT fallback only kic
 ## Usage
 
 ```
-/watch https://youtu.be/dQw4w9WgXcQ what happens at the 30 second mark?
-/watch https://www.tiktok.com/@user/video/123 summarize this
-/watch ~/Movies/screen-recording.mp4 when does the UI break?
-/watch https://vimeo.com/123 what tools does she mention?
+/transcribe https://youtu.be/dQw4w9WgXcQ what happens at the 30 second mark?
+/transcribe https://www.tiktok.com/@user/video/123 summarize this
+/transcribe ~/Movies/screen-recording.mp4 when does the UI break?
+/transcribe https://vimeo.com/123 what tools does she mention?
 ```
 
 Focused on a specific section — denser frame budget, lower token cost:
 ```
-/watch https://youtu.be/abc --start 2:15 --end 2:45
-/watch video.mp4 --start 50 --end 60
-/watch "$URL" --start 1:12:00            # from 1h12m to end
+/transcribe https://youtu.be/abc --start 2:15 --end 2:45
+/transcribe video.mp4 --start 50 --end 60
+/transcribe "$URL" --start 1:12:00            # from 1h12m to end
 ```
 
 Speaker diarization (who said what) — **on by default** when a backend is configured, local first:
 ```
-/watch meeting.mp4                           # default: pyannote local > pyannote.ai > AssemblyAI
-/watch meeting.m4a                           # audio-only works the same — fully on-device
-/watch meeting.mp4 --no-diarize              # plain transcript, no speaker labels
-/watch meeting.mp4 --diarize assemblyai      # pin one backend (no cascade, fails loudly)
+/transcribe meeting.mp4                           # default: pyannote local > pyannote.ai > AssemblyAI
+/transcribe meeting.m4a                           # audio-only works the same — fully on-device
+/transcribe meeting.mp4 --no-diarize              # plain transcript, no speaker labels
+/transcribe meeting.mp4 --diarize assemblyai      # pin one backend (no cascade, fails loudly)
 ```
 
-Other knobs (passed to `scripts/watch.py`):
+Other knobs (passed to `scripts/run.py`):
 
 - `--max-frames N` — cap on regular frames per chunk (default 80, hard max 100). In single-chunk modes (focused or `--no-chunk`) this is also the global cap.
 - `--no-chunk` — disable auto-chunking for long videos. Reverts to the old single-pass sparse behavior (100 frames spread thinly).
@@ -219,7 +219,7 @@ Other knobs (passed to `scripts/watch.py`):
 - `--no-whisper` — disable transcription entirely; frames only.
 - `--fresh` — ignore persisted `<base>.segments.json` / `.turns.json` and re-transcribe + re-diarize from scratch. The default reuses them, so reprocessing the same source (e.g. to re-clean a transcript or re-render after a tweak) resumes in ~1 s instead of re-running STT + diarization.
 - `--out-dir DIR` — keep working files somewhere specific (default: auto-generated tmp dir). The persisted intermediates live next to the saved report; this flag only affects the ephemeral work dir.
-- `--save-md PATH` — override the auto-save location (defaults: `<video-stem>.md` next to local sources; `./watch/<YYYY-MM-DD>-<slug>/<slug>.md` for URL sources).
+- `--save-md PATH` — override the auto-save location (defaults: `<video-stem>.md` next to local sources; `./transcribe/<YYYY-MM-DD>-<slug>/<slug>.md` for URL sources).
 - `--no-save-md` — disable auto-save entirely (frames + transcript only in temp work_dir).
 
 ## Limits
@@ -228,7 +228,7 @@ Other knobs (passed to `scripts/watch.py`):
 - **Per-chunk cap: 2 fps, 100 frames.** Frame count drives token cost; the script enforces this even when the auto-fps math would imply higher.
 - **Transcription length limits: handled internally.** Long audio auto-splits transparently — Whisper by file size (20 MB chunks), the Azure backend by duration (~600 s chunks; the model caps a single call at ~1500 s) — both with 20 s overlap, stitched back onto one timeline.
 - **AssemblyAI upload limit: 5 GB / 10 h per file.** Effectively unlimited for normal use.
-- **No private platforms.** This skill doesn't log into anything. Public URLs and local files only. If yt-dlp can't reach it without auth, neither can `/watch`.
+- **No private platforms.** This skill doesn't log into anything. Public URLs and local files only. If yt-dlp can't reach it without auth, neither can `/transcribe`.
 
 ## Structure
 
@@ -236,7 +236,7 @@ Other knobs (passed to `scripts/watch.py`):
 .
 ├── SKILL.md                 # skill contract — loaded by all three surfaces
 ├── scripts/
-│   ├── watch.py             # entry point — orchestrates download → frames → transcript → diarize
+│   ├── run.py             # entry point — orchestrates download → frames → transcript → diarize
 │   ├── download.py          # yt-dlp wrapper
 │   ├── frames.py            # ffmpeg frame extraction + scdet + auto-fps + auto-chunk
 │   ├── transcribe.py        # VTT parsing + dedupe + segment formatting
@@ -246,18 +246,18 @@ Other knobs (passed to `scripts/watch.py`):
 │   ├── whisper_local_worker.py  # faster-whisper worker — runs INSIDE the managed venv
 │   ├── resources.py         # URL extraction from description + transcript, categorized
 │   ├── setup.py             # preflight + installer + .env scaffolding + managed-venv provisioning
-│   └── build-skill.sh       # build dist/watch.skill for claude.ai upload
+│   └── build-skill.sh       # build dist/transcribe.skill for claude.ai upload
 ├── hooks/                   # SessionStart status hook (Claude Code only)
 ├── .claude-plugin/          # plugin.json + marketplace.json (Claude Code)
 ├── .codex-plugin/           # codex packaging
-└── .github/workflows/       # release.yml — auto-builds watch.skill on tag push
+└── .github/workflows/       # release.yml — auto-builds transcribe.skill on tag push
 ```
 
 ## Develop
 
 ```bash
 # Build the claude.ai upload bundle:
-bash scripts/build-skill.sh      # → dist/watch.skill
+bash scripts/build-skill.sh      # → dist/transcribe.skill
 ```
 
 Versioning is handled by the AI-Toolbox: `plugin.json`'s `version` is the
@@ -268,7 +268,7 @@ pre-commit hooks. See `git log` for history.
 
 MIT license.
 
-`/watch` began as [**claude-video**](https://github.com/bradautomates/claude-video)
+`/transcribe` began as [**claude-video**](https://github.com/bradautomates/claude-video)
 by **Bradley Bonanno** ([bradautomates](https://github.com/bradautomates)) — full
 credit and thanks for the original work. It is now maintained as a fork inside
 the AI-Toolbox.

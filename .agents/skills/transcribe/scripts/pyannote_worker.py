@@ -25,7 +25,7 @@ PYANNOTE_MODEL = "pyannote/speaker-diarization-3.1"
 
 
 def log(msg: str) -> None:
-    print(f"[watch] {msg}", file=sys.stderr, flush=True)
+    print(f"[transcribe] {msg}", file=sys.stderr, flush=True)
 
 
 def main() -> int:

@@ -1,10 +1,10 @@
 ---
 name: discover
-description: Discover the most interesting recent videos across AI, frontier models, IDEs, programming, antipatterns, skills, MCP servers, and notable GitHub projects. Searches YouTube via yt-dlp across configurable topic queries, dedupes by video ID, ranks by views-per-day, and returns a curated table. Pair with `/watch` to summarize the top picks.
+description: Discover the most interesting recent videos across AI, frontier models, IDEs, programming, antipatterns, skills, MCP servers, and notable GitHub projects. Searches YouTube via yt-dlp across configurable topic queries, dedupes by video ID, ranks by views-per-day, and returns a curated table. Pair with `/transcribe` to summarize the top picks.
 allowed-tools: Bash, Read
 user-invocable: true
 metadata:
-  version: "0.0.1"
+  version: "0.1.2"
 ---
 
 # /discover — curate recent interesting videos
@@ -15,11 +15,11 @@ This skill answers "what should I watch this week?" for AI/coding content. It ru
 
 - The user asks for the latest interesting AI / frontier-model / coding content.
 - The user wants a weekly digest of what's trending in their corners of YouTube.
-- Pairing with `/watch`: discover candidates → read the table → user picks N URLs → invoke `/watch <url>` on each for a content summary.
+- Pairing with `/transcribe`: discover candidates → read the table → user picks N URLs → invoke `/transcribe <url>` on each for a content summary.
 
 ## Setup
 
-Single dependency: `yt-dlp`. Already installed if `/watch` is in use. Otherwise:
+Single dependency: `yt-dlp`. Already installed if `/transcribe` is in use. Otherwise:
 
 ```bash
 pip install --user --break-system-packages -U yt-dlp
@@ -58,10 +58,10 @@ python3 ~/.claude/skills/discover/scripts/discover.py --topics "Frontier Models,
 # Wider net — last month, top 40, no shorts allowed
 python3 ~/.claude/skills/discover/scripts/discover.py --days 30 --top 40 --min-duration 600
 
-# Pipe top 5 URLs into /watch for content summaries
+# Pipe top 5 URLs into /transcribe for content summaries
 python3 ~/.claude/skills/discover/scripts/discover.py --json --top 5 \
   | jq -r '.[].url'
-# (then invoke /watch on each URL)
+# (then invoke /transcribe on each URL)
 ```
 
 ## Topic configuration
@@ -84,7 +84,7 @@ Iterate the queries to taste — narrower queries give purer hits, broader queri
 
 The table has one row per video with: rank, topic, title, channel, duration, age, raw views, **views/day** (the ranking metric), URL.
 
-When the user wants a content summary on one of the rows, **call `/watch <url>`** — the watch skill downloads the video, extracts frames + transcript, and lets you describe what's in it. Don't re-implement that pipeline here.
+When the user wants a content summary on one of the rows, **call `/transcribe <url>`** — the transcribe skill downloads the video, extracts frames + transcript, and lets you describe what's in it. Don't re-implement that pipeline here.
 
 ## Implementation notes
 

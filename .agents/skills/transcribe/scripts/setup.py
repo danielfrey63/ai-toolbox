@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Setup / preflight for /watch.
+"""Setup / preflight for /transcribe.
 
 Modes:
   setup.py --check      Silent preflight. Exit 0 if ready, 2/3/4 on failure.
@@ -9,10 +9,10 @@ Modes:
 
 Design:
 - Silent on success: --check exits 0 with no output when everything's ready so
-  that /watch doesn't spam "setup is complete" on every turn.
+  that /transcribe doesn't spam "setup is complete" on every turn.
 - Idempotent: re-running the installer is safe - it never clobbers existing
   keys and only appends missing ones.
-- SETUP_COMPLETE=true in ~/.config/watch/.env tells us the user has been
+- SETUP_COMPLETE=true in ~/.config/transcribe/.env tells us the user has been
   through a successful installer run at least once.
 - Never sudo. On macOS, auto-install via brew. Elsewhere, print exact commands.
 - Never write an API key to disk automatically - only scaffold placeholders.
@@ -33,7 +33,7 @@ from pathlib import Path
 
 
 REQUIRED_BINARIES = ["ffmpeg", "ffprobe", "yt-dlp"]
-CONFIG_DIR = Path.home() / ".config" / "watch"
+CONFIG_DIR = Path.home() / ".config" / "transcribe"
 CONFIG_FILE = CONFIG_DIR / ".env"
 
 # Single source of truth for Windows-platform branches. Anywhere else in the
@@ -44,17 +44,17 @@ IS_WINDOWS = platform.system() == "Windows"
 # Standalone-binary install location. Lives outside .config because these are
 # binaries (chmod +x on Unix, .exe on Windows), not config. Same directory on
 # both platforms so the path scripts hand to subprocess is trivially portable.
-WATCH_BIN_DIR = Path.home() / ".watch" / "bin"
+TRANSCRIBE_BIN_DIR = Path.home() / ".transcribe" / "bin"
 
 # ===========================================================================
 # Managed venv for the local ML backends (pyannote-local, whisper-local).
 #
 # The pyannote/faster-whisper dependency stack is too fragile to import into
-# whatever Python happens to run watch.py (battle-tested on Windows: pyannote
+# whatever Python happens to run run.py (battle-tested on Windows: pyannote
 # 4.x torchcodec DLLs, torch>=2.6 weights_only, hub 1.x API breaks, conflicts
 # with any env carrying recent transformers/torchvision). So the heavy code
 # runs in *worker subprocesses* inside a skill-owned venv, provisioned
-# idempotently next to the rest of the skill state in ~/.config/watch/.
+# idempotently next to the rest of the skill state in ~/.config/transcribe/.
 # The host process stays stdlib-only.
 # ===========================================================================
 VENV_DIR = CONFIG_DIR / "venv"
@@ -121,12 +121,12 @@ def _exe_suffix() -> str:
 
 def find_tool(name: str) -> str | None:
     """Locate ffmpeg / ffprobe / yt-dlp. Prefer the standalone install
-    in `~/.watch/bin/`, then fall back to anything on PATH.
+    in `~/.transcribe/bin/`, then fall back to anything on PATH.
 
     Returned path is absolute so subprocess.run can use it verbatim.
     Returns None if the binary cannot be found in either location.
     """
-    candidate = WATCH_BIN_DIR / f"{name}{_exe_suffix()}"
+    candidate = TRANSCRIBE_BIN_DIR / f"{name}{_exe_suffix()}"
     if candidate.exists() and candidate.is_file():
         return str(candidate)
     return shutil.which(name)
@@ -164,7 +164,7 @@ def _download(url: str, dest: Path) -> None:
     """Stream a URL to disk. Coarse 10%-step progress, to stderr."""
     sys.stderr.write(f"[setup] downloading {url}\n")
     sys.stderr.flush()
-    req = urllib.request.Request(url, headers={"User-Agent": "watch-skill/0.3"})
+    req = urllib.request.Request(url, headers={"User-Agent": "transcribe-skill/0.3"})
     with urllib.request.urlopen(req, timeout=120) as resp:
         total = int(resp.headers.get("Content-Length") or 0)
         chunk_size = 1024 * 256
@@ -190,9 +190,9 @@ def _download(url: str, dest: Path) -> None:
 
 
 def _install_ytdlp(target: str, force: bool = False) -> bool:
-    """Drop yt-dlp[.exe] into WATCH_BIN_DIR."""
+    """Drop yt-dlp[.exe] into TRANSCRIBE_BIN_DIR."""
     suffix = ".exe" if target == "windows-x64" else ""
-    out = WATCH_BIN_DIR / f"yt-dlp{suffix}"
+    out = TRANSCRIBE_BIN_DIR / f"yt-dlp{suffix}"
     if out.exists() and not force:
         sys.stderr.write(f"[setup] yt-dlp already in {out} (use --force to refresh)\n")
         return True
@@ -200,7 +200,7 @@ def _install_ytdlp(target: str, force: bool = False) -> bool:
     if not url:
         sys.stderr.write(f"[setup] no yt-dlp standalone for target '{target}'\n")
         return False
-    WATCH_BIN_DIR.mkdir(parents=True, exist_ok=True)
+    TRANSCRIBE_BIN_DIR.mkdir(parents=True, exist_ok=True)
     _download(url, out)
     if target != "windows-x64":
         out.chmod(0o755)
@@ -208,7 +208,7 @@ def _install_ytdlp(target: str, force: bool = False) -> bool:
 
 
 def _install_ffmpeg(target: str, force: bool = False) -> bool:
-    """Unpack ffmpeg+ffprobe into WATCH_BIN_DIR. macOS routes through brew."""
+    """Unpack ffmpeg+ffprobe into TRANSCRIBE_BIN_DIR. macOS routes through brew."""
     if target == "macos":
         sys.stderr.write(
             "[setup] macOS auto-install for ffmpeg is not bundled - "
@@ -217,11 +217,11 @@ def _install_ffmpeg(target: str, force: bool = False) -> bool:
         return False
 
     suffix = ".exe" if target == "windows-x64" else ""
-    ffmpeg_out = WATCH_BIN_DIR / f"ffmpeg{suffix}"
-    ffprobe_out = WATCH_BIN_DIR / f"ffprobe{suffix}"
+    ffmpeg_out = TRANSCRIBE_BIN_DIR / f"ffmpeg{suffix}"
+    ffprobe_out = TRANSCRIBE_BIN_DIR / f"ffprobe{suffix}"
     if ffmpeg_out.exists() and ffprobe_out.exists() and not force:
         sys.stderr.write(
-            f"[setup] ffmpeg+ffprobe already in {WATCH_BIN_DIR} (use --force to refresh)\n"
+            f"[setup] ffmpeg+ffprobe already in {TRANSCRIBE_BIN_DIR} (use --force to refresh)\n"
         )
         return True
 
@@ -230,8 +230,8 @@ def _install_ffmpeg(target: str, force: bool = False) -> bool:
         sys.stderr.write(f"[setup] no ffmpeg build for target '{target}'\n")
         return False
 
-    WATCH_BIN_DIR.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="watch-ffmpeg-") as tmp:
+    TRANSCRIBE_BIN_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="transcribe-ffmpeg-") as tmp:
         tmp_path = Path(tmp)
         archive_path = tmp_path / url.rsplit("/", 1)[-1]
         _download(url, archive_path)
@@ -269,12 +269,12 @@ def _install_ffmpeg(target: str, force: bool = False) -> bool:
             ffmpeg_out.chmod(0o755)
             ffprobe_out.chmod(0o755)
 
-    sys.stderr.write(f"[setup] installed ffmpeg + ffprobe -> {WATCH_BIN_DIR}\n")
+    sys.stderr.write(f"[setup] installed ffmpeg + ffprobe -> {TRANSCRIBE_BIN_DIR}\n")
     return True
 
 
 def cmd_install_binaries(force: bool = False) -> int:
-    """Download standalone ffmpeg + ffprobe + yt-dlp into ~/.watch/bin/."""
+    """Download standalone ffmpeg + ffprobe + yt-dlp into ~/.transcribe/bin/."""
     target = _detect_target()
     if not target:
         sys.stderr.write(
@@ -284,7 +284,7 @@ def cmd_install_binaries(force: bool = False) -> int:
         return 2
 
     sys.stderr.write(
-        f"[setup] target: {target} | install dir: {WATCH_BIN_DIR}\n"
+        f"[setup] target: {target} | install dir: {TRANSCRIBE_BIN_DIR}\n"
     )
     try:
         _install_ytdlp(target, force=force)
@@ -302,14 +302,14 @@ def cmd_install_binaries(force: bool = False) -> int:
 
     sys.stderr.write(
         "[setup] all binaries available. find_tool() will return paths in "
-        f"{WATCH_BIN_DIR} unless system-PATH versions are present.\n"
+        f"{TRANSCRIBE_BIN_DIR} unless system-PATH versions are present.\n"
     )
     _print_path_snippets()
     return 0
 
 
 def _print_path_snippets() -> None:
-    """Show platform-appropriate PATH-add snippets for ~/.watch/bin.
+    """Show platform-appropriate PATH-add snippets for ~/.transcribe/bin.
 
     The skill itself uses `find_tool()` and doesn't need the binaries on
     PATH. But users (and other shell-driven tools) often want to invoke
@@ -320,12 +320,12 @@ def _print_path_snippets() -> None:
     sys.stderr.write("\n")
     sys.stderr.write(
         "[setup] To call ffmpeg / ffprobe / yt-dlp directly from a shell\n"
-        f"[setup] (the watch skill itself works without this), add\n"
-        f"[setup]   {WATCH_BIN_DIR}\n"
+        f"[setup] (the transcribe skill itself works without this), add\n"
+        f"[setup]   {TRANSCRIBE_BIN_DIR}\n"
         f"[setup] to PATH. Snippets per shell:\n\n"
     )
     if IS_WINDOWS:
-        bin_str = str(WATCH_BIN_DIR)
+        bin_str = str(TRANSCRIBE_BIN_DIR)
         # Use generic %USERPROFILE% / $HOME so the snippet survives a copy
         # to a different account name — and the literal path for the
         # current session where the user can paste verbatim.
@@ -339,18 +339,18 @@ def _print_path_snippets() -> None:
             "  cmd (persistent for current user, no admin):\n"
             f"    setx PATH \"{bin_str};%PATH%\"\n\n"
             "  Git Bash / WSL (persistent — append to ~/.bashrc):\n"
-            "    export PATH=\"$HOME/.watch/bin:$PATH\"\n"
+            "    export PATH=\"$HOME/.transcribe/bin:$PATH\"\n"
         )
     else:
         sys.stderr.write(
             "  bash / zsh (current session):\n"
-            "    export PATH=\"$HOME/.watch/bin:$PATH\"\n\n"
+            "    export PATH=\"$HOME/.transcribe/bin:$PATH\"\n\n"
             "  bash (persistent - append to ~/.bashrc):\n"
-            "    echo 'export PATH=\"$HOME/.watch/bin:$PATH\"' >> ~/.bashrc\n\n"
+            "    echo 'export PATH=\"$HOME/.transcribe/bin:$PATH\"' >> ~/.bashrc\n\n"
             "  zsh (persistent - append to ~/.zshrc):\n"
-            "    echo 'export PATH=\"$HOME/.watch/bin:$PATH\"' >> ~/.zshrc\n\n"
+            "    echo 'export PATH=\"$HOME/.transcribe/bin:$PATH\"' >> ~/.zshrc\n\n"
             "  fish (persistent):\n"
-            "    fish_add_path $HOME/.watch/bin\n"
+            "    fish_add_path $HOME/.transcribe/bin\n"
         )
     sys.stderr.write("\n")
 
@@ -384,7 +384,7 @@ def _check_file_permissions(path: Path) -> None:
         mode = path.stat().st_mode
         if mode & 0o044:
             sys.stderr.write(
-                f"[watch] WARNING: {path} is readable by other users. "
+                f"[transcribe] WARNING: {path} is readable by other users. "
                 f"Run: chmod 600 {path}\n"
             )
             sys.stderr.flush()
@@ -468,7 +468,7 @@ def _diarize_is_dismissed() -> bool:
 
     Honored by cmd_check to suppress the optional-keys-missing nag for
     users who actively don't want diarization. Stored as
-    `DIARIZE_DISMISSED=true` in `~/.config/watch/.env`.
+    `DIARIZE_DISMISSED=true` in `~/.config/transcribe/.env`.
     """
     return _read_env_key("DIARIZE_DISMISSED") == "true"
 
@@ -570,7 +570,7 @@ def is_first_run() -> bool:
 
 
 def _scaffold_env() -> bool:
-    """Create ~/.config/watch/.env with placeholders if missing."""
+    """Create ~/.config/transcribe/.env with placeholders if missing."""
     if CONFIG_FILE.exists():
         return False
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -644,7 +644,7 @@ def _install_hint_linux(missing: list[str]) -> str:
     hints = []
     hints.append(
         f"`python3 {Path(__file__).resolve()} --install-binaries` "
-        f"(standalone, no global install, lands in {WATCH_BIN_DIR})"
+        f"(standalone, no global install, lands in {TRANSCRIBE_BIN_DIR})"
     )
     if "ffmpeg" in pkgs:
         hints.append("or via package manager: `sudo apt install ffmpeg` / `sudo dnf install ffmpeg`")
@@ -658,7 +658,7 @@ def _install_hint_windows(missing: list[str]) -> str:
     hints = []
     hints.append(
         f"`python {Path(__file__).resolve()} --install-binaries` "
-        f"(standalone, no global install, lands in {WATCH_BIN_DIR})"
+        f"(standalone, no global install, lands in {TRANSCRIBE_BIN_DIR})"
     )
     if "ffmpeg" in pkgs:
         hints.append("or via winget: `winget install Gyan.FFmpeg`")
@@ -914,7 +914,7 @@ def cmd_check() -> int:
                 "missing required keys: " + ", ".join(missing_required)
             )
         sys.stderr.write(
-            f"[watch] setup incomplete ({'; '.join(parts)}). "
+            f"[transcribe] setup incomplete ({'; '.join(parts)}). "
             f"Run: python3 {installer}\n"
         )
 
@@ -922,9 +922,9 @@ def cmd_check() -> int:
         # Local-first nudge: HF_TOKEN unlocks free, on-device diarization;
         # the cloud keys are alternatives. Transcription works regardless.
         sys.stderr.write(
-            "[watch] speaker diarization is off (no backend configured). "
+            "[transcribe] speaker diarization is off (no backend configured). "
             "For free, on-device diarization add HF_TOKEN to "
-            "~/.config/watch/.env and accept the pyannote licenses; "
+            "~/.config/transcribe/.env and accept the pyannote licenses; "
             "PYANNOTE_API_KEY / ASSEMBLYAI_API_KEY are cloud alternatives. "
             "Transcription works without any of these. Run "
             "`setup.py --skip-diarize` to silence this hint.\n"
@@ -970,7 +970,7 @@ def cmd_install() -> int:
             # fresh Linux/Windows box is one-shot, not a two-command dance.
             print(
                 f"[setup] dependencies missing on {system} - auto-installing "
-                f"into {WATCH_BIN_DIR}...",
+                f"into {TRANSCRIBE_BIN_DIR}...",
                 file=sys.stderr,
             )
             rc = cmd_install_binaries()
@@ -1014,11 +1014,11 @@ def cmd_install() -> int:
         print(f"[setup] ready. transcription: {backend} (cloud) + whisper-local on-device fallback.")
     else:
         print("[setup] ready. transcription runs on-device via whisper-local - "
-              "no key needed; the managed venv self-provisions on the first /watch run.")
+              "no key needed; the managed venv self-provisions on the first /transcribe run.")
         print(f"  Optional cloud upgrades - edit {CONFIG_FILE}:")
         print("    GROQ_API_KEY / OPENAI_API_KEY   (faster Whisper via cloud)")
     if installed_deps:
-        print("[setup] installed dependencies; /watch is fully set up.")
+        print("[setup] installed dependencies; /transcribe is fully set up.")
     _print_diarize_status()
     return 0
 
@@ -1036,7 +1036,7 @@ def _print_diarize_status() -> None:
     have_hf = bool(_read_env_key("HF_TOKEN") or _read_env_key("HUGGINGFACE_TOKEN"))
 
     print("")
-    print("[setup] speaker diarization (optional, --diarize in /watch):")
+    print("[setup] speaker diarization (optional, --diarize in /transcribe):")
     rows = [
         ("ASSEMBLYAI_API_KEY",
          "AssemblyAI - cloud, transcription + speaker labels in one call (~$0.37/h)",
@@ -1058,7 +1058,7 @@ def _print_diarize_status() -> None:
             print(f"               get a key: {url}")
     if not (have_assembly or have_pyannote or have_hf):
         print("")
-        print("  Without any of these, /watch runs without speaker labels. Transcript")
+        print("  Without any of these, /transcribe runs without speaker labels. Transcript")
         print("  still works fine, but lines are not attributed to individual speakers.")
 
 

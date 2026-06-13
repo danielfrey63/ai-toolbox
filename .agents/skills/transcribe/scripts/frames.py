@@ -694,7 +694,7 @@ def extract_at_timestamps(
         # the chosen threshold (whether auto or fixed).
         if stats["n_pairs"] > 0:
             print(
-                f"[watch] dedup distances: median={stats['median']}, "
+                f"[transcribe] dedup distances: median={stats['median']}, "
                 f"p90={stats['p90']}, max={stats['max']} "
                 f"(n={stats['n_pairs']} consecutive pairs)",
                 file=sys.stderr,
@@ -705,7 +705,7 @@ def extract_at_timestamps(
             else str(used_thr)
         )
         print(
-            f"[watch] dedup: kept {len(kept)} of {len(extracted)} regular "
+            f"[transcribe] dedup: kept {len(kept)} of {len(extracted)} regular "
             f"frames (threshold {threshold_label}, dropped {dropped} "
             f"near-duplicates)",
             file=sys.stderr,

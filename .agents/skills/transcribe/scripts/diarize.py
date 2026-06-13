@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Speaker diarization with three interchangeable backends.
 
-Three modes, picked by `--diarize` in watch.py:
+Three modes, picked by `--diarize` in run.py:
 
   * `assemblyai`     - cloud, all-in-one. Replaces Whisper entirely:
                        transcription + speaker labels come from one API call.
@@ -67,11 +67,11 @@ def _assemblyai_base() -> str:
 
 
 def _load_env_value(name: str) -> str | None:
-    """Look up an env value from $name or `~/.config/watch/.env` / `./.env`."""
+    """Look up an env value from $name or `~/.config/transcribe/.env` / `./.env`."""
     value = os.environ.get(name)
     if value:
         return value.strip()
-    for path in (Path.home() / ".config" / "watch" / ".env", Path.cwd() / ".env"):
+    for path in (Path.home() / ".config" / "transcribe" / ".env", Path.cwd() / ".env"):
         if not path.exists():
             continue
         try:
@@ -127,21 +127,21 @@ def pick_backend(preferred: str | None) -> str | None:
         if not _load_env_value("ASSEMBLYAI_API_KEY"):
             raise SystemExit(
                 "--diarize assemblyai requires ASSEMBLYAI_API_KEY. "
-                "Add it to ~/.config/watch/.env or the environment. "
+                "Add it to ~/.config/transcribe/.env or the environment. "
                 "Get a key at https://www.assemblyai.com/dashboard/api-keys"
             )
     elif preferred == "pyannote-api":
         if not _load_env_value("PYANNOTE_API_KEY"):
             raise SystemExit(
                 "--diarize pyannote-api requires PYANNOTE_API_KEY. "
-                "Add it to ~/.config/watch/.env or the environment. "
+                "Add it to ~/.config/transcribe/.env or the environment. "
                 "Sign up at https://www.pyannote.ai/"
             )
     elif preferred == "pyannote-local":
         if not (_load_env_value("HF_TOKEN") or _load_env_value("HUGGINGFACE_TOKEN")):
             raise SystemExit(
                 "--diarize pyannote-local requires HF_TOKEN (Hugging Face token). "
-                "Add it to ~/.config/watch/.env or the environment, and accept the "
+                "Add it to ~/.config/transcribe/.env or the environment, and accept the "
                 "licenses at https://huggingface.co/pyannote/speaker-diarization-3.1 "
                 "and https://huggingface.co/pyannote/segmentation-3.0"
             )
@@ -166,17 +166,17 @@ def diarize_assemblyai(
     api_key = api_key or _load_env_value("ASSEMBLYAI_API_KEY")
     if not api_key:
         raise SystemExit(
-            "ASSEMBLYAI_API_KEY missing. Add it to ~/.config/watch/.env "
+            "ASSEMBLYAI_API_KEY missing. Add it to ~/.config/transcribe/.env "
             "or the environment. Get a key at https://www.assemblyai.com/."
         )
 
-    print("[watch] uploading audio to AssemblyAI...", file=sys.stderr)
+    print("[transcribe] uploading audio to AssemblyAI...", file=sys.stderr)
     upload_url = _assemblyai_upload(audio_path, api_key)
 
-    print("[watch] submitting AssemblyAI transcription job (speaker_labels=true)...", file=sys.stderr)
+    print("[transcribe] submitting AssemblyAI transcription job (speaker_labels=true)...", file=sys.stderr)
     job_id = _assemblyai_submit(upload_url, api_key, language)
 
-    print(f"[watch] polling AssemblyAI job {job_id[:12]}...", file=sys.stderr)
+    print(f"[transcribe] polling AssemblyAI job {job_id[:12]}...", file=sys.stderr)
     result = _assemblyai_poll(job_id, api_key)
     return _assemblyai_parse(result)
 
@@ -310,14 +310,14 @@ def diarize_pyannote_api(
     api_key = api_key or _load_env_value("PYANNOTE_API_KEY")
     if not api_key:
         raise SystemExit(
-            "PYANNOTE_API_KEY missing. Add it to ~/.config/watch/.env or "
+            "PYANNOTE_API_KEY missing. Add it to ~/.config/transcribe/.env or "
             "the environment. Get a key at https://www.pyannote.ai/."
         )
 
     media_url = _pyannote_upload(audio_path, api_key)
-    print("[watch] submitting pyannote.ai diarization job...", file=sys.stderr)
+    print("[transcribe] submitting pyannote.ai diarization job...", file=sys.stderr)
     job_id = _pyannote_submit(media_url, api_key)
-    print(f"[watch] polling pyannote.ai job {job_id[:12]}...", file=sys.stderr)
+    print(f"[transcribe] polling pyannote.ai job {job_id[:12]}...", file=sys.stderr)
     result = _pyannote_poll(job_id, api_key)
     return _pyannote_parse(result)
 
@@ -334,10 +334,10 @@ def _pyannote_upload(audio_path: Path, api_key: str) -> str:
       2. PUT the audio bytes to that URL.
       3. Reference the upload as `media://<name>` in /diarize.
     """
-    name = f"watch-{uuid.uuid4().hex}.mp3"
+    name = f"transcribe-{uuid.uuid4().hex}.mp3"
     ctx = ssl.create_default_context()
 
-    print(f"[watch] requesting pyannote.ai upload URL for {name}...", file=sys.stderr)
+    print(f"[transcribe] requesting pyannote.ai upload URL for {name}...", file=sys.stderr)
     request = Request(
         f"{PYANNOTE_API_BASE}/media/{name}",
         data=b"{}",
@@ -350,7 +350,7 @@ def _pyannote_upload(audio_path: Path, api_key: str) -> str:
     if not presigned_url:
         raise SystemExit(f"pyannote.ai upload-URL response missing url field: {data}")
 
-    print(f"[watch] uploading audio to pyannote.ai presigned URL...", file=sys.stderr)
+    print(f"[transcribe] uploading audio to pyannote.ai presigned URL...", file=sys.stderr)
     put_request = Request(
         presigned_url,
         data=audio_path.read_bytes(),
@@ -427,7 +427,7 @@ def diarize_pyannote_local(
     """Run pyannote.audio locally, fully on-device. Heavy on first use.
 
     The fragile ML stack never loads into this process: the work happens in
-    `pyannote_worker.py` inside the managed venv (~/.config/watch/venv),
+    `pyannote_worker.py` inside the managed venv (~/.config/transcribe/venv),
     which setup.ensure_venv() provisions idempotently on first use. See the
     worker for the Windows hardening; see setup.VENV_PINS for the pin set.
 
@@ -440,7 +440,7 @@ def diarize_pyannote_local(
         raise SystemExit(
             "HF_TOKEN missing - pyannote.audio needs a Hugging Face token "
             "to download the diarization model. Set HF_TOKEN in your env or "
-            "in ~/.config/watch/.env. Also accept the model licenses at "
+            "in ~/.config/transcribe/.env. Also accept the model licenses at "
             "https://huggingface.co/pyannote/speaker-diarization-3.1 and "
             "https://huggingface.co/pyannote/segmentation-3.0."
         )

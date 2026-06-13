@@ -1,6 +1,6 @@
 ---
-name: watch
-description: Watch a video or transcribe an audio file (URL or local path; .m4a/.mp3 voice memos and meeting recordings skip the frame stages automatically). Downloads with yt-dlp, extracts gap-filled frames + scdet-detected cuts, auto-chunks long videos, and transcribes via captions or a LOCAL-FIRST cascade (on-device faster-whisper by default, cloud backends as fallback) with speaker diarization ON by default (on-device pyannote, Claude-driven speaker-to-name substitution). Produces a persistent report (`<base>.{md,protocol.md,transcript.md}` plus `transcript-kompakt.md` when diarized) and a Summary that hits the chat with clickable file:// links.
+name: transcribe
+description: Transcribe a video or audio file (URL or local path; .m4a/.mp3 voice memos and meeting recordings skip the frame stages automatically). Downloads with yt-dlp, extracts gap-filled frames + scdet-detected cuts, auto-chunks long videos, and transcribes via captions or a LOCAL-FIRST cascade (on-device faster-whisper by default, cloud backends as fallback) with speaker diarization ON by default (on-device pyannote, Claude-driven speaker-to-name substitution). Produces a persistent report (`<base>.{md,protocol.md,transcript.md}` plus `transcript-kompakt.md` when diarized) and a Summary that hits the chat with clickable file:// links.
 argument-hint: "<video-url-or-path> [question]"
 allowed-tools: Bash, Read, AskUserQuestion
 homepage: https://github.com/danielfrey63/ai-toolbox
@@ -10,15 +10,15 @@ license: MIT
 user-invocable: true
 ---
 
-# /watch — Claude watches a video
+# /transcribe — Claude transcribes (and watches) a video or audio file
 
 You don't have a video input; this skill gives you one. A Python script downloads the video, extracts frames as JPEGs, gets a timestamped transcript (native captions first, then Whisper API as fallback), and prints frame paths. You then `Read` each frame path to see the images and combine them with the transcript to answer the user.
 
-## Step 0 — Setup preflight (runs every `/watch` invocation, silent on success)
+## Step 0 — Setup preflight (runs every `/transcribe` invocation, silent on success)
 
 **Python interpreter:** every `python3 ...` command in this skill is for macOS/Linux. On **Windows**, substitute `python` — the `python3` command on Windows is the Microsoft Store stub and will not run the script.
 
-Before every `/watch` run, verify that dependencies and an API key are in place:
+Before every `/transcribe` run, verify that dependencies and an API key are in place:
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py" --check
@@ -42,9 +42,9 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py"
 
 On all three platforms, the default installer now does the right thing automatically:
 - **macOS** — auto-runs `brew install ffmpeg yt-dlp`.
-- **Linux / Windows** — routes to `cmd_install_binaries()` and downloads standalone binaries into `~/.watch/bin/` (yt-dlp from GitHub Releases, ffmpeg from johnvansickle on Linux / Gyan.dev on Windows). No `apt install`, no `pip install`, no admin rights needed. A `find_tool()` helper in `setup.py` prefers `~/.watch/bin/` and falls back to anything on PATH — system-installed versions still win when present.
+- **Linux / Windows** — routes to `cmd_install_binaries()` and downloads standalone binaries into `~/.transcribe/bin/` (yt-dlp from GitHub Releases, ffmpeg from johnvansickle on Linux / Gyan.dev on Windows). No `apt install`, no `pip install`, no admin rights needed. A `find_tool()` helper in `setup.py` prefers `~/.transcribe/bin/` and falls back to anything on PATH — system-installed versions still win when present.
 
-It scaffolds `~/.config/watch/.env` with commented placeholders at `0600` perms, and writes `SETUP_COMPLETE=true` once deps + a key are in place so the next session knows this user has already been through the wizard.
+It scaffolds `~/.config/transcribe/.env` with commented placeholders at `0600` perms, and writes `SETUP_COMPLETE=true` once deps + a key are in place so the next session knows this user has already been through the wizard.
 
 **Direct standalone-binary invocation** (explicit, useful for `--force` re-download or skipping the env scaffolding):
 
@@ -54,18 +54,18 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py" --install-binaries [--force]
 
 Same as what the default installer routes to on Linux/Windows. Add `--force` to refresh existing binaries.
 
-**If an API key is still missing after install:** use `AskUserQuestion` to ask the user whether they have a Groq API key (preferred — cheaper, faster) or an OpenAI key. Then write it into `~/.config/watch/.env` — set the matching `GROQ_API_KEY=...` or `OPENAI_API_KEY=...` line. If they don't want to set up Whisper, proceed with `--no-whisper` and tell them videos without native captions will come back frames-only.
+**If an API key is still missing after install:** use `AskUserQuestion` to ask the user whether they have a Groq API key (preferred — cheaper, faster) or an OpenAI key. Then write it into `~/.config/transcribe/.env` — set the matching `GROQ_API_KEY=...` or `OPENAI_API_KEY=...` line. If they don't want to set up Whisper, proceed with `--no-whisper` and tell them videos without native captions will come back frames-only.
 
 **Structured mode (optional):** `python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py" --json` emits `{status, first_run, missing_binaries, whisper_backend, has_api_key, config_file, platform}` where `status` is one of `ready | needs_install | needs_key | needs_install_and_key`. Use this when you need to branch on specifics (e.g. "is this the user's very first run?" → `first_run: true`).
 
-Within a single session, you can skip Step 0 on follow-up `/watch` calls — once `--check` returned 0, nothing about the environment changes between turns.
+Within a single session, you can skip Step 0 on follow-up `/transcribe` calls — once `--check` returned 0, nothing about the environment changes between turns.
 
 ## When to use
 
 - User pastes a video URL (YouTube, Vimeo, X, TikTok, Twitch clip, most yt-dlp-supported sites) and asks about it.
 - User points at a local video file (`.mp4`, `.mov`, `.mkv`, `.webm`, etc.) and asks about it.
 - User points at a local **audio** file (`.m4a`, `.mp3`, `.wav`, voice memos, meeting recordings) — the frame stages are skipped automatically; transcription, diarization, and the report pipeline run normally. The defaults are already fully on-device (whisper-local + pyannote-local), so confidential recordings need no extra flags.
-- User types `/watch <url-or-path> [question]`.
+- User types `/transcribe <url-or-path> [question]`.
 
 ## Recommended limits
 
@@ -79,12 +79,12 @@ Within a single session, you can skip Step 0 on follow-up `/watch` calls — onc
 
 ## How to invoke
 
-**Step 1 — parse the user input.** Separate the video source (URL or path) from any question the user asked. Example: `/watch https://youtu.be/abc what language is this in?` → source = `https://youtu.be/abc`, question = `what language is this in?`.
+**Step 1 — parse the user input.** Separate the video source (URL or path) from any question the user asked. Example: `/transcribe https://youtu.be/abc what language is this in?` → source = `https://youtu.be/abc`, question = `what language is this in?`.
 
-**Step 2 — run the watch script.** Pass the source verbatim. Do not shell-escape it yourself beyond normal quoting:
+**Step 2 — run the transcribe script.** Pass the source verbatim. Do not shell-escape it yourself beyond normal quoting:
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/watch.py" "<source>"
+python3 "${CLAUDE_SKILL_DIR}/scripts/run.py" "<source>"
 ```
 
 Optional flags:
@@ -94,22 +94,22 @@ Optional flags:
 - `--diarize [BACKEND]` — speaker diarization. Output transcript lines become `[MM:SS] [<speaker>] text`. **ON by default** (auto mode): the first configured backend runs, **local first** — pyannote local (HF_TOKEN) → pyannote.ai → AssemblyAI; when none is configured, the run degrades silently to a plain transcript. If the chosen auto backend fails, the cascade falls through to the next configured one. `--no-diarize` turns diarization off; an explicit `--diarize <backend>` pins exactly that backend (no cascade, fails loudly). Backends:
   - **`--diarize assemblyai`** — cloud, all-in-one. Replaces Whisper: one API call returns transcription + speaker labels. Uses `universal-3-pro` (fallback `universal-2`) and `language_detection: true` by default — handles multilingual content (DE-CH + EN + FR/IT references) without an explicit language hint. Needs `ASSEMBLYAI_API_KEY` in env or `.env`; optionally `ASSEMBLYAI_REGION=eu` for EU data residency. ~0.37 USD/h.
   - **`--diarize pyannote-api`** — cloud pyannote.ai (diarization-only). Runs alongside Whisper; the script aligns speaker turns to Whisper segments by overlap. Needs `PYANNOTE_API_KEY`. Cheaper than AssemblyAI.
-  - **`--diarize pyannote-local`** — local pyannote.audio. Free, fully on-device (nothing leaves the machine — the right choice for confidential recordings). Zero manual setup: the heavy ML stack lives in a **managed venv** at `~/.config/watch/venv/`, provisioned idempotently on first use (or explicitly via `setup.py --venv`); the diarization itself runs as a worker subprocess (`pyannote_worker.py`) inside that venv, so the host Python is never touched. GPU is auto-detected (nvidia-smi → cu124 wheels; a 41-min recording diarizes in ~90 s on GPU vs ~36 min on CPU). Requirements that remain with the user: a Hugging Face token (`HF_TOKEN`) plus license acceptance for **both** gated repos: `pyannote/speaker-diarization-3.1` *and* `pyannote/segmentation-3.0`. Speaker count stays on auto by design — forcing `num_speakers` collapses onto the dominant voice on single-mic recordings (observed: 95% one speaker on a real 2-person meeting); surplus mini-clusters are merged/labeled afterwards by Claude from transcript context. Diarization aligns to the Whisper transcript.
+  - **`--diarize pyannote-local`** — local pyannote.audio. Free, fully on-device (nothing leaves the machine — the right choice for confidential recordings). Zero manual setup: the heavy ML stack lives in a **managed venv** at `~/.config/transcribe/venv/`, provisioned idempotently on first use (or explicitly via `setup.py --venv`); the diarization itself runs as a worker subprocess (`pyannote_worker.py`) inside that venv, so the host Python is never touched. GPU is auto-detected (nvidia-smi → cu124 wheels; a 41-min recording diarizes in ~90 s on GPU vs ~36 min on CPU). Requirements that remain with the user: a Hugging Face token (`HF_TOKEN`) plus license acceptance for **both** gated repos: `pyannote/speaker-diarization-3.1` *and* `pyannote/segmentation-3.0`. Speaker count stays on auto by design — forcing `num_speakers` collapses onto the dominant voice on single-mic recordings (observed: 95% one speaker on a real 2-person meeting); surplus mini-clusters are merged/labeled afterwards by Claude from transcript context. Diarization aligns to the Whisper transcript.
   - Identifying *which name* maps to `A`/`B`/`SPEAKER_00` is done later by Claude using address patterns in the transcript (see Step 4 Inventar → Personen & Stimmen). For **audio-only sources** (no frames as ground truth), role/content evidence substitutes for frame evidence: a label that consistently owns a known person's responsibilities ("I'll prepare the compliance slide") plus at least one address-pattern hit qualifies as high-confidence; document the reasoning in the transcript header. Surplus diarization clusters that map to no one stay as bare letters with a header note.
 - `--resolution W` — change frame width in px (default 512; bump to 1024 only if the user needs to read on-screen text)
 - `--fps F` — override auto-fps (clamped to 2 fps max)
 - `--out-dir DIR` — keep working files somewhere specific (default: an auto-generated tmp dir)
 - `--fresh` — ignore persisted `<base>.segments.json` / `.turns.json` and re-transcribe + re-diarize from scratch (default behaviour reuses them for idempotent re-runs)
-- `--whisper azure-diarize|groq|openai|whisper-local` — pin a specific transcription backend (no cascade, fails loudly). Default is a **local-first cascade**: whisper-local → azure-diarize → groq → openai — each backend that fails falls through to the next configured one. `whisper-local` = faster-whisper fully on-device in the managed venv (`~/.config/watch/venv/`, self-provisions on first use, GPU auto-detected) — no key, nothing leaves the machine.
+- `--whisper azure-diarize|groq|openai|whisper-local` — pin a specific transcription backend (no cascade, fails loudly). Default is a **local-first cascade**: whisper-local → azure-diarize → groq → openai — each backend that fails falls through to the next configured one. `whisper-local` = faster-whisper fully on-device in the managed venv (`~/.config/transcribe/venv/`, self-provisions on first use, GPU auto-detected) — no key, nothing leaves the machine.
 - `--no-whisper` — disable the Whisper fallback entirely (frames-only if no captions)
 - `--no-scene` — disable scdet-based cut detection (default: enabled with auto-tuned threshold, see "Scene cut detection" below)
 - `--scene-threshold F` — override the auto-detected scdet threshold (default: auto via knee-point on the score distribution; lower = more sensitive)
 - `--scene-min-gap S` — minimum seconds between consecutive cut frames (default `2.0`, de-clusters animation/B-roll bursts)
 - `--scene-max-frames N` — cap on additional cut frames (default `80`, applied separately from `--max-frames`)
 - `--scene-settle-seconds S` — seconds after a detected cut to wait before extracting (default `1.0`). Lets UI transitions / dialogs / launcher windows render before capture, so cut frames don't land on loading-state / black mid-transition pixels. Capped at `next_cut - 0.3s` so we never bleed into the following shot. Set to `0` to revert to the old just-before-cut behavior. Higher values (~2–4 s) help apps that take longer to render but risk bleeding into transient flashes.
-- `--save-md PATH` — save the report as **three companion files**: PATH itself (the main file — a stub for Claude to append `## Summary` and `## Analysis`), plus `<base>.protocol.md` (metadata + frame list + resources + footer) and `<base>.transcript.md` (full transcript) as siblings, where `<base>` is PATH with `.md` (or legacy `.watch.md`) stripped. Defaults:
+- `--save-md PATH` — save the report as **three companion files**: PATH itself (the main file — a stub for Claude to append `## Summary` and `## Analysis`), plus `<base>.protocol.md` (metadata + frame list + resources + footer) and `<base>.transcript.md` (full transcript) as siblings, where `<base>` is PATH with `.md` (or legacy `.transcribe.md`) stripped. Defaults:
   - **Local-file sources** → `<video-stem>.md` next to the source (e.g. `videos/test.mp4` → `videos/test.{md,protocol.md,transcript.md}`).
-  - **URL sources** (YouTube, Vimeo, etc.) → `./watch/<YYYY-MM-DD>-<slug>/<slug>.md` in the current working directory, where `<slug>` is a sanitized form of the video title returned by yt-dlp (lowercase ASCII, non-alphanumeric → `-`, ~60 chars max). The per-video subfolder keeps multiple runs tidy and leaves room for retained video / frame snapshots. `.gitignore`-friendly via a single `watch/` entry.
+  - **URL sources** (YouTube, Vimeo, etc.) → `./transcribe/<YYYY-MM-DD>-<slug>/<slug>.md` in the current working directory, where `<slug>` is a sanitized form of the video title returned by yt-dlp (lowercase ASCII, non-alphanumeric → `-`, ~60 chars max). The per-video subfolder keeps multiple runs tidy and leaves room for retained video / frame snapshots. `.gitignore`-friendly via a single `transcribe/` entry.
   - Pass `--no-save-md` to disable auto-save entirely (frames + transcript stay only in the temp work_dir until Step 6 cleanup).
 - `--no-save-md` — disable the local-file auto-save
 
@@ -141,7 +141,7 @@ How it works:
 4. **Gap-fill regular sampling** — the cut timestamps partition the video into gaps. Each gap gets regular frames proportional to its length. Gaps shorter than `(duration / target_count) / 2` are skipped (already covered by neighboring cuts). When `--no-scene` is set or no cuts exist, gap-fill collapses to uniform sampling.
 5. **Pass 2** — for each cut and each gap-fill timestamp, a single JPEG is extracted via fast-seek (`-ss t-0.05`) at the same `--resolution`.
 
-The chosen auto-threshold is printed to stderr (`[watch] N cuts detected (auto-picked X.YZ)`) and shown in the report metadata as `scdet ≥ X.Y auto`. The regular-sampler line shows `(gap-filled, ~F fps avg)` so it's clear the spacing is non-uniform.
+The chosen auto-threshold is printed to stderr (`[transcribe] N cuts detected (auto-picked X.YZ)`) and shown in the report metadata as `scdet ≥ X.Y auto`. The regular-sampler line shows `(gap-filled, ~F fps avg)` so it's clear the spacing is non-uniform.
 
 Why content-aware: scdet score distributions differ wildly between content types. A talking-head video has all scores near 0; an action montage may have hundreds above 30. A single static threshold like 15 misses everything in the first case and over-includes in the second. The knee-point method adapts to whatever distribution is actually in the video.
 
@@ -158,7 +158,7 @@ When to disable with `--no-scene`:
 - Token budget is tight and the regular sampling alone is sufficient.
 - Long video where you want a fast first pass before re-running focused.
 
-When `--no-scene` is set, the regular sampler falls back to uniform spacing — same effective behaviour as the original watch skill.
+When `--no-scene` is set, the regular sampler falls back to uniform spacing — same effective behaviour as the original upstream skill.
 
 When to override with `--scene-threshold F`:
 - Auto picked too few cuts and you know there are subtle transitions worth catching (force lower, e.g. `--scene-threshold 8`).
@@ -170,13 +170,13 @@ Cost: scdet adds ~5–10 % to wall-clock time. Each cut frame costs the same as 
 Examples:
 ```bash
 # Last 10 seconds of a 1 minute video
-python3 "${CLAUDE_SKILL_DIR}/scripts/watch.py" video.mp4 --start 50 --end 60
+python3 "${CLAUDE_SKILL_DIR}/scripts/run.py" video.mp4 --start 50 --end 60
 
 # Zoom into 2:15 → 2:45 at 3 fps (90 frames)
-python3 "${CLAUDE_SKILL_DIR}/scripts/watch.py" "$URL" --start 2:15 --end 2:45 --fps 3
+python3 "${CLAUDE_SKILL_DIR}/scripts/run.py" "$URL" --start 2:15 --end 2:45 --fps 3
 
 # From 1h12m to the end of the video
-python3 "${CLAUDE_SKILL_DIR}/scripts/watch.py" "$URL" --start 1:12:00
+python3 "${CLAUDE_SKILL_DIR}/scripts/run.py" "$URL" --start 1:12:00
 ```
 
 **Step 3 — Read frames and transcript.** Two things to load into context, in parallel:
@@ -402,7 +402,7 @@ The script gets a timestamped transcript in one of two ways:
    - **Groq** — `whisper-large-v3` cloud API. Cheaper/faster than OpenAI. Get a key at console.groq.com/keys.
    - **OpenAI** — `whisper-1` cloud API. Get a key at platform.openai.com/api-keys.
 
-Keys live in `~/.config/watch/.env`. `--whisper <backend>` pins one backend and disables the cascade. Use `--no-whisper` to skip the fallback entirely.
+Keys live in `~/.config/transcribe/.env`. `--whisper <backend>` pins one backend and disables the cascade. Use `--no-whisper` to skip the fallback entirely.
 
 **Idempotent re-runs (resume):** when the output is persisted (the default for local files, or any `--save-md`), the STT result and diarization turns are written next to it as `<base>.segments.json` and `<base>.turns.json`. Reprocessing the same source reuses them — the expensive STT + diarization steps are skipped (a 41-min recording resumes in ~1 s) and the pipeline goes straight to alignment, rendering, and (Claude's) cleanup. This makes "re-clean an existing transcript" or "re-render after a tweak" free. Pass `--fresh` to ignore the persisted intermediates and re-transcribe + re-diarize from scratch. With `--no-save-md` the caches live only in the ephemeral work dir (so use `--out-dir DIR` if you want them to survive).
 
@@ -415,11 +415,11 @@ Whisper's HTTP endpoint caps a single multipart upload at 25 MB. The script targ
 3. Otherwise, the audio is split into `ceil(size / 20 MB)` even-sized chunks with **20 seconds of overlap** between adjacent chunks (`ffmpeg -ss -c copy`, no re-encoding). Each chunk goes to Whisper in turn.
 4. Returned segments are shifted onto the absolute video timeline by their chunk's start offset, then merged. At each seam, segments from the **second** chunk whose `start` falls before the overlap midpoint are dropped — the first chunk already covered that audio. A final pass collapses any consecutive duplicate texts that survive.
 
-You don't need to do anything to enable this — it kicks in automatically when audio exceeds the threshold. The progress line on stderr looks like `[watch] audio: 38400 kB exceeds Whisper upload limit — splitting into 2 chunks (20s overlap)…` followed by one line per chunk. Cost-wise: longer audio → more Whisper minutes billed, same per-minute rate. Frames are unaffected — ffmpeg seeks the source video directly regardless of length.
+You don't need to do anything to enable this — it kicks in automatically when audio exceeds the threshold. The progress line on stderr looks like `[transcribe] audio: 38400 kB exceeds Whisper upload limit — splitting into 2 chunks (20s overlap)…` followed by one line per chunk. Cost-wise: longer audio → more Whisper minutes billed, same per-minute rate. Frames are unaffected — ffmpeg seeks the source video directly regardless of length.
 
 ## Failure modes and handling
 
-- **Setup preflight failed** → run `python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py"` (auto-installs ffmpeg/yt-dlp via brew on macOS, scaffolds the `.env`). For API key, ask the user via `AskUserQuestion` and write it to `~/.config/watch/.env`.
+- **Setup preflight failed** → run `python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py"` (auto-installs ffmpeg/yt-dlp via brew on macOS, scaffolds the `.env`). For API key, ask the user via `AskUserQuestion` and write it to `~/.config/transcribe/.env`.
 - **No transcript available** → captions missing AND (no Whisper key OR Whisper API failed). Script prints a hint pointing to setup. Proceed frames-only and tell the user.
 - **Long video auto-chunked** → the metadata line will say `chunked mode, N chunks × ~Xs`. The Read frame list is much longer than for a short video (~80 frames per chunk). Read them all, but be aware the image-token cost scales. If the user only cares about a specific section, suggest a re-run with `--start`/`--end` for tighter focus on that range; if they want the whole thing but cheaper, `--no-chunk` reverts to the sparse single-pass behavior.
 - **Download fails** → yt-dlp's error goes to stderr. If it's a login-required or region-locked video, tell the user plainly; do not keep retrying.
@@ -443,16 +443,16 @@ If you already watched a video this session and the user asks a follow-up, do **
 - Sends the extracted audio clip (or chunks) to OpenAI's audio transcription API (`api.openai.com/v1/audio/transcriptions`) when `OPENAI_API_KEY` is set and Groq is not, or when `--whisper openai` is forced
 - Writes the downloaded video, frames, audio, audio chunks (when splitting), and an intermediate transcript to a working directory under the system temp dir (or `--out-dir` if specified) so Claude can `Read` them
 - When `--save-md PATH` is used (or auto-defaulted for local-file sources), writes three companion files (the main `<base>.md` with a stub that Claude appends Summary + Analysis to, `<base>.protocol.md` with metadata + frames + resources, `<base>.transcript.md` with the transcript), all **outside the work dir** and preserved after cleanup
-- Reads / creates `~/.config/watch/.env` (mode `0600`) to store the Whisper API key(s) and a `SETUP_COMPLETE` marker. As a fallback, also reads `.env` in the current working directory
-- Creates / repairs a managed Python venv at `~/.config/watch/venv/` (pinned ML stack for the local backends: pyannote.audio, faster-whisper, torch — CUDA wheels when nvidia-smi is present) and runs `pyannote_worker.py` / `whisper_local_worker.py` inside it as subprocesses; the Python running watch.py is never modified
+- Reads / creates `~/.config/transcribe/.env` (mode `0600`) to store the Whisper API key(s) and a `SETUP_COMPLETE` marker. As a fallback, also reads `.env` in the current working directory
+- Creates / repairs a managed Python venv at `~/.config/transcribe/venv/` (pinned ML stack for the local backends: pyannote.audio, faster-whisper, torch — CUDA wheels when nvidia-smi is present) and runs `pyannote_worker.py` / `whisper_local_worker.py` inside it as subprocesses; the Python running run.py is never modified
 
 **What this skill does NOT do:**
 - Does not upload the video itself to any API — only the extracted audio goes out, and only when native captions are missing AND Whisper is not disabled with `--no-whisper`
 - Does not access any platform account (no login, no session cookies, no posting)
 - Does not share API keys between providers (Groq key only goes to `api.groq.com`, OpenAI key only goes to `api.openai.com`)
 - Does not log, cache, or write API keys to stdout, stderr, or output files
-- Does not persist anything outside the working directory and `~/.config/watch/.env` — clean up the working directory when you're done (Step 5)
+- Does not persist anything outside the working directory and `~/.config/transcribe/.env` — clean up the working directory when you're done (Step 5)
 
-**Bundled scripts:** `scripts/watch.py` (entry point), `scripts/download.py` (yt-dlp wrapper), `scripts/frames.py` (ffmpeg frame extraction + scdet cut detection), `scripts/transcribe.py` (caption selection + Whisper orchestration), `scripts/stt.py` (pluggable speech-to-text backends - Azure / Groq / OpenAI / whisper-local), `scripts/diarize.py` (diarization backends + alignment), `scripts/pyannote_worker.py` + `scripts/whisper_local_worker.py` (run inside the managed venv, never imported by the host), `scripts/resources.py` (URL extraction from description + transcript, grouped by category), `scripts/setup.py` (preflight + installer + venv provisioning)
+**Bundled scripts:** `scripts/run.py` (entry point), `scripts/download.py` (yt-dlp wrapper), `scripts/frames.py` (ffmpeg frame extraction + scdet cut detection), `scripts/transcribe.py` (caption selection + Whisper orchestration), `scripts/stt.py` (pluggable speech-to-text backends - Azure / Groq / OpenAI / whisper-local), `scripts/diarize.py` (diarization backends + alignment), `scripts/pyannote_worker.py` + `scripts/whisper_local_worker.py` (run inside the managed venv, never imported by the host), `scripts/resources.py` (URL extraction from description + transcript, grouped by category), `scripts/setup.py` (preflight + installer + venv provisioning)
 
 Review scripts before first use to verify behavior.

@@ -29,7 +29,7 @@ def resolve_local(path: str) -> dict:
         raise SystemExit(f"File not found: {p}")
     if p.suffix.lower() not in VIDEO_EXTS:
         print(
-            f"[watch] warning: {p.suffix} is not a known video extension, proceeding anyway",
+            f"[transcribe] warning: {p.suffix} is not a known video extension, proceeding anyway",
             file=sys.stderr,
         )
     return {
@@ -63,7 +63,7 @@ def download_url(url: str, out_dir: Path) -> dict:
     if yt_dlp is None:
         raise SystemExit(
             "yt-dlp is not installed. Run `python3 scripts/setup.py --install-binaries` "
-            "to drop a standalone build into ~/.watch/bin/."
+            "to drop a standalone build into ~/.transcribe/bin/."
         )
 
     out_dir.mkdir(parents=True, exist_ok=True)

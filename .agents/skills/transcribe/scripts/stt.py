@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Speech-to-text for /watch (the STT module).
+"""Speech-to-text for /transcribe (the STT module).
 
 Currently: Groq / OpenAI Whisper. Extracts audio (mono 16kHz mp3, tiny
 payload), auto-splits oversized audio, uploads to whichever API has a key,
@@ -49,7 +49,7 @@ from transcribe import merge_speaker_turns
 # detection at no real cost (total wall time is dominated by the longer
 # upload, not by when each one starts).
 #
-# Override via watch.py's --whisper-workers N (then this fallback is bypassed).
+# Override via run.py's --whisper-workers N (then this fallback is bypassed).
 WHISPER_PARALLEL_UPLOADS = 1
 WHISPER_STAGGER_S = 3.0
 
@@ -72,7 +72,7 @@ CHUNK_OVERLAP_SECONDS = 20.0
 
 # ---------------------------------------------------------------------------
 # Azure gpt-4o-transcribe-diarize + claude-opus-4-7 reconciliation defaults.
-# All overridable via ~/.config/watch/.env - see .env.example.
+# All overridable via ~/.config/transcribe/.env - see .env.example.
 # ---------------------------------------------------------------------------
 # Per-chunk audio length for the duration-chunked Azure backend. NOT the
 # model's ~1500 s hard cap: gpt-4o-transcribe-diarize processing time scales
@@ -88,7 +88,7 @@ AZURE_CLAUDE_MODEL = "claude-opus-4-7"
 
 
 def _get_config(name: str) -> str | None:
-    """Look up a config value: `$NAME` first, then ~/.config/watch/.env, then
+    """Look up a config value: `$NAME` first, then ~/.config/transcribe/.env, then
     ./.env. Surrounding quotes on .env values are stripped. None if unset.
 
     The single config reader for the whole STT module - Whisper keys, the
@@ -97,7 +97,7 @@ def _get_config(name: str) -> str | None:
     value = os.environ.get(name)
     if value and value.strip():
         return value.strip()
-    for path in (Path.home() / ".config" / "watch" / ".env", Path.cwd() / ".env"):
+    for path in (Path.home() / ".config" / "transcribe" / ".env", Path.cwd() / ".env"):
         if not path.exists():
             continue
         try:
@@ -127,7 +127,7 @@ def _get_config_float(name: str, default: float) -> float:
         return float(raw)
     except ValueError:
         print(
-            f"[watch] WARNING: {name}={raw!r} is not a number - using {default}",
+            f"[transcribe] WARNING: {name}={raw!r} is not a number - using {default}",
             file=sys.stderr,
         )
         return default
@@ -390,7 +390,7 @@ def _build_multipart(fields: dict[str, str], file_path: Path) -> tuple[bytes, st
     Whisper's multipart upload is small and predictable - doing it by hand
     keeps us on pure stdlib instead of pulling requests/groq/openai SDKs.
     """
-    boundary = f"----WatchBoundary{uuid.uuid4().hex}"
+    boundary = f"----TranscribeBoundary{uuid.uuid4().hex}"
     eol = b"\r\n"
     buf = io.BytesIO()
 
@@ -433,7 +433,7 @@ def _post_whisper(endpoint: str, api_key: str, model: str, audio_path: Path) -> 
         # Groq sits behind Cloudflare - the default `Python-urllib/3.x` UA
         # trips WAF rule 1010 (403) before auth even runs. Any non-default
         # UA clears it; we identify honestly.
-        "User-Agent": "watch-skill/1.0 (+claude-code; python-urllib)",
+        "User-Agent": "transcribe-skill/1.0 (+claude-code; python-urllib)",
     }
 
     context = ssl.create_default_context()
@@ -464,7 +464,7 @@ def _post_whisper(endpoint: str, api_key: str, model: str, audio_path: Path) -> 
 
             if attempt < MAX_ATTEMPTS - 1:
                 print(
-                    f"[watch] whisper HTTP {exc.code} - retrying in {delay:.1f}s "
+                    f"[transcribe] whisper HTTP {exc.code} - retrying in {delay:.1f}s "
                     f"(attempt {attempt + 2}/{MAX_ATTEMPTS})",
                     file=sys.stderr,
                 )
@@ -475,7 +475,7 @@ def _post_whisper(endpoint: str, api_key: str, model: str, audio_path: Path) -> 
             if attempt < MAX_ATTEMPTS - 1:
                 delay = RETRY_BASE_DELAY * (attempt + 1)
                 print(
-                    f"[watch] whisper network error ({type(exc).__name__}: {exc}) - "
+                    f"[transcribe] whisper network error ({type(exc).__name__}: {exc}) - "
                     f"retrying in {delay:.1f}s (attempt {attempt + 2}/{MAX_ATTEMPTS})",
                     file=sys.stderr,
                 )
@@ -556,7 +556,7 @@ def _post_azure_diarize(url: str, key: str, audio_path: Path, timeout: float) ->
     headers = {
         "api-key": key,
         "Content-Type": f"multipart/form-data; boundary={boundary}",
-        "User-Agent": "watch-skill/1.0 (+claude-code; python-urllib)",
+        "User-Agent": "transcribe-skill/1.0 (+claude-code; python-urllib)",
     }
     request = Request(url, data=body, headers=headers, method="POST")
     context = ssl.create_default_context()
@@ -722,16 +722,16 @@ def reconcile_speakers(segments: list[dict]) -> list[dict]:
     """
     ok, reason = reconcile_available()
     if not ok:
-        print(f"[watch] speaker reconciliation skipped: {reason}", file=sys.stderr)
+        print(f"[transcribe] speaker reconciliation skipped: {reason}", file=sys.stderr)
         return segments
     url = _get_config("AZURE_CLAUDE_URL")
     key = _get_config("AZURE_CLAUDE_KEY")
 
-    print(f"[watch] reconciling speaker labels via {AZURE_CLAUDE_MODEL}...", file=sys.stderr)
+    print(f"[transcribe] reconciling speaker labels via {AZURE_CLAUDE_MODEL}...", file=sys.stderr)
     status, body = _post_claude(url, key, _build_reconcile_prompt(merge_speaker_turns(segments)))
     if status != 200:
         print(
-            f"[watch] speaker reconciliation failed (claude HTTP {status}) - "
+            f"[transcribe] speaker reconciliation failed (claude HTTP {status}) - "
             f"keeping chunk-tagged labels: {body[:200]}",
             file=sys.stderr,
         )
@@ -740,7 +740,7 @@ def reconcile_speakers(segments: list[dict]) -> list[dict]:
         mapping, names = _parse_claude_mapping(body)
     except (json.JSONDecodeError, ValueError) as exc:
         print(
-            f"[watch] could not parse reconciliation reply ({exc}) - "
+            f"[transcribe] could not parse reconciliation reply ({exc}) - "
             "keeping chunk-tagged labels",
             file=sys.stderr,
         )
@@ -751,7 +751,7 @@ def reconcile_speakers(segments: list[dict]) -> list[dict]:
         seg["speaker"] = names.get(glob) or glob
     n_global = len({(names.get(g) or g) for g in mapping.values()}) if mapping else 0
     print(
-        f"[watch] reconciled {len(mapping)} chunk-tagged labels into "
+        f"[transcribe] reconciled {len(mapping)} chunk-tagged labels into "
         f"{n_global} speaker(s) via {AZURE_CLAUDE_MODEL}",
         file=sys.stderr,
     )
@@ -861,7 +861,7 @@ class AzureDiarizeBackend(STTBackend):
     AZURE_TRANSCRIBE_CHUNK_SECONDS-long pieces (default 600 s). Each chunk
     is diarized independently -> chunk-local speaker labels; the orchestrator
     chunk-tags them and reconcile_speakers() resolves identity globally.
-    All knobs are read from ~/.config/watch/.env at construction.
+    All knobs are read from ~/.config/transcribe/.env at construction.
     """
 
     name = "azure-diarize"
@@ -1043,7 +1043,7 @@ def _transcribe_chunks(
     n_workers = max(1, min(configured, len(chunks)))
     mode = "sequential" if n_workers == 1 else f"{n_workers} parallel"
     print(
-        f"[watch] splitting into {len(chunks)} chunks "
+        f"[transcribe] splitting into {len(chunks)} chunks "
         f"({backend.chunk_overlap:.0f}s overlap, {mode} uploads)...",
         file=sys.stderr,
     )
@@ -1052,7 +1052,7 @@ def _transcribe_chunks(
         i, (offset, chunk_path) = indexed
         chunk_size_kb = chunk_path.stat().st_size / 1024
         print(
-            f"[watch] chunk {i + 1}/{len(chunks)} "
+            f"[transcribe] chunk {i + 1}/{len(chunks)} "
             f"(t={offset:.0f}s, {chunk_size_kb:.0f} kB) -> {backend.name}...",
             file=sys.stderr,
         )
@@ -1144,7 +1144,7 @@ def transcribe_audio(
 
     if len(chunks) == 1:
         print(
-            f"[watch] audio: {size_kb:.0f} kB - transcribing via {backend.name}...",
+            f"[transcribe] audio: {size_kb:.0f} kB - transcribing via {backend.name}...",
             file=sys.stderr,
         )
         return backend.transcribe_one(chunks[0][1])
@@ -1166,7 +1166,7 @@ def transcribe_video(
     """Extract audio from a video, then transcribe it.
 
     Thin convenience wrapper over `transcribe_audio` for callers that start
-    from a video file (watch.py). `backend` is a backend name; when given
+    from a video file (run.py). `backend` is a backend name; when given
     with `api_key`, that key is injected so .env is not re-read. Returns
     (segments, backend_name). Raises SystemExit on any failure.
     """
@@ -1181,18 +1181,18 @@ def transcribe_video(
         setup_py = Path(__file__).resolve().parent / "setup.py"
         raise SystemExit(
             "No Whisper API key available. Set GROQ_API_KEY (preferred) or "
-            "OPENAI_API_KEY in the environment or in ~/.config/watch/.env. "
+            "OPENAI_API_KEY in the environment or in ~/.config/transcribe/.env. "
             f"Run `python3 {setup_py}` to configure."
         )
 
-    print(f"[watch] extracting audio for transcription ({stt.name})...", file=sys.stderr)
+    print(f"[transcribe] extracting audio for transcription ({stt.name})...", file=sys.stderr)
     audio_path = extract_audio(video_path, audio_out)
     segments = transcribe_audio(
         audio_path, stt, audio_out.parent / "audio_chunks", parallel_uploads
     )
     if not segments:
         raise SystemExit("transcription returned no transcript segments")
-    print(f"[watch] transcribed {len(segments)} segments via {stt.name}", file=sys.stderr)
+    print(f"[transcribe] transcribed {len(segments)} segments via {stt.name}", file=sys.stderr)
     return segments, stt.name
 
 

@@ -101,7 +101,7 @@ nur `*.env.example`-Vorlagen und `.managed-vars` sind versioniert.
 ai-toolbox/
 ├── toolbox.sh / toolbox.ps1     ← die CLI (bash + PowerShell)
 ├── CLAUDE.md                    ← globale Claude-Konfiguration
-├── .agents/skills/              ← integrierte Skills (component-audit, discover, watch)
+├── .agents/skills/              ← integrierte Skills (component-audit, discover, transcribe)
 ├── cc-profil/                   ← Profil-Switcher (env-Vars für Claude Code)
 │   ├── cc-profil.sh / .ps1
 │   └── profiles/                ← *.env.example getrackt, echte *.env lokal

@@ -14,12 +14,12 @@
       "description": "Discover interesting recent videos across AI and dev topics."
     },
     {
-      "name": "watch",
+      "name": "transcribe",
       "type": "plugin",
-      "path": ".agents/skills/watch",
-      "description": "Let Claude watch a video — frames, transcript, diarization.",
-      "marketplace": "watch",
-      "plugin": "watch"
+      "path": ".agents/skills/transcribe",
+      "description": "Transcribe a video or audio file — captions/Whisper, frames, diarization.",
+      "marketplace": "transcribe",
+      "plugin": "transcribe"
     },
     {
       "name": "idempotent-devops",

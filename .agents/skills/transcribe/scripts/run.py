@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""/watch entry point: download video, extract frames, parse transcript.
+"""/transcribe entry point: download video, extract frames, parse transcript.
 
 Prints a markdown report to stdout listing frame paths + transcript. Claude
 then Reads each frame path to see the video.
@@ -52,7 +52,7 @@ def _dedup_threshold_arg(value: str) -> "int | str":
     return i
 
 
-def _reap_old_work_dirs(prefix: str = "watch-", max_age_hours: float = 24.0) -> None:
+def _reap_old_work_dirs(prefix: str = "transcribe-", max_age_hours: float = 24.0) -> None:
     """Delete leftover working directories from prior crashed/killed runs.
 
     On normal completion, Step 6 of SKILL.md instructs Claude to `rm -rf` the
@@ -62,7 +62,7 @@ def _reap_old_work_dirs(prefix: str = "watch-", max_age_hours: float = 24.0) -> 
     to survive past the script for follow-up reads. Net result: long-running
     users accumulate gigabytes of dead work dirs in `/tmp` (or %TEMP%).
 
-    Strategy: at startup, scan the system temp root for `watch-*` directories
+    Strategy: at startup, scan the system temp root for `transcribe-*` directories
     whose mtime is older than `max_age_hours`, and delete them. We use mtime
     (not ctime / atime) because ffmpeg keeps touching files in the active
     work dir, so mtime stays fresh during a real run. Anything older than
@@ -91,7 +91,7 @@ def _reap_old_work_dirs(prefix: str = "watch-", max_age_hours: float = 24.0) -> 
         preview = ", ".join(reaped[:3])
         suffix = f" (+{len(reaped) - 3} more)" if len(reaped) > 3 else ""
         print(
-            f"[watch] reaped {len(reaped)} old work dir(s) older than "
+            f"[transcribe] reaped {len(reaped)} old work dir(s) older than "
             f"{max_age_hours:.0f}h: {preview}{suffix}",
             file=sys.stderr,
         )
@@ -217,7 +217,7 @@ from stt import extract_audio, select_backend, select_backends, transcribe_video
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        prog="watch",
+        prog="transcribe",
         description="Download a video, extract auto-scaled frames, and surface the transcript.",
     )
     ap.add_argument("source", help="Video URL or local file path")
@@ -321,7 +321,7 @@ def main() -> int:
         default=None,
         help="Save the markdown report to this path. Defaults to "
              "<video-stem>.md next to the source for local files; "
-             "./watch/<YYYY-MM-DD>-<slug>/<slug>.md for URL sources.",
+             "./transcribe/<YYYY-MM-DD>-<slug>/<slug>.md for URL sources.",
     )
     ap.add_argument(
         "--no-save-md",
@@ -391,9 +391,9 @@ def main() -> int:
         # Reap before mkdtemp so the new dir we're about to create is never
         # a candidate for deletion (its mtime is fresh by the time we scan).
         _reap_old_work_dirs()
-        work = Path(tempfile.mkdtemp(prefix="watch-"))
+        work = Path(tempfile.mkdtemp(prefix="transcribe-"))
     work.mkdir(parents=True, exist_ok=True)
-    print(f"[watch] working dir: {work}", file=sys.stderr)
+    print(f"[transcribe] working dir: {work}", file=sys.stderr)
 
     # Announce parallelism budget + transcript/diarization plan up front so
     # the user can see what's actually running and override if needed.
@@ -404,7 +404,7 @@ def main() -> int:
     whisper_workers = args.whisper_workers if args.whisper_workers is not None else _whisper_default
     dedup_label = "off" if args.no_dedup else f"{args.dedup_threshold}"
     print(
-        f"[watch] workers: frame={frame_workers}, "
+        f"[transcribe] workers: frame={frame_workers}, "
         f"whisper={whisper_workers} ({'seq' if whisper_workers == 1 else 'parallel'}), "
         f"dedup={dedup_label} "
         f"(override via --frame-workers / --whisper-workers / --dedup-threshold)",
@@ -435,18 +435,18 @@ def main() -> int:
         f"diarize requested: {args.diarize}"
         if args.diarize else "diarize: off (--no-diarize set)"
     )
-    print(f"[watch] transcript: {stt_status} | {diarize_active}", file=sys.stderr)
+    print(f"[transcribe] transcript: {stt_status} | {diarize_active}", file=sys.stderr)
     if args.diarize:
-        print(f"[watch] {diarize_status}", file=sys.stderr)
+        print(f"[transcribe] {diarize_status}", file=sys.stderr)
 
     print(
-        "[watch] downloading via yt-dlp..." if is_url(args.source) else "[watch] using local file...",
+        "[transcribe] downloading via yt-dlp..." if is_url(args.source) else "[transcribe] using local file...",
         file=sys.stderr,
     )
     dl = download(args.source, work / "download")
     video_path = dl["video_path"]
 
-    # URL-source default: ./watch/<YYYY-MM-DD>-<slug>/<slug>.md. Per-video
+    # URL-source default: ./transcribe/<YYYY-MM-DD>-<slug>/<slug>.md. Per-video
     # subfolder + date prefix keeps multiple runs sortable; folder leaves room
     # for cached video / extra artifacts.
     if save_md_path is None and not args.no_save_md and is_url(args.source):
@@ -454,14 +454,14 @@ def main() -> int:
         title = info_for_path.get("title") or "untitled"
         slug = _slugify(title)
         date_prefix = datetime.date.today().strftime("%Y-%m-%d")
-        folder = Path.cwd() / "watch" / f"{date_prefix}-{slug}"
+        folder = Path.cwd() / "transcribe" / f"{date_prefix}-{slug}"
         save_md_path = folder / f"{slug}.md"
 
     if save_md_path:
-        # Accept `<base>.md` (current) and `<base>.watch.md` (legacy) shapes.
+        # Accept `<base>.md` (current) and `<base>.transcribe.md` (legacy) shapes.
         name = save_md_path.name
-        if name.endswith(".watch.md"):
-            base = name[: -len(".watch.md")]
+        if name.endswith(".transcribe.md"):
+            base = name[: -len(".transcribe.md")]
         elif name.endswith(".md"):
             base = name[: -len(".md")]
         else:
@@ -481,7 +481,7 @@ def main() -> int:
     audio_only = not meta.get("has_video", True)
     if audio_only:
         print(
-            "[watch] audio-only source (no video stream) - skipping frame "
+            "[transcribe] audio-only source (no video stream) - skipping frame "
             "extraction; transcript/diarization pipeline runs normally",
             file=sys.stderr,
         )
@@ -549,7 +549,7 @@ def main() -> int:
     if not args.no_scene and not audio_only:
         thr_label = "auto" if threshold_is_auto else f"{args.scene_threshold:g}"
         print(
-            f"[watch] detecting cuts (scdet threshold {thr_label}, "
+            f"[transcribe] detecting cuts (scdet threshold {thr_label}, "
             f"min gap {args.scene_min_gap}s)...",
             file=sys.stderr,
         )
@@ -565,7 +565,7 @@ def main() -> int:
             if threshold_is_auto else f"threshold {cut_threshold:.2f}"
         )
         print(
-            f"[watch] {len(cut_times)} cuts detected ({chose})",
+            f"[transcribe] {len(cut_times)} cuts detected ({chose})",
             file=sys.stderr,
         )
 
@@ -579,7 +579,7 @@ def main() -> int:
             )
     # Note: this prints the *candidate* count. Dedup (if enabled) runs at
     # the end of extract_at_timestamps and will reduce this number; that
-    # final figure appears in a later [watch] dedup line. Wording made
+    # final figure appears in a later [transcribe] dedup line. Wording made
     # explicit because users have read the candidate count as the final
     # frame budget and wondered why "dedup is gone".
     dedup_hint = (
@@ -587,7 +587,7 @@ def main() -> int:
         if not args.no_dedup else ""
     )
     print(
-        f"[watch] sampling {len(regular_timestamps)} regular frame candidates "
+        f"[transcribe] sampling {len(regular_timestamps)} regular frame candidates "
         f"(gap-filled across {len(cut_times)} cuts) over {scope}{dedup_hint}...",
         file=sys.stderr,
     )
@@ -604,7 +604,7 @@ def main() -> int:
     cut_frames: list[dict] = []
     if cut_times:
         print(
-            f"[watch] extracting up to {args.scene_max_frames} cut frames...",
+            f"[transcribe] extracting up to {args.scene_max_frames} cut frames...",
             file=sys.stderr,
         )
         cut_frames = extract_cuts(
@@ -634,7 +634,7 @@ def main() -> int:
     diarize_backend = pick_diarize_backend(args.diarize)
     if args.diarize and diarize_backend is None and "--diarize" in sys.argv:
         print(
-            "[watch] --diarize requested but no backend configured - set "
+            "[transcribe] --diarize requested but no backend configured - set "
             "HF_TOKEN (pyannote local), PYANNOTE_API_KEY, or "
             "ASSEMBLYAI_API_KEY. Continuing without diarization.",
             file=sys.stderr,
@@ -652,7 +652,7 @@ def main() -> int:
             transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
             transcript_source = "captions"
         except Exception as exc:
-            print(f"[watch] subtitle parse failed: {exc}", file=sys.stderr)
+            print(f"[transcribe] subtitle parse failed: {exc}", file=sys.stderr)
 
     if not transcript_segments and diarize_backend == "assemblyai":
         # AssemblyAI returns transcript + speaker labels in one call.
@@ -670,13 +670,13 @@ def main() -> int:
             # we want this to read like a routine fallback, not an alarm.
             if "ASSEMBLYAI_API_KEY missing" in msg:
                 print(
-                    "[watch] AssemblyAI skipped: ASSEMBLYAI_API_KEY not "
-                    "configured in ~/.config/watch/.env - falling back to Whisper.",
+                    "[transcribe] AssemblyAI skipped: ASSEMBLYAI_API_KEY not "
+                    "configured in ~/.config/transcribe/.env - falling back to Whisper.",
                     file=sys.stderr,
                 )
             else:
                 print(
-                    f"[watch] AssemblyAI failed ({msg}) - falling back to Whisper",
+                    f"[transcribe] AssemblyAI failed ({msg}) - falling back to Whisper",
                     file=sys.stderr,
                 )
             diarize_backend = None
@@ -695,14 +695,14 @@ def main() -> int:
             transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
             transcript_source = f"transcript ({used_backend}, resumed)"
             print(
-                f"[watch] resuming from {seg_cache.name} ({len(all_segments)} "
+                f"[transcribe] resuming from {seg_cache.name} ({len(all_segments)} "
                 f"segments, {used_backend}) - skipping transcription",
                 file=sys.stderr,
             )
             if (work / "audio.mp3").exists():
                 audio_path = work / "audio.mp3"
         except (ValueError, KeyError) as exc:
-            print(f"[watch] ignoring corrupt {seg_cache.name} ({exc})", file=sys.stderr)
+            print(f"[transcribe] ignoring corrupt {seg_cache.name} ({exc})", file=sys.stderr)
 
     if not transcript_segments and not args.no_whisper:
         stt_cascade: list = []
@@ -710,11 +710,11 @@ def main() -> int:
             stt_cascade = select_backends(args.whisper or None)
         except SystemExit as exc:
             # --whisper X was set explicitly but X is not configured.
-            print(f"[watch] {exc}", file=sys.stderr)
+            print(f"[transcribe] {exc}", file=sys.stderr)
         if not stt_cascade and args.whisper is None:
             setup_py = SCRIPT_DIR / "setup.py"
             print(
-                "[watch] no subtitles and no transcription backend configured - "
+                "[transcribe] no subtitles and no transcription backend configured - "
                 f"run `python3 {setup_py}` to enable transcription",
                 file=sys.stderr,
             )
@@ -743,12 +743,12 @@ def main() -> int:
                 nxt = stt_cascade[i + 1].name if i + 1 < len(stt_cascade) else None
                 if nxt:
                     print(
-                        f"[watch] {stt_backend.name} failed ({exc}) - "
+                        f"[transcribe] {stt_backend.name} failed ({exc}) - "
                         f"cascading to {nxt}",
                         file=sys.stderr,
                     )
                 else:
-                    print(f"[watch] transcription failed: {exc}", file=sys.stderr)
+                    print(f"[transcribe] transcription failed: {exc}", file=sys.stderr)
 
     # Pyannote runs alongside Whisper and aligns to the transcript;
     # AssemblyAI already delivered speakers above.
@@ -775,12 +775,12 @@ def main() -> int:
                 try:
                     turns = json.loads(turns_cache.read_text(encoding="utf-8"))
                     print(
-                        f"[watch] resuming from {turns_cache.name} ({len(turns)} "
+                        f"[transcribe] resuming from {turns_cache.name} ({len(turns)} "
                         "turns) - skipping diarization",
                         file=sys.stderr,
                     )
                 except ValueError as exc:
-                    print(f"[watch] ignoring corrupt {turns_cache.name} ({exc})", file=sys.stderr)
+                    print(f"[transcribe] ignoring corrupt {turns_cache.name} ({exc})", file=sys.stderr)
             if turns is None:
                 # Only now do we need the audio (resume skips extraction).
                 if audio_path is None or not audio_path.exists():
@@ -796,7 +796,7 @@ def main() -> int:
                     except SystemExit as exc:
                         if i + 1 < len(diarize_cascade):
                             print(
-                                f"[watch] {candidate} failed ({exc}) - "
+                                f"[transcribe] {candidate} failed ({exc}) - "
                                 f"cascading to {diarize_cascade[i + 1]}",
                                 file=sys.stderr,
                             )
@@ -810,7 +810,7 @@ def main() -> int:
             transcript_source = f"{transcript_source} + {tag}" if transcript_source else tag
         except SystemExit as exc:
             print(
-                f"[watch] {diarize_backend} diarization failed ({exc}) - "
+                f"[transcribe] {diarize_backend} diarization failed ({exc}) - "
                 f"transcript kept without speaker labels",
                 file=sys.stderr,
             )
@@ -837,7 +837,7 @@ def main() -> int:
             # Suppress and warn once. Better to lose the console echo than
             # to lose 10+ min of frame extraction + Whisper work.
             sys.stderr.write(
-                f"[watch] WARNING: stdout print failed ({type(exc).__name__}: "
+                f"[transcribe] WARNING: stdout print failed ({type(exc).__name__}: "
                 f"{exc}). Report buffer kept; will still be saved.\n"
             )
 
@@ -857,16 +857,16 @@ def main() -> int:
         try:
             save_md_path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            sys.stderr.write(f"[watch] WARNING: could not create save dir: {exc}\n")
+            sys.stderr.write(f"[transcribe] WARNING: could not create save dir: {exc}\n")
             return
 
         def _write_best_effort(path: "Path", content: str, label: str) -> None:
             try:
                 path.write_text(content + "\n", encoding="utf-8")
-                sys.stderr.write(f"[watch] {label:11s} -> {path}\n")
+                sys.stderr.write(f"[transcribe] {label:11s} -> {path}\n")
             except OSError as exc:
                 sys.stderr.write(
-                    f"[watch] WARNING: could not write {label} ({path}): {exc}\n"
+                    f"[transcribe] WARNING: could not write {label} ({path}): {exc}\n"
                 )
 
         if protocol_lines:
@@ -879,7 +879,7 @@ def main() -> int:
         title = info.get("title") or Path(args.source).name
         stub_lines = [
             "",
-            f"# watch: {title}",
+            f"# transcribe: {title}",
             "",
             f"- **Source:** {args.source}",
             f"- **Duration:** {format_time(full_duration)} ({full_duration:.1f}s)",
@@ -904,7 +904,7 @@ def main() -> int:
     atexit.register(_persist_report)
 
     emit()
-    emit("# watch: video report")
+    emit("# transcribe: video report")
     emit()
     emit(f"- **Source:** {args.source}")
     if info.get("title"):

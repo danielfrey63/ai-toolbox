@@ -20,7 +20,7 @@ from pathlib import Path
 
 
 def log(msg: str) -> None:
-    print(f"[watch] {msg}", file=sys.stderr, flush=True)
+    print(f"[transcribe] {msg}", file=sys.stderr, flush=True)
 
 
 def main() -> int:

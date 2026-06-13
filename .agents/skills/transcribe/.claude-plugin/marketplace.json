@@ -1,0 +1,21 @@
+{
+  "name": "transcribe",
+  "metadata": {
+    "description": "Give Claude a video or audio input. /transcribe downloads, extracts frames, transcribes, and hands it all to Claude."
+  },
+  "owner": {
+    "name": "Bradley Bonanno"
+  },
+  "plugins": [
+    {
+      "name": "transcribe",
+      "description": "Transcribe a video or audio file (URL or local path). Downloads with yt-dlp, extracts frames with ffmpeg for video, transcribes via captions or a local-first Whisper cascade.",
+      "author": {
+        "name": "Bradley Bonanno"
+      },
+      "source": "./",
+      "category": "productivity",
+      "homepage": "https://github.com/danielfrey63/ai-toolbox"
+    }
+  ]
+}

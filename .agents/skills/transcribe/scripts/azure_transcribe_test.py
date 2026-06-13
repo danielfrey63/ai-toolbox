@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test harness for the /watch STT pipeline.
+"""Test harness for the /transcribe STT pipeline.
 
 Runs the REAL production code (stt.transcribe_audio) on an audio file and
 writes a detailed report. This is a THIN harness: every transcription,
@@ -9,7 +9,7 @@ report formatting. There is no duplicated pipeline logic to drift out of
 sync with production.
 
 Config (endpoint URLs, keys, Azure tuning knobs) is read from
-~/.config/watch/.env exactly as in production - see .env.example. Pre-flight
+~/.config/transcribe/.env exactly as in production - see .env.example. Pre-flight
 checks run inside transcribe_audio, so a misconfigured backend fails fast
 here too (e.g. a multi-chunk Azure run with no AZURE_CLAUDE_KEY).
 

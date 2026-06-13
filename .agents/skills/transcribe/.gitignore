@@ -11,7 +11,7 @@ htmlcov/
 /videos/
 /dist/
 .claude/settings.local.json
-/watch/
+/transcribe/
 
 # Secrets - the real .env (whisper.py / diarize.py read ./.env as a fallback,
 # so a repo-root .env could hold live keys). .env.example is the safe,
