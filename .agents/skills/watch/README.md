@@ -39,18 +39,48 @@ Claude is great at reading and synthesizing — but until now, video was the one
 
 ## How it works
 
-1. **You paste a video and a question.** URL (anything yt-dlp supports — YouTube, Loom, TikTok, X, Instagram, plus a few hundred more) or a local path — video (`.mp4`, `.mov`, `.mkv`, `.webm`) or **pure audio** (`.m4a`, `.mp3`, `.wav`); for audio the frame stages skip automatically and the transcript pipeline runs as usual.
-2. **`yt-dlp` downloads it.** For URLs, into a temp working directory. For local files, no download — just probed in place.
-3. **`ffmpeg` runs an `scdet` pass to find scene cuts.** Every frame's pixel-difference score is recorded; a knee-point heuristic on the score distribution picks a per-video threshold (no static cut-off). Each surviving cut becomes one extracted frame, with a configurable settle-delay (default 1.0 s) so UI transitions / launchers / dialogs finish rendering before capture — no more black mid-transition pixels. Disable scene detection with `--no-scene`, override the threshold with `--scene-threshold F`.
-4. **`ffmpeg` extracts the regular frame budget gap-filled around the cuts.** The frame budget is duration-aware (≤30s gets ~30 frames, 30-60s gets ~40, 1-3min gets ~60, 3-10min gets ~80). Instead of sampling at uniform intervals, the script distributes those frames into the gaps between cuts proportional to gap length — cut-dense regions don't waste regular budget; long uncovered spans get more attention. JPEGs at 512px wide by default — bump with `--resolution 1024` if Claude needs to read on-screen text.
-5. **Long videos auto-chunk by default.** Videos longer than 10 min without an explicit `--start`/`--end` window split into `ceil(duration / 10min)` evenly-sized chunks; each chunk gets the focused-mode dense frame budget (default 80 per chunk) and per-chunk gap-fill against the cuts that fall in it. A 60-min video yields ~480 regular frames instead of 100 sparse ones — proportionally more image tokens, but per-chunk coverage comparable to dedicated focused runs. Pass `--no-chunk` to revert to single-pass sparse, or `--start`/`--end` to focus on one section.
-6. **The transcript comes from captions or a local-first STT cascade.** First: `yt-dlp` pulls native captions (manual or auto-generated) — free, covers most public videos. Otherwise the skill extracts mono 16 kHz audio and tries the configured backends in order, **local first** — each failure cascades to the next: **whisper-local** (DEFAULT — faster-whisper `large-v3` on CUDA / `medium` int8 on CPU, running in the managed venv; no key, fully on-device) → **Azure `gpt-4o-transcribe-diarize`** (your own tenant, transcribes *and* diarizes in one call) → Groq's `whisper-large-v3` → OpenAI's `whisper-1`. An explicit `--whisper <backend>` pins one backend with no silent degradation. Long audio is chunked automatically — by file size for cloud Whisper, by duration for Azure (whisper-local streams arbitrary length natively) — and stitched back onto a single timeline; for the Azure backend each chunk is diarized independently and a `claude-opus-4-7` pass reconciles the per-chunk speaker labels into consistent global speakers. **Speaker diarization is ON by default** whenever a backend is configured, again local first: pyannote.audio in the managed venv (HF token) → pyannote.ai (cloud) → AssemblyAI (cloud, replaces the transcription); `--no-diarize` turns it off. Output transcript lines become `[12:34] [<speaker>] text`; speaker letters get substituted with canonical first names (`[A]` → `[Urs]`) by Claude during the analysis based on address-pattern + frame-avatar evidence (for audio-only sources, role/content evidence takes the place of frames).
-7. **A `## Resources` section aggregates URLs.** Every `https://` link in the video description (yt-dlp's `description` field) plus URLs that appear in the transcript get deduped, normalized (tracking params stripped), and grouped — Projects (GitHub/GitLab/Bitbucket/Codeberg/sr.ht repos, npm/PyPI/crates/RubyGems/Go/Packagist/NuGet, Hugging Face), Docs, Articles (incl. arxiv/openreview), Videos, Social, Other. Each entry is annotated with where it came from (`description` or `transcript@MM:SS`).
-8. **Frames + transcript + resources are handed to Claude.** Each entry in the merged frame list is tagged `[REG]` (regular gap-filled) or `[CUT]` (scdet-detected). Claude `Read`s every frame path in parallel — JPEGs render directly as images in its context.
-9. **Claude answers grounded in what's actually on screen and in the audio.** Not "based on the description" or "according to the title." It saw the frames. It heard the transcript. It surfaces the relevant URLs from `## Resources` so you can click through. It answers the way someone who watched the video would.
-10. **The persistent report is three companion files — four when diarized.** For local sources, they sit next to the video (`videos/test.mp4` → `videos/test.{md,protocol.md,transcript.md}`). For URL sources, they land in `./watch/<YYYY-MM-DD>-<slug>/<slug>.{md,protocol.md,transcript.md}` in your current working directory — sortable by date, per-video subfolder, `.gitignore`-friendly (`watch/` covers it). The `.md` file has Claude's Summary + Analysis; `.protocol.md` has metadata + the frame list; `.transcript.md` has the timestamped transcript (with speaker names when diarized). For diarized runs, Claude additionally writes `<base>.transcript-kompakt.md` — an editorially condensed version: one polished block per statement, STT garbles fixed, fillers dropped, grouped by topic. Override with `--save-md PATH`, disable with `--no-save-md`.
-11. **Idempotent intermediates.** Alongside the report, the raw STT segments and diarization turns are persisted as `<base>.segments.json` / `<base>.turns.json`. Reprocessing the same source reuses them — STT + diarization are skipped (a 41-min recording resumes in ~1 s), so re-cleaning a transcript or re-rendering after an edit is effectively free. `--fresh` forces a clean re-run.
-12. **Cleanup.** The script prints a working directory at the end. The saved companion files (report + intermediates) persist; the temp work_dir gets removed.
+Five stages. The visual stage is skipped automatically for audio-only sources; everything else runs the same.
+
+| Stage | What happens |
+|-------|--------------|
+| **1. Input** | You hand it a source (video/audio, URL or local path) and an optional question. |
+| **2. Acquire** | yt-dlp downloads URLs (or local files are probed in place); audio-only sources skip the visual stage. |
+| **3. See** *(video only)* | Scene-cut detection + gap-filled frame sampling, auto-chunked for long videos. |
+| **4. Hear** | Transcription → diarization → turn-merge → speaker-naming — four distinct sub-steps. |
+| **5. Answer & persist** | Claude reads frames + transcript + resources, answers grounded in them, and saves a reusable report. |
+
+### 1. Input
+
+- A **source**: a URL (anything yt-dlp supports — YouTube, Loom, TikTok, X, Instagram, plus a few hundred more) or a local path — video (`.mp4`, `.mov`, `.mkv`, `.webm`) or **pure audio** (`.m4a`, `.mp3`, `.wav`). For audio, stage 3 is skipped automatically.
+- An optional **question**. With one, Claude tailors the answer to it; without one, you get a structured Summary + Analysis.
+
+### 2. Acquire
+
+- **URLs** — `yt-dlp` downloads into a temp working directory and grabs the description (for the resource scan) plus native captions when the platform has them.
+- **Local files** — no download; probed in place with `ffprobe`. The presence of a video stream (`has_video`) decides whether stage 3 runs at all.
+
+### 3. See — frames *(video only)*
+
+- **Scene cuts** — an `scdet` pass scores every frame's pixel-difference; a knee-point heuristic picks a per-video threshold (no static cut-off). Each cut becomes one frame after a settle-delay (default 1.0 s) so transitions / dialogs finish rendering. `--no-scene`, `--scene-threshold F`.
+- **Gap-filled sampling** — a duration-aware budget (≤30s → ~30 frames … 3-10min → ~80) is distributed into the gaps *between* cuts rather than at uniform intervals, so cut-dense regions don't waste budget and long uncovered spans get coverage. 512px JPEGs; `--resolution 1024` for on-screen text.
+- **Auto-chunk** — videos > 10 min split into ~10-min chunks, each with the dense focused budget. `--no-chunk` reverts to sparse single-pass; `--start`/`--end` zeroes in on one section.
+
+### 4. Hear — transcript
+
+Four separate sub-steps, in order:
+
+- **Transcription** — native captions first (`yt-dlp`, free, covers most public videos). Otherwise a **local-first STT cascade** over the extracted mono 16 kHz audio, each failure falling through to the next: **whisper-local** (DEFAULT — faster-whisper `large-v3` on CUDA / `medium` int8 on CPU, in the managed venv; no key, on-device) → **Azure `gpt-4o-transcribe-diarize`** (private tenant) → Groq `whisper-large-v3` → OpenAI `whisper-1`. `--whisper <backend>` pins one (no cascade). Long cloud audio auto-splits + stitches onto one timeline; whisper-local streams arbitrary length natively.
+- **Diarization** ("who spoke when") — **ON by default**, local first: pyannote.audio in the managed venv (HF token) → pyannote.ai → AssemblyAI; failures cascade between the configured pyannote variants. pyannote emits speaker **turns** (time ranges) that the next step aligns to the transcript; AssemblyAI and Azure instead deliver speakers *inline* with the transcription. `--no-diarize` turns it off; `--diarize <backend>` pins one.
+- **Turn-merge** (readability, pure Python — *not* the same thing as diarization) — consecutive segments by the *same* speaker collapse into one block, so the transcript reads `[MM:SS] [Speaker] <the whole turn>` instead of one line per ~2-second segment. Non-diarized transcripts keep their per-segment granularity (the frame-to-transcript alignment relies on it).
+- **Speaker-naming** (Claude, during analysis — the one LLM step here) — anonymous labels (`[A]`, `[SPEAKER_00]`) are substituted with canonical first names (`[A]` → `[Urs]`) from address-pattern + frame-avatar evidence; for audio-only sources, role/content evidence takes the place of frames. Labels that can't be pinned with confidence stay as bare letters.
+
+### 5. Answer & persist
+
+- **Resources** — every `https://` link in the description + transcript is deduped, normalized (tracking params stripped), and grouped (Projects / Docs / Articles / Videos / Social / Other), each annotated with its origin (`description` or `transcript@MM:SS`).
+- **Hand-off & answer** — frames (tagged `[REG]` gap-filled / `[CUT]` scene-cut) + transcript + resources go to Claude; it `Read`s every frame as an image and answers grounded in what's actually on screen and in the audio — not the title or description.
+- **Report** — three companion files next to local sources (`test.mp4` → `test.{md,protocol.md,transcript.md}`) or under `./watch/<YYYY-MM-DD>-<slug>/` for URLs; the `.md` carries Summary + Analysis, `.protocol.md` the metadata + frame list, `.transcript.md` the timestamped (and speaker-labeled) transcript. Diarized runs get a fourth `transcript-kompakt.md` — editorially condensed: one polished block per statement, STT garbles fixed, fillers dropped, grouped by topic. `--save-md PATH`, `--no-save-md`.
+- **Idempotent intermediates** — raw STT segments + diarization turns persist as `<base>.segments.json` / `.turns.json`; reprocessing the same source resumes in ~1 s (skips stage 4's STT + diarization). `--fresh` forces a clean re-run.
+- **Cleanup** — the temp work_dir is removed; the saved companions (report + intermediates) persist.
 
 ## Frame budget — why it matters
 
