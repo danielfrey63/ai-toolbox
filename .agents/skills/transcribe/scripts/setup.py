@@ -74,6 +74,13 @@ TORCH_PINS_CPU = ["torch==2.6.0", "torchaudio==2.6.0"]
 # build tag, hence the +cu124 pins plus the dedicated index.
 TORCH_PINS_GPU = ["torch==2.6.0+cu124", "torchaudio==2.6.0+cu124"]
 TORCH_GPU_INDEX = "https://download.pytorch.org/whl/cu124"
+# torch 2.6.0 ships CPython wheels for 3.9-3.13 only. The managed venv is
+# created from THIS interpreter (sys.executable), so a host Python outside
+# that window makes the torch pin unsatisfiable - and pip's bare "Could not
+# find a version that satisfies torch==2.6.0+cu124" gives no hint why. Guard
+# up front with an actionable message instead.
+TORCH_PY_MIN = (3, 9)
+TORCH_PY_MAX = (3, 13)
 
 # Auto-download sources (Linux+Windows). macOS still routes through Homebrew.
 # All three are stable URLs that always point at the current release; no
@@ -686,6 +693,28 @@ def _gpu_available() -> bool:
         return False
 
 
+def _python_torch_incompatible() -> str | None:
+    """Return an actionable message if this interpreter can't host the torch
+    pins, else None. The managed venv inherits sys.executable's version.
+    """
+    ver = sys.version_info[:2]
+    if TORCH_PY_MIN <= ver <= TORCH_PY_MAX:
+        return None
+    want = f"{TORCH_PY_MIN[0]}.{TORCH_PY_MIN[1]}-{TORCH_PY_MAX[0]}.{TORCH_PY_MAX[1]}"
+    have = f"{ver[0]}.{ver[1]}"
+    hint = (
+        f"py -{TORCH_PY_MAX[0]}.{TORCH_PY_MAX[1]} \"{Path(__file__).resolve()}\" --venv"
+        if IS_WINDOWS
+        else f"python{TORCH_PY_MAX[0]}.{TORCH_PY_MAX[1]} {Path(__file__).resolve()} --venv"
+    )
+    return (
+        f"Python {have} is outside torch 2.6.0's supported range ({want}). The "
+        f"managed ML venv is built from this interpreter, so the torch wheels "
+        f"won't resolve (pip would just say 'no matching distribution'). Re-run "
+        f"with a supported interpreter, e.g.:\n  {hint}"
+    )
+
+
 def _venv_signature(gpu: bool) -> str:
     """Fingerprint of the desired venv state - pins + torch flavor + python."""
     import hashlib
@@ -723,6 +752,11 @@ def cmd_provision_venv(force: bool = False) -> int:
     if status["ready"] and not force:
         sys.stderr.write(f"[setup] ML venv ready: {VENV_DIR}\n")
         return 0
+
+    incompatible = _python_torch_incompatible()
+    if incompatible:
+        sys.stderr.write(f"[setup] ERROR: {incompatible}\n")
+        return 1
 
     gpu = status["gpu"]
     flavor = "GPU (cu124)" if gpu else "CPU"

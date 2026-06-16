@@ -16,6 +16,12 @@ from setup import find_tool
 
 
 VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".m4v", ".avi", ".flv", ".wmv"}
+# Audio-only sources are first-class - voice memos / podcasts / meeting
+# recordings run through the same pipeline minus the frame stages. Treat
+# their extensions as known so they don't trip the "unknown extension"
+# warning, which on an .m4a is pure noise.
+AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".flac", ".ogg", ".opus", ".aac", ".wma"}
+KNOWN_MEDIA_EXTS = VIDEO_EXTS | AUDIO_EXTS
 
 
 def is_url(source: str) -> bool:
@@ -27,9 +33,9 @@ def resolve_local(path: str) -> dict:
     p = Path(path).expanduser().resolve()
     if not p.exists():
         raise SystemExit(f"File not found: {p}")
-    if p.suffix.lower() not in VIDEO_EXTS:
+    if p.suffix.lower() not in KNOWN_MEDIA_EXTS:
         print(
-            f"[transcribe] warning: {p.suffix} is not a known video extension, proceeding anyway",
+            f"[transcribe] warning: {p.suffix} is not a known media extension, proceeding anyway",
             file=sys.stderr,
         )
     return {
