@@ -8,3 +8,12 @@ artefacts
 # the *.example templates and .managed-vars are committed.
 cc-profil/profiles/*.env
 !cc-profil/profiles/*.env.example
+
+# oracle-mcp — real connection config holds DB host/user/password; only the
+# *.tmpl templates are committed.
+.agents/skills/oracle-mcp/config/oracle.env
+
+# kilo-azure — real provider env holds the Azure Foundry key; only *.example
+# templates are committed (mirrors cc-profil).
+kilo-azure/*.env
+!kilo-azure/*.env.example

@@ -1,0 +1,26 @@
+// =============================================================================
+// oracle-mcp — MCP server registration snippet (TEMPLATE)
+// =============================================================================
+// Drop this entry into the `mcp` object of your MCP client's config.
+//
+// For Kilo Code (~/.config/kilo/kilo.jsonc) the surrounding file already has
+// an `mcp` block — add this key inside it. See README "JSONC caveat": edit by
+// hand or with a comment-preserving tool, not a naive `jq` rewrite (jq strips
+// the // comments and the $schema line).
+//
+// For Claude Code, prefer `claude mcp add` over hand-editing — the setup
+// script does this for you when ORACLE_MCP_CLIENT=claude.
+//
+// The server exposes SQLcl's saved connection "{{ORACLE_CONN_NAME}}"; no
+// credentials appear here — they live in SQLcl's secure store.
+// =============================================================================
+{
+  "oracle": {
+    "type": "local",
+    "command": ["sql", "-mcp"],
+    "environment": {
+      // Only needed for wallet/TNS connections; harmless to omit otherwise.
+      // "TNS_ADMIN": "/absolute/path/to/wallet"
+    }
+  }
+}
