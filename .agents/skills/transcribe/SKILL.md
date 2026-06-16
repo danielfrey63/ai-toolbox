@@ -18,7 +18,7 @@ You don't have a video input; this skill gives you one. A Python script download
 
 **Python interpreter:** every `python3 ...` command in this skill is for macOS/Linux. On **Windows**, substitute `python` — the `python3` command on Windows is the Microsoft Store stub and will not run the script.
 
-Before every `/transcribe` run, verify that dependencies and an API key are in place:
+Before every `/transcribe` run, verify that dependencies and an on-device transcription path are in place:
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py" --check
@@ -26,13 +26,25 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py" --check
 
 This is a <100ms lookup. On exit 0, the script emits **nothing** — proceed to Step 1 without comment. **Do NOT announce "setup is complete" to the user** — they don't need a status message on every turn. The only acceptable user-visible output from Step 0 is when remediation is required.
 
-On non-zero exit, follow the table:
+On non-zero exit, follow the table. **Local-first: never ask the user for a cloud key** — the default transcription path is on-device whisper-local (managed venv, no key, nothing leaves the machine). Only mention cloud keys if the user explicitly asks for cloud.
 
 | Exit | Meaning | Action |
 |------|---------|--------|
 | `2` | Missing binaries (`ffmpeg` / `ffprobe` / `yt-dlp`) | Run installer |
-| `3` | No Whisper API key | Run installer to scaffold `.env`, then ask user for a key |
-| `4` | Both missing | Run installer, then ask for a key |
+| `3` | No transcription path | Provision the local venv — **don't** ask for a key (see below) |
+| `4` | Both missing | Run installer (it auto-provisions the local venv on a keyless box) |
+
+**Provisioning the on-device venv (exit 3, or exit 4 after binaries land):** the default installer (`setup.py` with no args) auto-provisions the venv on a keyless box, so usually just run it. If you need to provision explicitly, use the interpreter `--check`/`--json` recommends — the `recommended_py` field is the interpreter that can actually build the torch wheels:
+
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py" --venv
+```
+
+**Windows / too-new host Python:** if `--venv` reports a Python-version error (host Python outside 3.9–3.13, so the torch wheels won't resolve), provision with a supported interpreter via the launcher — `--check`/`--json` hand you the exact command in `recommended_py` (e.g. `py -3.13`):
+
+```bash
+py -3.13 "${CLAUDE_SKILL_DIR}/scripts/setup.py" --venv
+```
 
 The installer is idempotent — safe to re-run:
 
@@ -44,7 +56,7 @@ On all three platforms, the default installer now does the right thing automatic
 - **macOS** — auto-runs `brew install ffmpeg yt-dlp`.
 - **Linux / Windows** — routes to `cmd_install_binaries()` and downloads standalone binaries into `~/.transcribe/bin/` (yt-dlp from GitHub Releases, ffmpeg from johnvansickle on Linux / Gyan.dev on Windows). No `apt install`, no `pip install`, no admin rights needed. A `find_tool()` helper in `setup.py` prefers `~/.transcribe/bin/` and falls back to anything on PATH — system-installed versions still win when present.
 
-It scaffolds `~/.config/transcribe/.env` with commented placeholders at `0600` perms, and writes `SETUP_COMPLETE=true` once deps + a key are in place so the next session knows this user has already been through the wizard.
+It scaffolds `~/.config/transcribe/.env` with commented placeholders at `0600` perms, auto-provisions the on-device whisper-local venv on a keyless box (so the first run leaves the machine transcription-ready with no second command), and writes `SETUP_COMPLETE=true` so the next session knows this user has already been through the wizard.
 
 **Direct standalone-binary invocation** (explicit, useful for `--force` re-download or skipping the env scaffolding):
 
@@ -54,9 +66,9 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py" --install-binaries [--force]
 
 Same as what the default installer routes to on Linux/Windows. Add `--force` to refresh existing binaries.
 
-**If an API key is still missing after install:** use `AskUserQuestion` to ask the user whether they have a Groq API key (preferred — cheaper, faster) or an OpenAI key. Then write it into `~/.config/transcribe/.env` — set the matching `GROQ_API_KEY=...` or `OPENAI_API_KEY=...` line. If they don't want to set up Whisper, proceed with `--no-whisper` and tell them videos without native captions will come back frames-only.
+**No cloud key? That's the normal, fully-supported case — do not ask for one.** Transcription runs on-device via whisper-local (the managed venv), which the installer provisions automatically. Cloud keys (`GROQ_API_KEY` / `OPENAI_API_KEY`) are an opt-in speed upgrade, not a requirement — only set one up if the user explicitly asks for cloud transcription, in which case write the matching line into `~/.config/transcribe/.env`. If the local venv genuinely can't be built (no Python in the 3.9–3.13 torch window — `venv_buildable: false` in `--json`), tell the user to install a supported Python (or, as a fallback, offer a cloud key); only then is `--no-whisper` (frames-only for caption-less videos) the degraded path.
 
-**Structured mode (optional):** `python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py" --json` emits `{status, first_run, missing_binaries, whisper_backend, has_api_key, config_file, platform}` where `status` is one of `ready | needs_install | needs_key | needs_install_and_key`. Use this when you need to branch on specifics (e.g. "is this the user's very first run?" → `first_run: true`).
+**Structured mode (optional):** `python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py" --json` emits `{status, first_run, missing_binaries, whisper_backend, has_api_key, diarize_configured, local_venv, venv_buildable, recommended_py, config_file, platform}` where `status` is one of `ready | needs_install | needs_local_venv | needs_install_and_local_venv`. Branch on `venv_buildable` (is a torch-compatible Python available?) and `recommended_py` (the exact interpreter to prefix `setup.py --venv` — the host when it qualifies, else a launcher like `py -3.13`) to provision locally without guessing, and on `first_run`/`local_venv.ready` for first-run vs. already-provisioned.
 
 Within a single session, you can skip Step 0 on follow-up `/transcribe` calls — once `--check` returned 0, nothing about the environment changes between turns.
 
@@ -419,7 +431,7 @@ You don't need to do anything to enable this — it kicks in automatically when 
 
 ## Failure modes and handling
 
-- **Setup preflight failed** → run `python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py"` (auto-installs ffmpeg/yt-dlp via brew on macOS, scaffolds the `.env`). For API key, ask the user via `AskUserQuestion` and write it to `~/.config/transcribe/.env`.
+- **Setup preflight failed** → run `python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py"` (auto-installs ffmpeg/yt-dlp, scaffolds the `.env`, and auto-provisions the on-device whisper-local venv on a keyless box). Transcription is local-first — **don't ask the user for a cloud key**; if the local venv can't build (no Python in the 3.9–3.13 torch window), tell them to install a supported Python and provision with `recommended_py <…>/setup.py --venv`.
 - **No transcript available** → captions missing AND (no Whisper key OR Whisper API failed). Script prints a hint pointing to setup. Proceed frames-only and tell the user.
 - **Long video auto-chunked** → the metadata line will say `chunked mode, N chunks × ~Xs`. The Read frame list is much longer than for a short video (~80 frames per chunk). Read them all, but be aware the image-token cost scales. If the user only cares about a specific section, suggest a re-run with `--start`/`--end` for tighter focus on that range; if they want the whole thing but cheaper, `--no-chunk` reverts to the sparse single-pass behavior.
 - **Download fails** → yt-dlp's error goes to stderr. If it's a login-required or region-locked video, tell the user plainly; do not keep retrying.

@@ -715,20 +715,68 @@ def _python_torch_incompatible() -> str | None:
     )
 
 
-def _venv_signature(gpu: bool) -> str:
-    """Fingerprint of the desired venv state - pins + torch flavor + python."""
+def _supported_interpreter() -> str | None:
+    """Return a command for an interpreter inside torch's window, or None.
+
+    Prefers the current interpreter when it already qualifies (fast path: no
+    subprocess, no PATH probing). Only when the host Python is out of range
+    does it probe for a launcher-reachable supported interpreter, newest-first:
+      - Windows: `py -3.13` .. `py -3.9` via the launcher (probed with a tiny
+        subprocess; the first that runs wins).
+      - POSIX: `python3.13` .. `python3.9` on PATH via shutil.which.
+
+    The return value is ready to prefix a `setup.py --venv` call - it may be an
+    absolute path (host / POSIX) or a launcher invocation with a space
+    (`py -3.13`). None means no torch-compatible interpreter is available, so
+    the local venv can't be built on this box without installing one.
+    """
+    ver = sys.version_info[:2]
+    if TORCH_PY_MIN <= ver <= TORCH_PY_MAX:
+        return sys.executable
+    for minor in range(TORCH_PY_MAX[1], TORCH_PY_MIN[1] - 1, -1):
+        if IS_WINDOWS:
+            try:
+                probe = subprocess.run(
+                    ["py", f"-3.{minor}", "-c", "import sys"],
+                    capture_output=True, timeout=10,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            if probe.returncode == 0:
+                return f"py -3.{minor}"
+        else:
+            exe = shutil.which(f"python3.{minor}")
+            if exe:
+                return exe
+    return None
+
+
+def _venv_signature(gpu: bool, py: str) -> str:
+    """Fingerprint of the desired venv state - pins + torch flavor + python.
+
+    `py` is the *venv's* interpreter version ("3.13"), not necessarily the
+    host's: the venv may be built by a supported launcher interpreter while
+    run.py runs under a too-new host Python. Keying the signature on the
+    venv's own version (read back from the marker) keeps a correctly-built
+    venv "ready" regardless of which interpreter checks on it.
+    """
     import hashlib
 
     payload = json.dumps({
         "pins": VENV_PINS,
         "torch": TORCH_PINS_GPU if gpu else TORCH_PINS_CPU,
-        "python": f"{sys.version_info.major}.{sys.version_info.minor}",
+        "python": py,
     }, sort_keys=True)
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
 def venv_status() -> dict:
-    """Desired-state check: {'ready': bool, 'reason': str, 'gpu': bool}."""
+    """Desired-state check: {'ready': bool, 'reason': str, 'gpu': bool}.
+
+    Validates against the interpreter recorded in the marker, so a venv built
+    by a supported launcher (e.g. `py -3.13`) stays ready even when the host
+    Python that runs this check is outside torch's window.
+    """
     gpu = _gpu_available()
     if not venv_python().exists():
         return {"ready": False, "reason": "venv missing", "gpu": gpu}
@@ -736,7 +784,8 @@ def venv_status() -> dict:
         marker = json.loads(VENV_MARKER.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {"ready": False, "reason": "marker missing/corrupt", "gpu": gpu}
-    if marker.get("signature") != _venv_signature(gpu):
+    marker_py = marker.get("python") or f"{sys.version_info.major}.{sys.version_info.minor}"
+    if marker.get("signature") != _venv_signature(gpu, marker_py):
         return {"ready": False, "reason": "pins or GPU availability changed", "gpu": gpu}
     return {"ready": True, "reason": "", "gpu": gpu}
 
@@ -795,7 +844,7 @@ def cmd_provision_venv(force: bool = False) -> int:
         return 1
 
     VENV_MARKER.write_text(json.dumps({
-        "signature": _venv_signature(gpu),
+        "signature": _venv_signature(gpu, py_now),
         "gpu": gpu,
         "python": py_now,
         "pins": VENV_PINS + (TORCH_PINS_GPU if gpu else TORCH_PINS_CPU),
@@ -875,14 +924,23 @@ def _status() -> dict:
     if not has_key and venv["ready"]:
         backend = "whisper-local"
 
+    # Local-first remediation hints: whisper-local (managed venv) is the
+    # default transcription path, so the actionable next step on a keyless box
+    # is "provision the venv" - and with the *right* interpreter, since a too-
+    # new host Python can't build the torch wheels. recommended_py is the
+    # command to prefix `setup.py --venv`; venv_buildable is False only when no
+    # torch-compatible interpreter exists on the box at all.
+    recommended_py = _supported_interpreter()
+    venv_buildable = recommended_py is not None
+
     if not missing and has_transcription:
         status = "ready"
     elif missing and not has_transcription:
-        status = "needs_install_and_key"
+        status = "needs_install_and_local_venv"
     elif missing:
         status = "needs_install"
     else:
-        status = "needs_key"
+        status = "needs_local_venv"
 
     return {
         "status": status,
@@ -893,6 +951,8 @@ def _status() -> dict:
         "diarize_configured": diarize_configured,
         "local_venv": {"ready": venv["ready"], "gpu": venv["gpu"],
                        "path": str(VENV_DIR)},
+        "venv_buildable": venv_buildable,
+        "recommended_py": recommended_py or "",
         "config_file": str(CONFIG_FILE),
         "platform": platform.system(),
     }
@@ -901,9 +961,9 @@ def _status() -> dict:
 def cmd_check() -> int:
     """Preflight check that surfaces *every* missing key, required or optional.
 
-    - Required (binaries + a Whisper key) drives the exit code:
+    - Required (binaries + a transcription path) drives the exit code:
         2 -> binaries missing
-        3 -> Whisper API key missing
+        3 -> no transcription path (local venv not provisioned, no cloud key)
         4 -> both missing
         0 -> required features OK
     - Optional (diarization keys) is reported as info regardless of exit
@@ -912,20 +972,17 @@ def cmd_check() -> int:
 
     Stays fully silent only when *everything* - required + optional - is
     configured. That's the only case where Claude has nothing to surface.
+
+    Local-first: the missing-transcription remediation leads with "provision
+    the on-device venv" (whisper-local, the default path), not "get a cloud
+    key" - cloud keys are named only as a trailing alternative.
     """
     s = _status()
 
-    # Itemise all missing keys, with category. Specific names so the user
-    # knows exactly what to set, not just "something is missing". A ready
-    # ML venv (whisper-local) satisfies the transcription requirement
-    # without any cloud key.
-    missing_required: list[str] = []
-    if (not _read_env_key("GROQ_API_KEY") and not _read_env_key("OPENAI_API_KEY")
-            and not s["local_venv"]["ready"]):
-        missing_required.append(
-            "GROQ_API_KEY or OPENAI_API_KEY (or `setup.py --venv` for "
-            "fully local whisper-local)"
-        )
+    # Transcription is "missing" only when there's neither a cloud key nor a
+    # ready local venv. whisper-local (the managed venv) is the default path,
+    # so the primary remediation below is to provision it - not to get a key.
+    needs_transcription = not s["has_api_key"] and not s["local_venv"]["ready"]
 
     # Diarization is optional and local-first. Only nag when NO backend is
     # configured at all - if even one is wired (HF_TOKEN -> pyannote-local,
@@ -934,23 +991,39 @@ def cmd_check() -> int:
     suggest_diarize = not _diarize_is_dismissed() and not s["diarize_configured"]
 
     # Fully ready -> stay silent (Claude's per-turn preflight shouldn't spam).
-    if not s["missing_binaries"] and not missing_required and not suggest_diarize:
+    if not s["missing_binaries"] and not needs_transcription and not suggest_diarize:
         return 0
 
     installer = Path(__file__).resolve()
 
-    if s["missing_binaries"] or missing_required:
-        parts: list[str] = []
-        if s["missing_binaries"]:
-            parts.append(f"missing binaries: {', '.join(s['missing_binaries'])}")
-        if missing_required:
-            parts.append(
-                "missing required keys: " + ", ".join(missing_required)
-            )
+    if s["missing_binaries"]:
         sys.stderr.write(
-            f"[transcribe] setup incomplete ({'; '.join(parts)}). "
-            f"Run: python3 {installer}\n"
+            "[transcribe] missing binaries: "
+            f"{', '.join(s['missing_binaries'])}. Run: python3 {installer}\n"
         )
+
+    if needs_transcription:
+        # Lead with the local path. recommended_py is the interpreter that can
+        # actually build the torch venv (the host when it's in range, else a
+        # launcher like `py -3.13`) - hand over a command that won't fail.
+        if s["venv_buildable"]:
+            venv_cmd = f"{s['recommended_py']} \"{installer}\" --venv"
+            sys.stderr.write(
+                "[transcribe] local transcription not provisioned - run: "
+                f"{venv_cmd}  (on-device whisper-local, GPU auto-detected, "
+                "one-time download). Optional: set GROQ_API_KEY / "
+                "OPENAI_API_KEY in ~/.config/transcribe/.env for cloud "
+                "transcription instead.\n"
+            )
+        else:
+            want = f"{TORCH_PY_MIN[0]}.{TORCH_PY_MIN[1]}-{TORCH_PY_MAX[0]}.{TORCH_PY_MAX[1]}"
+            sys.stderr.write(
+                "[transcribe] local transcription needs a Python in the torch "
+                f"window ({want}); none found on this box. Install one (then "
+                f"run `<python> {installer} --venv`), or set GROQ_API_KEY / "
+                "OPENAI_API_KEY in ~/.config/transcribe/.env for cloud "
+                "transcription instead.\n"
+            )
 
     if suggest_diarize:
         # Local-first nudge: HF_TOKEN unlocks free, on-device diarization;
@@ -982,6 +1055,63 @@ def cmd_json() -> int:
     json.dump(_status(), sys.stdout, indent=2)
     sys.stdout.write("\n")
     return 0
+
+
+def _auto_provision_local_venv() -> None:
+    """Front-load the on-device venv during install so a keyless box is end-to-
+    end transcription-ready without a second command.
+
+    whisper-local (the managed venv) is the default transcription path, so on a
+    box with no cloud key we provision it now rather than deferring to the first
+    /transcribe run. Idempotent (no-op when already ready) and best-effort: a
+    failure here never fails the installer - the lazy ensure_venv() path still
+    covers the first real run, and we print the exact command to retry.
+
+    Interpreter-aware: builds with the host Python when it's inside torch's
+    window, otherwise re-execs a supported launcher interpreter (e.g.
+    `py -3.13`) so the build doesn't die on an unsatisfiable torch wheel. When
+    no compatible interpreter exists, prints how to get one instead of failing.
+    """
+    if venv_status()["ready"]:
+        return
+    installer = Path(__file__).resolve()
+    interp = _supported_interpreter()
+    if interp is None:
+        want = f"{TORCH_PY_MIN[0]}.{TORCH_PY_MIN[1]}-{TORCH_PY_MAX[0]}.{TORCH_PY_MAX[1]}"
+        print(
+            f"[setup] on-device transcription needs a Python in {want}; none "
+            f"found on this box. Install one and run `<python> {installer} "
+            "--venv`, or set a cloud key (above). Skipping local provisioning "
+            "for now."
+        )
+        return
+
+    print(
+        "[setup] provisioning on-device whisper-local venv now (one-time "
+        "download, ~300 MB CPU / ~2.5 GB GPU)..."
+    )
+    if interp == sys.executable:
+        if cmd_provision_venv() != 0:
+            print(
+                f"[setup] local venv provisioning hit an error - retry with "
+                f"`python3 {installer} --venv` (it resumes from pip's cache)."
+            )
+        return
+
+    # Host Python is outside torch's window - build with the supported launcher.
+    import shlex
+
+    argv = shlex.split(interp) + [str(installer), "--venv"]
+    print(f"[setup] host Python is out of torch's range; building venv with: {interp}")
+    try:
+        rc = subprocess.run(argv, check=False).returncode
+    except OSError as exc:
+        print(f"[setup] could not launch `{interp}` ({exc}). Run manually: "
+              f"{interp} {installer} --venv")
+        return
+    if rc != 0:
+        print(f"[setup] local venv provisioning via `{interp}` hit an error - "
+              f"retry: {interp} {installer} --venv")
 
 
 def cmd_install() -> int:
@@ -1047,8 +1177,15 @@ def cmd_install() -> int:
     if has_key:
         print(f"[setup] ready. transcription: {backend} (cloud) + whisper-local on-device fallback.")
     else:
-        print("[setup] ready. transcription runs on-device via whisper-local - "
-              "no key needed; the managed venv self-provisions on the first /transcribe run.")
+        # No cloud key -> local is the path. Front-load the venv so the box is
+        # transcription-ready end-to-end without a second command.
+        _auto_provision_local_venv()
+        if venv_status()["ready"]:
+            print("[setup] ready. on-device whisper-local provisioned - no key "
+                  "needed, nothing leaves the machine.")
+        else:
+            print("[setup] ready. transcription runs on-device via whisper-local - "
+                  "the managed venv self-provisions on the first /transcribe run.")
         print(f"  Optional cloud upgrades - edit {CONFIG_FILE}:")
         print("    GROQ_API_KEY / OPENAI_API_KEY   (faster Whisper via cloud)")
     if installed_deps:
