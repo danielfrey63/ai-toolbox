@@ -74,13 +74,11 @@ TORCH_PINS_CPU = ["torch==2.6.0", "torchaudio==2.6.0"]
 # build tag, hence the +cu124 pins plus the dedicated index.
 TORCH_PINS_GPU = ["torch==2.6.0+cu124", "torchaudio==2.6.0+cu124"]
 TORCH_GPU_INDEX = "https://download.pytorch.org/whl/cu124"
-# torch 2.6.0 ships CPython wheels for 3.9-3.13 only. The managed venv is
-# created from THIS interpreter (sys.executable), so a host Python outside
-# that window makes the torch pin unsatisfiable - and pip's bare "Could not
-# find a version that satisfies torch==2.6.0+cu124" gives no hint why. Guard
-# up front with an actionable message instead.
-TORCH_PY_MIN = (3, 9)
-TORCH_PY_MAX = (3, 13)
+# torch 2.6.0 ships CPython wheels for 3.9-3.13 only. We no longer depend on
+# the host Python falling in that window: the managed venv is built by `uv`,
+# which fetches its own managed CPython (pinned below) regardless of whatever
+# Python runs this script. So a 3.14-only box still gets a working torch venv.
+UV_PYTHON_VERSION = "3.13"
 
 # Auto-download sources (Linux+Windows). macOS still routes through Homebrew.
 # All three are stable URLs that always point at the current release; no
@@ -99,6 +97,21 @@ FFMPEG_URLS = {
     # gyan.dev = the standard Windows ffmpeg distribution
     "windows-x64": "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
     # macOS intentionally omitted - brew is the right path there
+}
+
+# uv = the standalone installer that provisions the ML venv. A single static
+# binary (Rust, no Python needed to run it) that fetches its own managed
+# CPython and resolves/installs wheels far faster than pip. We bootstrap it the
+# same way as ffmpeg/yt-dlp: download into ~/.transcribe/bin/, no global
+# install, no admin. Unlike ffmpeg, uv ships macOS builds too (arch-specific),
+# so all platforms route through the download - no brew dependency.
+UV_BASE = "https://github.com/astral-sh/uv/releases/latest/download/"
+UV_URLS = {
+    "linux-amd64": UV_BASE + "uv-x86_64-unknown-linux-gnu.tar.gz",
+    "linux-arm64": UV_BASE + "uv-aarch64-unknown-linux-gnu.tar.gz",
+    "windows-x64": UV_BASE + "uv-x86_64-pc-windows-msvc.zip",
+    "macos-amd64": UV_BASE + "uv-x86_64-apple-darwin.tar.gz",
+    "macos-arm64": UV_BASE + "uv-aarch64-apple-darwin.tar.gz",
 }
 # The .env template is a real file at the repo / skill root, not an embedded
 # string - one canonical source, browsable in the repo, shipped in the skill
@@ -278,6 +291,101 @@ def _install_ffmpeg(target: str, force: bool = False) -> bool:
 
     sys.stderr.write(f"[setup] installed ffmpeg + ffprobe -> {TRANSCRIBE_BIN_DIR}\n")
     return True
+
+
+def _uv_target() -> str | None:
+    """Map (system, machine) to a uv download-target key, or None if unshipped.
+
+    Unlike _detect_target(), this is arch-specific on macOS because uv ships
+    separate x86_64 / arm64 builds (and we use them - no brew fallback for uv).
+    """
+    system = platform.system()
+    machine = platform.machine().lower()
+    if system == "Linux":
+        if machine in ("x86_64", "amd64"):
+            return "linux-amd64"
+        if machine in ("aarch64", "arm64"):
+            return "linux-arm64"
+    elif system == "Windows":
+        if machine in ("amd64", "x86_64"):
+            return "windows-x64"
+    elif system == "Darwin":
+        if machine in ("arm64", "aarch64"):
+            return "macos-arm64"
+        if machine in ("x86_64", "amd64"):
+            return "macos-amd64"
+    return None
+
+
+def find_uv() -> str | None:
+    """Locate the uv binary. Prefer the standalone install in ~/.transcribe/bin/,
+    then fall back to anything on PATH. Absolute path so subprocess uses it verbatim."""
+    candidate = TRANSCRIBE_BIN_DIR / f"uv{_exe_suffix()}"
+    if candidate.exists() and candidate.is_file():
+        return str(candidate)
+    return shutil.which("uv")
+
+
+def _install_uv(force: bool = False) -> str | None:
+    """Drop the uv binary into TRANSCRIBE_BIN_DIR. Returns its path, or None
+    if the platform has no uv build. Idempotent: no-op when already present."""
+    existing = find_uv()
+    if existing and not force:
+        sys.stderr.write(f"[setup] uv already available: {existing}\n")
+        return existing
+
+    target = _uv_target()
+    if not target:
+        sys.stderr.write(
+            f"[setup] no uv build for this platform "
+            f"({platform.system()} / {platform.machine()})\n"
+        )
+        return None
+
+    url = UV_URLS[target]
+    suffix = ".exe" if target == "windows-x64" else ""
+    out = TRANSCRIBE_BIN_DIR / f"uv{suffix}"
+    TRANSCRIBE_BIN_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="transcribe-uv-") as tmp:
+        tmp_path = Path(tmp)
+        archive_path = tmp_path / url.rsplit("/", 1)[-1]
+        _download(url, archive_path)
+
+        sys.stderr.write(f"[setup] extracting {archive_path.name}...\n")
+        if url.endswith(".zip"):
+            with zipfile.ZipFile(archive_path) as zf:
+                zf.extractall(tmp_path)
+        else:  # .tar.gz
+            with tarfile.open(archive_path, "r:gz") as tf:
+                try:
+                    tf.extractall(tmp_path, filter="data")
+                except TypeError:
+                    tf.extractall(tmp_path)
+
+        uv_name = f"uv{suffix}"
+        uv_src = next((p for p in tmp_path.rglob(uv_name) if p.is_file()), None)
+        if not uv_src:
+            sys.stderr.write(f"[setup] could not find {uv_name} inside the archive\n")
+            return None
+        shutil.copy2(uv_src, out)
+        if target != "windows-x64":
+            out.chmod(0o755)
+
+    sys.stderr.write(f"[setup] installed uv -> {out}\n")
+    return str(out)
+
+
+def ensure_uv() -> str:
+    """Return the uv binary path, bootstrapping it on demand. SystemExit if the
+    platform has no uv build (the only case where the local venv can't be built)."""
+    uv = find_uv() or _install_uv()
+    if not uv:
+        raise SystemExit(
+            "uv is unavailable for this platform, so the on-device ML venv "
+            "can't be provisioned. Set GROQ_API_KEY / OPENAI_API_KEY in "
+            f"{CONFIG_FILE} for cloud transcription instead."
+        )
+    return uv
 
 
 def cmd_install_binaries(force: bool = False) -> int:
@@ -693,72 +801,13 @@ def _gpu_available() -> bool:
         return False
 
 
-def _python_torch_incompatible() -> str | None:
-    """Return an actionable message if this interpreter can't host the torch
-    pins, else None. The managed venv inherits sys.executable's version.
-    """
-    ver = sys.version_info[:2]
-    if TORCH_PY_MIN <= ver <= TORCH_PY_MAX:
-        return None
-    want = f"{TORCH_PY_MIN[0]}.{TORCH_PY_MIN[1]}-{TORCH_PY_MAX[0]}.{TORCH_PY_MAX[1]}"
-    have = f"{ver[0]}.{ver[1]}"
-    hint = (
-        f"py -{TORCH_PY_MAX[0]}.{TORCH_PY_MAX[1]} \"{Path(__file__).resolve()}\" --venv"
-        if IS_WINDOWS
-        else f"python{TORCH_PY_MAX[0]}.{TORCH_PY_MAX[1]} {Path(__file__).resolve()} --venv"
-    )
-    return (
-        f"Python {have} is outside torch 2.6.0's supported range ({want}). The "
-        f"managed ML venv is built from this interpreter, so the torch wheels "
-        f"won't resolve (pip would just say 'no matching distribution'). Re-run "
-        f"with a supported interpreter, e.g.:\n  {hint}"
-    )
-
-
-def _supported_interpreter() -> str | None:
-    """Return a command for an interpreter inside torch's window, or None.
-
-    Prefers the current interpreter when it already qualifies (fast path: no
-    subprocess, no PATH probing). Only when the host Python is out of range
-    does it probe for a launcher-reachable supported interpreter, newest-first:
-      - Windows: `py -3.13` .. `py -3.9` via the launcher (probed with a tiny
-        subprocess; the first that runs wins).
-      - POSIX: `python3.13` .. `python3.9` on PATH via shutil.which.
-
-    The return value is ready to prefix a `setup.py --venv` call - it may be an
-    absolute path (host / POSIX) or a launcher invocation with a space
-    (`py -3.13`). None means no torch-compatible interpreter is available, so
-    the local venv can't be built on this box without installing one.
-    """
-    ver = sys.version_info[:2]
-    if TORCH_PY_MIN <= ver <= TORCH_PY_MAX:
-        return sys.executable
-    for minor in range(TORCH_PY_MAX[1], TORCH_PY_MIN[1] - 1, -1):
-        if IS_WINDOWS:
-            try:
-                probe = subprocess.run(
-                    ["py", f"-3.{minor}", "-c", "import sys"],
-                    capture_output=True, timeout=10,
-                )
-            except (OSError, subprocess.TimeoutExpired):
-                continue
-            if probe.returncode == 0:
-                return f"py -3.{minor}"
-        else:
-            exe = shutil.which(f"python3.{minor}")
-            if exe:
-                return exe
-    return None
-
-
 def _venv_signature(gpu: bool, py: str) -> str:
     """Fingerprint of the desired venv state - pins + torch flavor + python.
 
-    `py` is the *venv's* interpreter version ("3.13"), not necessarily the
-    host's: the venv may be built by a supported launcher interpreter while
-    run.py runs under a too-new host Python. Keying the signature on the
-    venv's own version (read back from the marker) keeps a correctly-built
-    venv "ready" regardless of which interpreter checks on it.
+    `py` is the venv's pinned CPython (UV_PYTHON_VERSION), decoupled from the
+    host: uv builds the venv from its own managed interpreter, so the host
+    Python that runs this check never enters the equation. Bumping
+    UV_PYTHON_VERSION flips the signature and self-heals on the next provision.
     """
     import hashlib
 
@@ -773,9 +822,9 @@ def _venv_signature(gpu: bool, py: str) -> str:
 def venv_status() -> dict:
     """Desired-state check: {'ready': bool, 'reason': str, 'gpu': bool}.
 
-    Validates against the interpreter recorded in the marker, so a venv built
-    by a supported launcher (e.g. `py -3.13`) stays ready even when the host
-    Python that runs this check is outside torch's window.
+    Validates against the interpreter recorded in the marker (uv's managed
+    CPython), so the venv stays ready regardless of which host Python runs
+    this check.
     """
     gpu = _gpu_available()
     if not venv_python().exists():
@@ -784,7 +833,7 @@ def venv_status() -> dict:
         marker = json.loads(VENV_MARKER.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {"ready": False, "reason": "marker missing/corrupt", "gpu": gpu}
-    marker_py = marker.get("python") or f"{sys.version_info.major}.{sys.version_info.minor}"
+    marker_py = marker.get("python") or UV_PYTHON_VERSION
     if marker.get("signature") != _venv_signature(gpu, marker_py):
         return {"ready": False, "reason": "pins or GPU availability changed", "gpu": gpu}
     return {"ready": True, "reason": "", "gpu": gpu}
@@ -802,38 +851,45 @@ def cmd_provision_venv(force: bool = False) -> int:
         sys.stderr.write(f"[setup] ML venv ready: {VENV_DIR}\n")
         return 0
 
-    incompatible = _python_torch_incompatible()
-    if incompatible:
-        sys.stderr.write(f"[setup] ERROR: {incompatible}\n")
+    uv = find_uv() or _install_uv()
+    if not uv:
+        sys.stderr.write(
+            "[setup] ERROR: uv is unavailable for this platform, so the "
+            "on-device ML venv can't be built. Set GROQ_API_KEY / "
+            f"OPENAI_API_KEY in {CONFIG_FILE} for cloud transcription instead.\n"
+        )
         return 1
 
     gpu = status["gpu"]
     flavor = "GPU (cu124)" if gpu else "CPU"
     sys.stderr.write(
-        f"[setup] provisioning ML venv ({flavor}) at {VENV_DIR} "
-        f"({status['reason'] or 'forced'}) - one-time download, "
+        f"[setup] provisioning ML venv ({flavor}, Python {UV_PYTHON_VERSION} via uv) "
+        f"at {VENV_DIR} ({status['reason'] or 'forced'}) - one-time download, "
         f"{'~2.5 GB' if gpu else '~300 MB'}...\n"
     )
 
-    # Recreate from scratch when the interpreter is missing or the marker
-    # records a different Python - in-place pip surgery across interpreter
-    # versions is not worth debugging.
-    py_now = f"{sys.version_info.major}.{sys.version_info.minor}"
+    # Recreate from scratch when the venv is missing or the marker records a
+    # different pinned Python. `uv venv` fetches its own managed CPython
+    # (UV_PYTHON_VERSION), so the host Python is irrelevant - a 3.14-only box
+    # still gets a 3.13 venv that can host the torch wheels.
     marker_py = None
     try:
         marker_py = json.loads(VENV_MARKER.read_text(encoding="utf-8")).get("python")
     except (OSError, ValueError):
         pass
-    if not venv_python().exists() or (marker_py and marker_py != py_now) or force:
+    if not venv_python().exists() or (marker_py and marker_py != UV_PYTHON_VERSION) or force:
         if VENV_DIR.exists():
             shutil.rmtree(VENV_DIR)
-        result = subprocess.run([sys.executable, "-m", "venv", str(VENV_DIR)])
+        result = subprocess.run(
+            [uv, "venv", str(VENV_DIR), "--python", UV_PYTHON_VERSION]
+        )
         if result.returncode != 0:
             sys.stderr.write("[setup] ERROR: venv creation failed\n")
             return 1
 
-    pip = [str(venv_python()), "-m", "pip", "install", "--quiet"]
-    # torch first (own index for GPU) so nothing pulls a CPU torch as a dep.
+    # uv pip into the freshly-created venv. torch first (own index for GPU) so
+    # nothing pulls a CPU torch as a dep.
+    pip = [uv, "pip", "install", "--python", str(venv_python()), "-q"]
     torch_cmd = pip + (TORCH_PINS_GPU + ["--index-url", TORCH_GPU_INDEX] if gpu
                        else TORCH_PINS_CPU)
     if subprocess.run(torch_cmd).returncode != 0:
@@ -844,9 +900,9 @@ def cmd_provision_venv(force: bool = False) -> int:
         return 1
 
     VENV_MARKER.write_text(json.dumps({
-        "signature": _venv_signature(gpu, py_now),
+        "signature": _venv_signature(gpu, UV_PYTHON_VERSION),
         "gpu": gpu,
-        "python": py_now,
+        "python": UV_PYTHON_VERSION,
         "pins": VENV_PINS + (TORCH_PINS_GPU if gpu else TORCH_PINS_CPU),
     }, indent=2), encoding="utf-8")
     sys.stderr.write(f"[setup] ML venv ready: {VENV_DIR}\n")
@@ -924,14 +980,12 @@ def _status() -> dict:
     if not has_key and venv["ready"]:
         backend = "whisper-local"
 
-    # Local-first remediation hints: whisper-local (managed venv) is the
-    # default transcription path, so the actionable next step on a keyless box
-    # is "provision the venv" - and with the *right* interpreter, since a too-
-    # new host Python can't build the torch wheels. recommended_py is the
-    # command to prefix `setup.py --venv`; venv_buildable is False only when no
-    # torch-compatible interpreter exists on the box at all.
-    recommended_py = _supported_interpreter()
-    venv_buildable = recommended_py is not None
+    # Local-first: whisper-local (managed venv) is the default transcription
+    # path, so the actionable next step on a keyless box is "provision the
+    # venv". uv brings its own managed Python, so buildability no longer depends
+    # on the host interpreter - venv_buildable is False only on a platform uv
+    # doesn't ship for (the rare case where a cloud key is the only option).
+    venv_buildable = _uv_target() is not None
 
     if not missing and has_transcription:
         status = "ready"
@@ -952,7 +1006,6 @@ def _status() -> dict:
         "local_venv": {"ready": venv["ready"], "gpu": venv["gpu"],
                        "path": str(VENV_DIR)},
         "venv_buildable": venv_buildable,
-        "recommended_py": recommended_py or "",
         "config_file": str(CONFIG_FILE),
         "platform": platform.system(),
     }
@@ -1003,26 +1056,24 @@ def cmd_check() -> int:
         )
 
     if needs_transcription:
-        # Lead with the local path. recommended_py is the interpreter that can
-        # actually build the torch venv (the host when it's in range, else a
-        # launcher like `py -3.13`) - hand over a command that won't fail.
+        # Lead with the local path. Just `setup.py --venv` - uv fetches its own
+        # managed Python, so there's no host-interpreter caveat regardless of
+        # which Python runs this script.
         if s["venv_buildable"]:
-            venv_cmd = f"{s['recommended_py']} \"{installer}\" --venv"
             sys.stderr.write(
                 "[transcribe] local transcription not provisioned - run: "
-                f"{venv_cmd}  (on-device whisper-local, GPU auto-detected, "
-                "one-time download). Optional: set GROQ_API_KEY / "
+                f"python3 {installer} --venv  (uv fetches a managed Python "
+                f"{UV_PYTHON_VERSION} + on-device whisper-local, GPU "
+                "auto-detected, one-time download). Optional: set GROQ_API_KEY / "
                 "OPENAI_API_KEY in ~/.config/transcribe/.env for cloud "
                 "transcription instead.\n"
             )
         else:
-            want = f"{TORCH_PY_MIN[0]}.{TORCH_PY_MIN[1]}-{TORCH_PY_MAX[0]}.{TORCH_PY_MAX[1]}"
             sys.stderr.write(
-                "[transcribe] local transcription needs a Python in the torch "
-                f"window ({want}); none found on this box. Install one (then "
-                f"run `<python> {installer} --venv`), or set GROQ_API_KEY / "
-                "OPENAI_API_KEY in ~/.config/transcribe/.env for cloud "
-                "transcription instead.\n"
+                "[transcribe] on-device transcription is unavailable because uv "
+                f"ships no build for this platform ({platform.system()} / "
+                f"{platform.machine()}). Set GROQ_API_KEY / OPENAI_API_KEY in "
+                "~/.config/transcribe/.env for cloud transcription instead.\n"
             )
 
     if suggest_diarize:
@@ -1067,51 +1118,31 @@ def _auto_provision_local_venv() -> None:
     failure here never fails the installer - the lazy ensure_venv() path still
     covers the first real run, and we print the exact command to retry.
 
-    Interpreter-aware: builds with the host Python when it's inside torch's
-    window, otherwise re-execs a supported launcher interpreter (e.g.
-    `py -3.13`) so the build doesn't die on an unsatisfiable torch wheel. When
-    no compatible interpreter exists, prints how to get one instead of failing.
+    uv handles Python acquisition, so this is host-interpreter agnostic: there's
+    no launcher dance and no torch-window caveat. The only box where it can't
+    provision is one uv ships no build for - there we point at cloud keys.
     """
     if venv_status()["ready"]:
         return
     installer = Path(__file__).resolve()
-    interp = _supported_interpreter()
-    if interp is None:
-        want = f"{TORCH_PY_MIN[0]}.{TORCH_PY_MIN[1]}-{TORCH_PY_MAX[0]}.{TORCH_PY_MAX[1]}"
+    if _uv_target() is None:
         print(
-            f"[setup] on-device transcription needs a Python in {want}; none "
-            f"found on this box. Install one and run `<python> {installer} "
-            "--venv`, or set a cloud key (above). Skipping local provisioning "
-            "for now."
+            f"[setup] on-device transcription is unavailable - uv ships no build "
+            f"for this platform ({platform.system()} / {platform.machine()}). "
+            "Set a cloud key (above) for cloud transcription instead. Skipping "
+            "local provisioning."
         )
         return
 
     print(
-        "[setup] provisioning on-device whisper-local venv now (one-time "
-        "download, ~300 MB CPU / ~2.5 GB GPU)..."
+        "[setup] provisioning on-device whisper-local venv now (uv + managed "
+        f"Python {UV_PYTHON_VERSION}; one-time download, ~300 MB CPU / ~2.5 GB GPU)..."
     )
-    if interp == sys.executable:
-        if cmd_provision_venv() != 0:
-            print(
-                f"[setup] local venv provisioning hit an error - retry with "
-                f"`python3 {installer} --venv` (it resumes from pip's cache)."
-            )
-        return
-
-    # Host Python is outside torch's window - build with the supported launcher.
-    import shlex
-
-    argv = shlex.split(interp) + [str(installer), "--venv"]
-    print(f"[setup] host Python is out of torch's range; building venv with: {interp}")
-    try:
-        rc = subprocess.run(argv, check=False).returncode
-    except OSError as exc:
-        print(f"[setup] could not launch `{interp}` ({exc}). Run manually: "
-              f"{interp} {installer} --venv")
-        return
-    if rc != 0:
-        print(f"[setup] local venv provisioning via `{interp}` hit an error - "
-              f"retry: {interp} {installer} --venv")
+    if cmd_provision_venv() != 0:
+        print(
+            f"[setup] local venv provisioning hit an error - retry with "
+            f"`python3 {installer} --venv` (it resumes from uv's cache)."
+        )
 
 
 def cmd_install() -> int:
