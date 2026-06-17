@@ -53,12 +53,28 @@
       "description": "The toolbox CLI itself, as a system-wide 'toolbox' command."
     },
     {
+      "name": "aiprofil",
+      "type": "bin",
+      "source": true,
+      "path": "aiprofil/aiprofil.sh",
+      "command": "aiprofil",
+      "description": "Unified backend-profile switcher across Claude Code (env) + Kilo (kilo.jsonc)."
+    },
+    {
       "name": "cc-profil",
       "type": "bin",
       "source": true,
-      "path": "cc-profil/cc-profil.sh",
+      "path": "aiprofil/adapters/cc-profil.sh",
       "command": "cc-profil",
       "description": "Switch Claude Code env-var profiles (API key / endpoint / model)."
+    },
+    {
+      "name": "kilo-profil",
+      "type": "bin",
+      "source": false,
+      "path": "aiprofil/adapters/kilo-profil.sh",
+      "command": "kilo-profil",
+      "description": "Point the Kilo Code config (kilo.jsonc) at a backend profile."
     }
   ]
 }

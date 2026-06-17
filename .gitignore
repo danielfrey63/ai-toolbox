@@ -4,16 +4,14 @@ artefacts
 .codex/hook-log.txt
 .agents/skills/watch/HANDOFF.md
 
-# cc-profil — real profile .env files hold live API/foundry/SSH keys; only
-# the *.example templates and .managed-vars are committed.
+# aiprofil — real profile .env files hold live API/foundry/SSH keys; only the
+# *.example templates and .managed-vars are committed. The legacy cc-profil/
+# path is kept ignored too, for installs that still carry profiles there.
+aiprofil/profiles/*.env
+!aiprofil/profiles/*.env.example
 cc-profil/profiles/*.env
 !cc-profil/profiles/*.env.example
 
 # oracle-mcp — real connection config holds DB host/user/password; only the
 # *.tmpl templates are committed.
 .agents/skills/oracle-mcp/config/oracle.env
-
-# kilo-azure — real provider env holds the Azure Foundry key; only *.example
-# templates are committed (mirrors cc-profil).
-kilo-azure/*.env
-!kilo-azure/*.env.example
