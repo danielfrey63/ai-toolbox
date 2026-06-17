@@ -20,6 +20,7 @@ toolbox list                                       # was ist installierbar?
 toolbox install --what discover --target claude
 toolbox install --what versioning-hooks --scope project
 toolbox status --all                                # was ist wo installiert?
+toolbox reconcile                                   # bestehende Links finden + nachtragen
 ```
 
 - **Linux/macOS:** `./toolbox.sh` legt einen Symlink `~/.local/bin/toolbox` an —
@@ -29,7 +30,7 @@ toolbox status --all                                # was ist wo installiert?
 
 ## Die `toolbox`-CLI
 
-`toolbox <install|status|remove|list>` installiert, prüft und entfernt
+`toolbox <install|status|remove|list|reconcile>` installiert, prüft und entfernt
 Einträge aus dem Katalog `tools/catalog.json`. Jeder Eintrag hat einen Typ,
 der den Install-Handler bestimmt:
 
@@ -40,6 +41,13 @@ der den Install-Handler bestimmt:
 | `plugin` | echtes `claude plugin`-Install (Target `claude`), sonst Skill-Link |
 | `config` | globale Konfig-Datei (`CLAUDE.md`) nach `~/.claude/` verlinken |
 | `bin`    | einen CLI-Befehl systemweit verfügbar machen — exec (Symlink in `~/.local/bin` / `&` in `$PROFILE`) oder sourced (Funktion in `~/.bashrc` / `.` in `$PROFILE`, Katalog `source: true` — z.B. für env-setzende Tools wie `cc-profil`) |
+
+`reconcile` durchsucht die globalen Link-Ziele (Skills-Verzeichnisse je Target,
+`~/.claude`, `~/.local/bin`) nach Symlinks, die in dieses Repo zeigen, und trägt
+fehlende in die Registry nach — so werden auch von Hand (ausserhalb von
+`toolbox install`) angelegte Links von `status`/`remove` erfasst. Projekt-weite
+Installs (Hooks, Repo-Skills) findet der globale Scan nicht — die stellt man per
+`install … --scope project --project <repo>` wieder her.
 
 Vollständige Referenz: `toolbox --help`. Alle Befehle sind idempotent — beliebig
 oft ausführbar, ohne Schaden.

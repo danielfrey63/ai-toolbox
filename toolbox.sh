@@ -30,7 +30,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.28.170'
+APP_VERSION='0.29.179'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -54,7 +54,7 @@ _help_general() {
 toolbox — install AI-Toolbox tools (Claude Code / Codex / agentskills).
 
 Usage:
-  toolbox <install|status|remove|list> [options]
+  toolbox <install|status|remove|list|reconcile> [options]
   toolbox --help [<switch>]
 
 Commands:
@@ -62,6 +62,8 @@ Commands:
   status    Report install state; with no args, sweeps the registry.
   remove    Remove selected tools (only ever our own links/config).
   list      Print the catalog (name, type, description).
+  reconcile Discover existing links into this repo (e.g. hand-made symlinks)
+            and register any that are missing, so status/remove see them.
 
 For switch detail:  toolbox --help <switch>      e.g.  toolbox --help --target
 
@@ -199,7 +201,7 @@ show_help() {
 # Print the catalog as a readable table — answers "what can I install?".
 print_catalog_list() {
     printf 'toolbox — available tools (%s)\n' "$CATALOG"
-    printf 'Usage: toolbox <install|status|remove|list> [--target claude|codex|agents] [--scope global|project] [--project PATH] [--what all|<name>|<type>] [--tagstyle plain|namespaced] [--all] [-h|--help]\n\n'
+    printf 'Usage: toolbox <install|status|remove|list|reconcile> [--target claude|codex|agents] [--scope global|project] [--project PATH] [--what all|<name>|<type>] [--tagstyle plain|namespaced] [--all] [-h|--help]\n\n'
     printf '  %-20s %-7s %s\n' NAME TYPE DESCRIPTION
     jq -r '.tools[] | [.name, .type, .description] | @tsv' "$CATALOG" \
         | while IFS=$(printf '\t') read -r n t d; do
@@ -211,9 +213,9 @@ print_catalog_list() {
 # --- command ------------------------------------------------------------------
 CMD=${1:-}
 case "$CMD" in
-    install|status|remove|list) shift ;;
+    install|status|remove|list|reconcile) shift ;;
     -h|--help) show_help "${2:-}"; exit $? ;;
-    '') printf 'toolbox: missing command (install|status|remove|list)\n' >&2; exit 2 ;;
+    '') printf 'toolbox: missing command (install|status|remove|list|reconcile)\n' >&2; exit 2 ;;
     *)  printf 'toolbox: unknown command: %s\n' "$CMD" >&2; exit 2 ;;
 esac
 
@@ -577,6 +579,21 @@ _claude_hook_remove() {  # name prepo
     printf '  [-] %-18s claude PostToolUse removed (%s)\n' "$name" "$settings"
 }
 
+# True when two paths denote the same hooks directory, regardless of path
+# format. core.hooksPath is stored verbatim by whichever port set it: the
+# PowerShell port writes a Windows path ("D:\...\tools\githooks"), the bash
+# port a forward-slash MSYS path ("/d/.../tools/githooks"). A plain string
+# compare therefore reports a cross-port install as "not ours" and `status`
+# prunes a perfectly live hook. The `-ef` test resolves both forms to the same
+# inode when they exist, so it matches across drive-letter case, separators and
+# trailing slashes; the exact-string fast path covers the same-port case (and
+# the rare box without a working `-ef`).
+_same_hookpath() {  # cur hooksdir
+    [ -n "$1" ] || return 1
+    [ "$1" = "$2" ] && return 0
+    [ "$1" -ef "$2" ] 2>/dev/null
+}
+
 handle_hook() {
     local name=$1 path=$2
     local hooksdir="$REPO_ROOT/$path"
@@ -592,11 +609,11 @@ handle_hook() {
     cur=$(git -C "$prepo" config --local core.hooksPath 2>/dev/null || true)
     case "$CMD" in
         install)
-            if [ -n "$cur" ] && [ "$cur" != "$hooksdir" ]; then
+            if [ -n "$cur" ] && ! _same_hookpath "$cur" "$hooksdir"; then
                 printf '  [!] %-18s core.hooksPath already set to %s — skipped\n' "$name" "$cur" >&2
                 return
             fi
-            if [ "$cur" = "$hooksdir" ]; then
+            if _same_hookpath "$cur" "$hooksdir"; then
                 printf '  [=] %-18s core.hooksPath already set\n' "$name"
             else
                 git -C "$prepo" config --local core.hooksPath "$hooksdir"
@@ -659,7 +676,7 @@ handle_hook() {
                     no-settings) cl_suffix=', claude=missing-no-settings' ;;
                 esac
             fi
-            if [ "$cur" = "$hooksdir" ]; then
+            if _same_hookpath "$cur" "$hooksdir"; then
                 curts=$(git -C "$prepo" config --local bumpversion.tagstyle 2>/dev/null || true)
                 if [ "$cl_state" = "no" ] || [ "$cl_state" = "no-settings" ]; then
                     printf '  [! ] %-18s %s (tagstyle=%s%s)\n' "$name" "$prepo" "${curts:-namespaced}" "$cl_suffix"
@@ -677,7 +694,7 @@ handle_hook() {
             fi
             ;;
         remove)
-            if [ "$cur" = "$hooksdir" ]; then
+            if _same_hookpath "$cur" "$hooksdir"; then
                 git -C "$prepo" config --local --unset core.hooksPath
                 printf '  [-] %-18s core.hooksPath unset (%s)\n' "$name" "$prepo"
             else
@@ -953,11 +970,93 @@ registry_sweep() {
     fi
 }
 
+# True when an entry with this exact key already lives in the registry.
+_registry_has() {  # tool type scope target project
+    [ -f "$REGISTRY" ] || return 1
+    local n
+    n=$(registry_read | jq \
+        --arg t "$1" --arg ty "$2" --arg s "$3" --arg tg "$4" --arg p "$5" '
+        [.[] | select(.tool==$t and .type==$ty and .scope==$s
+                      and .target==$tg and .project==$p)] | length
+    ' 2>/dev/null) || return 1
+    [ "${n:-0}" -ge 1 ]
+}
+
+# Discover AI-Toolbox installs that exist on disk but were never recorded —
+# e.g. a skill symlinked by hand, outside `toolbox install`. Walks the global
+# link destinations (per-target skills dirs, the ~/.claude config dir,
+# ~/.local/bin), finds every symlink pointing into THIS repo, matches it to a
+# catalog tool by the linked path, and upserts a registry entry for any that is
+# missing — so `status --all` / `remove --all` see them. Always registers the
+# on-disk form (a symlink => type "skill"), which is what `registry_sweep`
+# re-verifies; when the catalog declares a different type (e.g. a plugin that
+# was instead hand-linked as a skill) it says so but still adopts the real
+# state. Project-scope installs (per-repo hooks/skills) can't be found by a
+# global scan — restore those by re-running `install … --scope project`.
+registry_reconcile() {
+    local adopted=0 target dir l tgt rel row catname cattype regtype
+    printf 'toolbox reconcile — discovering links into %s\n' "$REPO_ROOT"
+
+    _adopt() {  # link regtype scope target
+        local link=$1 rt=$2 sc=$3 tg=$4 t r row cn ct
+        t=$(readlink "$link")
+        case "$t" in "$REPO_ROOT"/*) ;; *) return ;; esac
+        r=${t#"$REPO_ROOT"/}
+        row=$(jq -r --arg p "$r" \
+            '.tools[] | select(.path==$p) | "\(.name)|\(.type)"' "$CATALOG")
+        [ -n "$row" ] || return
+        cn=${row%%|*}; ct=${row#*|}
+        if _registry_has "$cn" "$rt" "$sc" "$tg" ''; then
+            printf '  [=] %-18s already registered (%s%s)\n' "$cn" "$rt" \
+                "${tg:+, $tg}"
+        else
+            registry_add "$cn" "$rt" "$r" "$sc" "$tg" ''
+            printf '  [+] %-18s adopted (%s%s) -> %s\n' "$cn" "$rt" \
+                "${tg:+, $tg}" "$link"
+            adopted=$((adopted + 1))
+        fi
+        [ "$ct" = "$rt" ] || printf '      catalog declares type=%s; recorded as %s to match the on-disk link\n' "$ct" "$rt"
+    }
+
+    # Skills, per target (claude/codex/agents) at global scope.
+    for target in claude codex agents; do
+        dir="$HOME/.$target/skills"
+        [ -d "$dir" ] || continue
+        for l in "$dir"/*; do
+            [ -L "$l" ] && _adopt "$l" skill global "$target"
+        done
+    done
+    # Global config files live directly under ~/.claude.
+    dir="$HOME/.claude"
+    if [ -d "$dir" ]; then
+        for l in "$dir"/*; do
+            [ -L "$l" ] && _adopt "$l" config global ''
+        done
+    fi
+    # bin symlinks in ~/.local/bin.
+    dir="$HOME/.local/bin"
+    if [ -d "$dir" ]; then
+        for l in "$dir"/*; do
+            [ -L "$l" ] && _adopt "$l" bin global ''
+        done
+    fi
+
+    printf '  %d new install(s) adopted\n\n-- registry status after reconcile --\n' "$adopted"
+    CMD=status
+    registry_sweep
+}
+
 # `status` with no selection arguments shows the registry — bare `toolbox
 # status` answers "what is installed?" without needing a --target.
 if [ "$CMD" = status ] && [ -z "$ALL" ] && [ -z "$TARGET" ] \
     && [ "$WHAT" = all ] && [ "$SCOPE" = global ]; then
     ALL=1
+fi
+
+# reconcile is a global discovery sweep — no selection/target needed.
+if [ "$CMD" = reconcile ]; then
+    registry_reconcile
+    exit 0
 fi
 
 # --- registry sweep (--all) ---------------------------------------------------

@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.28.159'
+$APP_VERSION = '0.29.171'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -47,6 +47,8 @@ Commands:
   status    Report install state; with no args, sweeps the registry.
   remove    Remove selected tools (only ever our own links/config).
   list      Print the catalog (name, type, description).
+  reconcile Discover existing links into this repo (e.g. hand-made symlinks)
+            and register any that are missing, so status/remove see them.
 
 For switch detail:  toolbox --help <switch>      e.g.  toolbox --help --target
 
@@ -163,7 +165,7 @@ Examples:
 # Print the catalog as a readable table — answers "what can I install?".
 function Show-CatalogList {
     Write-Output "toolbox — available tools ($Catalog)"
-    Write-Output 'Usage: toolbox <install|status|remove|list> [--target claude|codex|agents] [--scope global|project] [--project PATH] [--what all|<name>|<type>] [--tagstyle plain|namespaced] [--all] [-h|--help]'
+    Write-Output 'Usage: toolbox <install|status|remove|list|reconcile> [--target claude|codex|agents] [--scope global|project] [--project PATH] [--what all|<name>|<type>] [--tagstyle plain|namespaced] [--all] [-h|--help]'
     Write-Output ''
     Write-Output ('  {0,-20} {1,-7} {2}' -f 'NAME', 'TYPE', 'DESCRIPTION')
     foreach ($t in (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools) {
@@ -175,8 +177,8 @@ function Show-CatalogList {
 # --- command ------------------------------------------------------------------
 $Cmd = if ($args.Count -ge 1) { [string]$args[0] } else { '' }
 if ($Cmd -in @('-h', '--help')) { Show-Help ([string]$args[1]); exit 0 }
-if ($Cmd -notin @('install', 'status', 'remove', 'list')) {
-    [Console]::Error.WriteLine("toolbox: missing or unknown command (install|status|remove|list)")
+if ($Cmd -notin @('install', 'status', 'remove', 'list', 'reconcile')) {
+    [Console]::Error.WriteLine("toolbox: missing or unknown command (install|status|remove|list|reconcile)")
     exit 2
 }
 
@@ -257,7 +259,7 @@ function Link-Artifact([string]$name, [string]$src, [string]$destdir) {
     switch ($Cmd) {
         'install' {
             New-Item -ItemType Directory -Path $destdir -Force | Out-Null
-            if ($item -and $item.Target -eq $src) {
+            if ($item -and (Test-SamePath (@($item.Target)[0]) $src)) {
                 Write-Output "  [=] $name  already linked"; return
             }
             if ($item -and $item.LinkType) {
@@ -279,7 +281,7 @@ function Link-Artifact([string]$name, [string]$src, [string]$destdir) {
             Write-Output "  [+] $name  -> $link"
         }
         'status' {
-            if ($item -and $item.Target -eq $src) {
+            if ($item -and (Test-SamePath (@($item.Target)[0]) $src)) {
                 Write-Output "  [ok] $name  $link"
                 $script:State = 'ok'
             } elseif ($item) {
@@ -289,7 +291,7 @@ function Link-Artifact([string]$name, [string]$src, [string]$destdir) {
             }
         }
         'remove' {
-            if ($item -and $item.Target -eq $src) {
+            if ($item -and (Test-SamePath (@($item.Target)[0]) $src)) {
                 if ($isDir) { [System.IO.Directory]::Delete($link, $false) }
                 else        { [System.IO.File]::Delete($link) }
                 Write-Output "  [-] $name  removed"
@@ -502,6 +504,26 @@ function Remove-ClaudeHook([string]$name, [string]$prepo) {
     Write-Output "  [-] $name  claude PostToolUse removed ($settings)"
 }
 
+# True when two paths denote the same target regardless of format. Two distinct
+# format mismatches bite here and both used to make `status` prune a live
+# install: (1) core.hooksPath is stored verbatim by git, so a hook set by the
+# bash port (forward-slash MSYS form) never string-matches the backslash form
+# this port computes; (2) a skill symlink's .Target is pure backslashes while
+# Join-Path leaves the catalog's forward-slash subpath intact, yielding a mixed
+# "…\ai-toolbox\.agents/skills/x" that never equals the all-backslash target.
+# The separator-normalised compare catches both; Resolve-Path is the fallback
+# that also folds drive-letter case and 8.3 names when the paths exist; the -eq
+# fast path covers the same-format case (and unresolvable paths).
+function Test-SamePath([string]$a, [string]$b) {
+    if (-not $a) { return $false }
+    if ($a -eq $b) { return $true }
+    if ((($a -replace '\\', '/').TrimEnd('/')) -eq (($b -replace '\\', '/').TrimEnd('/'))) { return $true }
+    $ra = (Resolve-Path -LiteralPath $a -ErrorAction SilentlyContinue)
+    $rb = (Resolve-Path -LiteralPath $b -ErrorAction SilentlyContinue)
+    if ($ra -and $rb) { return ($ra.Path -eq $rb.Path) }
+    return $false
+}
+
 function Handle-Hook([string]$name, [string]$path) {
     $hooksdir = Join-Path $RepoRoot $path
     if ($Scope -ne 'project') {
@@ -515,11 +537,11 @@ function Handle-Hook([string]$name, [string]$path) {
     $cur = (git -C $prepo config --local core.hooksPath 2>$null)
     switch ($Cmd) {
         'install' {
-            if ($cur -and $cur -ne $hooksdir) {
+            if ($cur -and -not (Test-SamePath $cur $hooksdir)) {
                 [Console]::Error.WriteLine("  [!] $name  core.hooksPath already set to $cur — skipped"); return
             }
             $fresh = $false
-            if ($cur -eq $hooksdir) {
+            if (Test-SamePath $cur $hooksdir) {
                 Write-Output "  [=] $name  core.hooksPath already set"
             } else {
                 git -C $prepo config --local core.hooksPath $hooksdir
@@ -580,7 +602,7 @@ function Handle-Hook([string]$name, [string]$path) {
                     'no-settings' { $clSuffix = ', claude=missing-no-settings' }
                 }
             }
-            if ($cur -eq $hooksdir) {
+            if (Test-SamePath $cur $hooksdir) {
                 $curts = (git -C $prepo config --local bumpversion.tagstyle 2>$null)
                 if (-not $curts) { $curts = 'namespaced' }
                 if ($clState -eq 'no' -or $clState -eq 'no-settings') {
@@ -595,7 +617,7 @@ function Handle-Hook([string]$name, [string]$path) {
             else          { Write-Output "  [ ] $name  not installed in $prepo$clSuffix" }
         }
         'remove' {
-            if ($cur -eq $hooksdir) {
+            if (Test-SamePath $cur $hooksdir) {
                 git -C $prepo config --local --unset core.hooksPath
                 Write-Output "  [-] $name  core.hooksPath unset ($prepo)"
             } else { Write-Output "  [.] $name  nothing to remove" }
@@ -874,12 +896,86 @@ function Registry-Sweep {
     else { Registry-Write @($kept) }
 }
 
+# True when an entry with this exact key already lives in the registry.
+function Registry-Has([string]$tool, [string]$type, [string]$scope, [string]$target, [string]$project) {
+    return [bool](@(Registry-Read | Where-Object {
+                $_.tool -eq $tool -and $_.type -eq $type -and $_.scope -eq $scope -and
+                $_.target -eq $target -and $_.project -eq $project
+            }).Count)
+}
+
+# Adopt one symlink if it points into this repo and matches a catalog tool.
+$script:reconcileAdopted = 0
+function Reconcile-Adopt([string]$link, [string]$regtype, [string]$sc, [string]$tg) {
+    $item = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
+    if (-not $item -or $item.LinkType -ne 'SymbolicLink') { return }
+    $tgt = (@($item.Target)[0] -replace '\\', '/')
+    $prefix = (($RepoRoot -replace '\\', '/').TrimEnd('/')) + '/'
+    if (-not $tgt.StartsWith($prefix)) { return }
+    $rel = $tgt.Substring($prefix.Length)
+    $cat = (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools |
+        Where-Object { $_.path -eq $rel } | Select-Object -First 1
+    if (-not $cat) { return }
+    $tgLabel = if ($tg) { ", $tg" } else { '' }
+    if (Registry-Has $cat.name $regtype $sc $tg '') {
+        Write-Output ("  [=] {0,-18} already registered ({1}{2})" -f $cat.name, $regtype, $tgLabel)
+    } else {
+        Registry-Add $cat.name $regtype $rel $sc $tg ''
+        Write-Output ("  [+] {0,-18} adopted ({1}{2}) -> {3}" -f $cat.name, $regtype, $tgLabel, $link)
+        $script:reconcileAdopted++
+    }
+    if ($cat.type -ne $regtype) {
+        Write-Output "      catalog declares type=$($cat.type); recorded as $regtype to match the on-disk link"
+    }
+}
+
+# Discover AI-Toolbox installs that exist on disk but were never recorded — e.g.
+# a skill symlinked by hand, outside `toolbox install`. Walks the global link
+# destinations (per-target skills dirs, the ~/.claude config dir, ~/.local/bin),
+# finds every symlink pointing into THIS repo, matches it to a catalog tool by
+# the linked path, and upserts a registry entry for any that is missing — so
+# `status --all` / `remove --all` see them. Always records the on-disk form (a
+# symlink => type "skill"); when the catalog declares a different type it says so
+# but still adopts reality. Project-scope installs (per-repo hooks/skills) can't
+# be found by a global scan — restore those via `install … --scope project`.
+# Mirrors registry_reconcile in the sh port.
+function Reconcile-Registry {
+    Write-Output "toolbox reconcile — discovering links into $RepoRoot"
+    $script:reconcileAdopted = 0
+    foreach ($target in @('claude', 'codex', 'agents')) {
+        $dir = Join-Path $HOME ".$target/skills"
+        if (Test-Path -LiteralPath $dir) {
+            foreach ($l in (Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue)) {
+                Reconcile-Adopt $l.FullName 'skill' 'global' $target
+            }
+        }
+    }
+    $dir = Join-Path $HOME '.claude'
+    if (Test-Path -LiteralPath $dir) {
+        foreach ($l in (Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue)) {
+            Reconcile-Adopt $l.FullName 'config' 'global' ''
+        }
+    }
+    $dir = Join-Path $HOME '.local/bin'
+    if (Test-Path -LiteralPath $dir) {
+        foreach ($l in (Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue)) {
+            Reconcile-Adopt $l.FullName 'bin' 'global' ''
+        }
+    }
+    Write-Output ("  {0} new install(s) adopted`n`n-- registry status after reconcile --" -f $script:reconcileAdopted)
+    $script:Cmd = 'status'
+    Registry-Sweep
+}
+
 # `status` with no selection arguments shows the registry — bare `toolbox
 # status` answers "what is installed?" without needing a --target.
 if ($Cmd -eq 'status' -and -not $All -and -not $Target `
         -and $What -eq 'all' -and $Scope -eq 'global') {
     $All = $true
 }
+
+# reconcile is a global discovery sweep — no selection/target needed.
+if ($Cmd -eq 'reconcile') { Reconcile-Registry; exit 0 }
 
 # --- registry sweep (--all) ---------------------------------------------------
 if ($All) {
