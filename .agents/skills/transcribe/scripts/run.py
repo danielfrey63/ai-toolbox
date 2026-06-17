@@ -969,6 +969,10 @@ def main() -> int:
         emit(f"- **Protocol file:** `{protocol_path}`")
         emit(f"- **Transcript file:** `{transcript_path}`")
         emit(f"- **Analysis target:** `{save_md_path}` (Claude writes Summary + Analysis here)")
+        # Source video stays available until Step 6 cleanup; illustrate.py needs
+        # it to re-extract key frames at native resolution and crop illustrations.
+        if video_path and Path(video_path).exists():
+            emit(f"- **Video file:** `{Path(video_path).resolve()}` (pass to illustrate.py as --video)")
 
     emit()
     emit("## Frames")

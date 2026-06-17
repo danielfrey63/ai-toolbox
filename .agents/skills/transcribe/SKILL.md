@@ -2,7 +2,7 @@
 name: transcribe
 description: Transcribe a video or audio file (URL or local path; .m4a/.mp3 voice memos and meeting recordings skip the frame stages automatically). Downloads with yt-dlp, extracts gap-filled frames + scdet-detected cuts, auto-chunks long videos, and transcribes via captions or a LOCAL-FIRST cascade (on-device faster-whisper by default, cloud backends as fallback) with speaker diarization ON by default (on-device pyannote, Claude-driven speaker-to-name substitution). Produces a persistent report (`<base>.{md,protocol.md,transcript.md}` plus `transcript-kompakt.md` when diarized) and a Summary that hits the chat with clickable file:// links.
 argument-hint: "<video-url-or-path> [question]"
-allowed-tools: Bash, Read, AskUserQuestion
+allowed-tools: Bash, Read, Write, Edit, AskUserQuestion, SendUserFile
 homepage: https://github.com/danielfrey63/ai-toolbox
 repository: https://github.com/danielfrey63/ai-toolbox
 author: bradautomates
@@ -252,6 +252,33 @@ The inventory's canonical forms are the **only spellings used in Übersicht, Sum
 
 Document the chosen date in the **Setting und Teilnehmer** Summary group with its source: `Meeting vom 2024-03-04 (Quelle: Titel-Slide [00:02])` or `Recording date: 2024-03-04 (yt-dlp upload_date — kein Titel-Slide gefunden)`.
 
+#### Schlüssel-Illustrationen ausschneiden (only for video sources with a saved report)
+
+Some frames *are* the content — an architecture diagram, a chart with the key numbers, a data-flow slide. A reader of the report should see that illustration **inline**, cropped out of the surrounding talking-head / slide chrome, not have to scrub the video. `illustrate.py` does the deterministic work (native-res re-extraction, crop, margin-trim, dedup); you do the analytical part — *which* frame, *which* region, *what* caption.
+
+**Skip this step entirely when:** the source is audio-only (no frames), `--no-save-md` was used (no persistent dir to write into), or the video is pure talking-head with no diagrams/charts/slides worth extracting. Zero illustrations is a valid outcome — don't manufacture them.
+
+Otherwise, from the frames you already read in Step 3:
+
+1. **Select the decisive frames.** Pick the ones carrying an illustration that *materially aids understanding* — diagrams, architecture/data-flow slides, charts, tables, screenshots with substantive content. `[CUT]` frames are the prime candidates (slides land on scene cuts). Exclude talking-head, transitions, decorative title cards, and anything redundant. Be selective: typically **3–10** for a talk, often fewer.
+2. **For each, give a normalized bounding box** `[x, y, w, h]` in `0..1` of the illustration *region within the frame* (estimate it from the image — the script trims uniform margins afterwards, so a slightly generous box is fine; omit `bbox` to keep the whole frame). Add a short `caption` (use canonical names from the Inventar) and a `type` (`Architektur` / `Diagramm` / `Chart` / `Tabelle` / `Screenshot` / `Slide`).
+3. **Write the spec** to `<base>.illustrations.spec.json` (the `Write` tool) as a JSON list:
+   ```json
+   [ { "id": 1, "timestamp": 734.0, "bbox": [0.08, 0.12, 0.84, 0.76],
+       "caption": "Zielarchitektur DfA-GIS", "type": "Architektur" } ]
+   ```
+   `timestamp` is in seconds (the absolute `t=` of the frame). `<base>` is the report base (the `.md` stem from the header's saved-files lines).
+4. **Run the cropper**, passing the `**Video file:**` path from the report header verbatim:
+   ```bash
+   python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" \
+     --video "<Video file from header>" \
+     --spec "<base>.illustrations.spec.json" \
+     --out-dir "<base>.illustrations"
+   ```
+   It prints the surviving crops and writes `<base>.illustrations/manifest.json`. **Read the manifest** — dedup may have dropped near-duplicate slides, so the manifest (not your spec) is the authoritative list of what to embed. The crops are PNGs at native resolution, idempotent on re-run.
+
+You embed the results in Step 5; the work happens here because the Summary you write next references them.
+
 ## Übersicht (top-level section, comes first)
 
 A two-block orientation header at the very top of the report. The reader hits this before anything else and walks away with two things: **what the video is arguing** (Kernaussagen) and **how it is built** (Chapter-Struktur). Everything else — the thematic catalog, the editorial layer, the inventory — comes after.
@@ -360,6 +387,15 @@ the "alle berücksichtigt"-line>
 
 Append (don't overwrite) — the stub header above stays intact. For URL sources without `--save-md`, skip this step entirely and just answer in chat.
 
+**Embed the key illustrations (if Step 4 produced any).** For each entry in `<base>.illustrations/manifest.json`, drop a Markdown image at the most relevant spot in the report — usually inside the Summary `### <Thema>` group whose topic the illustration depicts, or right under the Chapter-Struktur entry it belongs to. Use a **relative** path so the `.md` stays portable, and the manifest's caption + timestamp:
+
+```markdown
+![Zielarchitektur DfA-GIS](<base>.illustrations/ill_01_t00734_zielarchitektur-dfa-gis.png)
+*Abb. — Zielarchitektur DfA-GIS [12:14]*
+```
+
+Place each image once, where it carries the most explanatory weight; don't scatter the same crop across sections. If the manifest is empty or absent, there's nothing to embed — move on.
+
 **After the append, surface Übersicht + Summary in chat.** The chat / console is where the user actually reads the result; the saved file is the persistent artifact. Echo the **full `## Übersicht`** block (Kernaussagen + Chapter-Struktur — quick orient, ~15 lines) and the **full `## Summary`** block (thematic catalog) into your final chat message, then a short pointer block listing the three companion files **as markdown links with `file://` URLs** so the user can click through (clickable in Claude Code and most modern terminals):
 
 ```
@@ -374,6 +410,8 @@ Append (don't overwrite) — the stub header above stays intact. For URL sources
 ```
 
 Use the **absolute paths** from the `**Protocol file:**` / `**Transcript file:**` / `**Analysis target:**` lines in the report header (those are already absolute). Just prefix each with `file://` to form the URL.
+
+**Surface the illustrations as images in chat (if any).** A `file://` link to a PNG renders in a terminal but not in the Claude mobile/desktop app, where the user often reads. So when `<base>.illustrations/manifest.json` lists crops, send them with **`SendUserFile`** (status `normal`) right after the Files block — the app renders them inline. Pass all crop paths in one call with a short `caption` (e.g. `"Schlüssel-Illustrationen aus dem Video"`); the user then sees the diagrams without opening the file. Skip when there are no illustrations.
 
 Do **not** echo the Analysis subsections (Inventar, Beurteilungen, Schlüsselaussagen, Details, Abdeckung, Resources) into chat — those live in the saved `<base>.md` and would make the chat response unwieldy. The user opens `<base>.md` if they want them.
 
@@ -397,7 +435,7 @@ If the transcript came from VTT captions or pure Whisper (no `[A]/[B]/…` label
 
 Skip the compact file for non-diarized transcripts — without speakers it would just duplicate the transcript.
 
-**Step 6 — clean up.** The script prints a working directory at the end. If the user isn't going to ask follow-ups about this video, delete it with `rm -rf <dir>`. **If `--save-md` produced the three companion files (`<base>.md` + `<base>.protocol.md` + `<base>.transcript.md`), they live outside the work dir and are preserved** by the cleanup. If the user might follow up, leave the work dir in place too.
+**Step 6 — clean up.** The script prints a working directory at the end. If the user isn't going to ask follow-ups about this video, delete it with `rm -rf <dir>`. **If `--save-md` produced the companion files (`<base>.md` + `<base>.protocol.md` + `<base>.transcript.md`, plus `<base>.illustrations/` and `<base>.illustrations.spec.json` when illustrations were extracted), they live outside the work dir and are preserved** by the cleanup. If the user might follow up, leave the work dir in place too.
 
 ## Transcription
 

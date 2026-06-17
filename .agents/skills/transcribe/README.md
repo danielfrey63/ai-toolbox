@@ -79,6 +79,7 @@ Four separate sub-steps, in order:
 - **Resources** — every `https://` link in the description + transcript is deduped, normalized (tracking params stripped), and grouped (Projects / Docs / Articles / Videos / Social / Other), each annotated with its origin (`description` or `transcript@MM:SS`).
 - **Hand-off & answer** — frames (tagged `[REG]` gap-filled / `[CUT]` scene-cut) + transcript + resources go to Claude; it `Read`s every frame as an image and answers grounded in what's actually on screen and in the audio — not the title or description.
 - **Report** — three companion files next to local sources (`test.mp4` → `test.{md,protocol.md,transcript.md}`) or under `./transcribe/<YYYY-MM-DD>-<slug>/` for URLs; the `.md` carries Summary + Analysis, `.protocol.md` the metadata + frame list, `.transcript.md` the timestamped (and speaker-labeled) transcript. Diarized runs get a fourth `transcript-kompakt.md` — editorially condensed: one polished block per statement, STT garbles fixed, fillers dropped, grouped by topic. `--save-md PATH`, `--no-save-md`.
+- **Key illustrations** (Claude picks, `scripts/illustrate.py` cuts) — for video sources, Claude flags the frames that *are* the content (architecture diagrams, charts, data-flow slides) with a region box; the script re-extracts those moments at native resolution, crops to the region, trims the surrounding slide chrome (Pillow margin-detect via `uv run --with pillow`, graceful fallback), dedups repeated slides, and writes `<base>.illustrations/*.png` + `manifest.json`. The crops get embedded inline in the report and surfaced as images in chat. Skipped for audio-only / talking-head sources.
 - **Idempotent intermediates** — raw STT segments + diarization turns persist as `<base>.segments.json` / `.turns.json`; reprocessing the same source resumes in ~1 s (skips stage 4's STT + diarization). `--fresh` forces a clean re-run.
 - **Cleanup** — the temp work_dir is removed; the saved companions (report + intermediates) persist.
 
@@ -239,6 +240,7 @@ Other knobs (passed to `scripts/run.py`):
 │   ├── run.py             # entry point — orchestrates download → frames → transcript → diarize
 │   ├── download.py          # yt-dlp wrapper
 │   ├── frames.py            # ffmpeg frame extraction + scdet + auto-fps + auto-chunk
+│   ├── illustrate.py        # crop key illustrations out of frames (native-res re-extract + margin-trim + dedup)
 │   ├── transcribe.py        # VTT parsing + dedupe + segment formatting
 │   ├── stt.py               # speech-to-text — pluggable backends (whisper-local, Azure transcribe-diarize, Groq/OpenAI Whisper), local-first cascade, auto-split + stitch + speaker reconcile
 │   ├── diarize.py           # pyannote local / pyannote.ai / AssemblyAI backends + transcript alignment
