@@ -18,7 +18,7 @@
 #   kilo          (skip)      ~/.config/kilo         ./kilo.jsonc
 # =============================================================================
 
-APP_VERSION='0.2.2'
+APP_VERSION='0.3.4'
 
 _aiprofil_main() {
     local script_dir adapters profiles_dir
@@ -87,6 +87,7 @@ _aiprofil_main() {
     _ai_list() {
         bash "${adapters}/kilo-profil.sh" list
         echo "CC active (session): ${CC_PROFILE:-<none>}"
+        echo "Switch defaults: --target both | --scope user"
     }
 
     _ai_status() {

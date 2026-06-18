@@ -17,7 +17,7 @@
 #   kilo          (skip)      ~/.config/kilo         ./kilo.jsonc
 # =============================================================================
 
-$APP_VERSION = '0.2.2'
+$APP_VERSION = '0.3.4'
 $_ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $_Adapters  = Join-Path $_ScriptDir 'adapters'
 
@@ -71,7 +71,7 @@ $_rest   = if ($args.Count -gt 1) { $args[1..($args.Count - 1)] } else { @() }
 
 switch ($_action) {
     'use'    { _Ai-Use -UseArgs $_rest }
-    'list'   { & (Join-Path $_Adapters 'kilo-profil.ps1') list; Write-Host "CC active (session): $($env:CC_PROFILE ?? '<none>')" }
+    'list'   { & (Join-Path $_Adapters 'kilo-profil.ps1') list; Write-Host "CC active (session): $($env:CC_PROFILE ?? '<none>')"; Write-Host "Switch defaults: --target both | --scope user" }
     'status' { Write-Host "CC active (session): $($env:CC_PROFILE ?? '<none>')"; & (Join-Path $_Adapters 'kilo-profil.ps1') status @_rest }
     default  {
         Write-Host "aiprofil $APP_VERSION — unified profile switcher (Claude Code + Kilo)."
