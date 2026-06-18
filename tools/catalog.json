@@ -15,11 +15,9 @@
     },
     {
       "name": "transcribe",
-      "type": "plugin",
+      "type": "skill",
       "path": ".agents/skills/transcribe",
-      "description": "Transcribe a video or audio file — captions/Whisper, frames, diarization.",
-      "marketplace": "transcribe",
-      "plugin": "transcribe"
+      "description": "Transcribe a video or audio file — captions/Whisper, frames, diarization."
     },
     {
       "name": "idempotent-devops",
