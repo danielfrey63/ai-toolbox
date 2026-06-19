@@ -9,7 +9,13 @@
 #
 # Two orthogonal enums:
 #   --target  cc | kilo | both   (also a list: cc,kilo)   default: both
-#   --scope   session | user | project                    default: user
+#   --scope   session | user | project                    default: session
+#
+# Default is 'session': cc writes only the current shell's env (instant). The
+# User scope persists across shells but each User-scope env write broadcasts a
+# blocking WM_SETTINGCHANGE (~0.5s per variable) — slow for a multi-var switch,
+# so opt into it explicitly with --scope user. With the default 'session' the
+# kilo target is skipped (it has no session analog).
 #
 # Scope maps per target (no analog -> skipped with a note):
 #                 session     user                  project
@@ -17,7 +23,7 @@
 #   kilo          (skip)      ~/.config/kilo         ./kilo.jsonc
 # =============================================================================
 
-$APP_VERSION = '0.3.4'
+$APP_VERSION = '0.4.16'
 $_ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $_Adapters  = Join-Path $_ScriptDir 'adapters'
 
@@ -30,7 +36,7 @@ else                                             { $env:PROFILES_DIR = $_new }
 
 function _Ai-Use {
     param([string[]]$UseArgs)
-    $profile = $null; $target = 'both'; $scope = 'user'
+    $profile = $null; $target = 'both'; $scope = 'session'
     for ($i = 0; $i -lt $UseArgs.Count; $i++) {
         $a = $UseArgs[$i]
         if ($a -eq '--target')   { $target = $UseArgs[$i + 1]; $i++ }
@@ -71,7 +77,7 @@ $_rest   = if ($args.Count -gt 1) { $args[1..($args.Count - 1)] } else { @() }
 
 switch ($_action) {
     'use'    { _Ai-Use -UseArgs $_rest }
-    'list'   { & (Join-Path $_Adapters 'kilo-profil.ps1') list; Write-Host "CC active (session): $($env:CC_PROFILE ?? '<none>')"; Write-Host "Switch defaults: --target both | --scope user" }
+    'list'   { & (Join-Path $_Adapters 'kilo-profil.ps1') list; Write-Host "CC active (session): $($env:CC_PROFILE ?? '<none>')"; Write-Host "Switch defaults: --target both | --scope session (kilo needs --scope user)" }
     'status' { Write-Host "CC active (session): $($env:CC_PROFILE ?? '<none>')"; & (Join-Path $_Adapters 'kilo-profil.ps1') status @_rest }
     default  {
         Write-Host "aiprofil $APP_VERSION — unified profile switcher (Claude Code + Kilo)."
@@ -83,7 +89,7 @@ switch ($_action) {
         Write-Host "  status [--scope user|project] what each target points at"
         Write-Host "  use <profile> [--target ...] [--scope ...]"
         Write-Host "      --target  cc | kilo | both   (default both; list ok: cc,kilo)"
-        Write-Host "      --scope   session | user | project   (default user)"
+        Write-Host "      --scope   session | user | project   (default session; kilo needs user)"
         Write-Host ""
         Write-Host "Installation: toolbox install --what aiprofil"
     }

@@ -10,7 +10,12 @@
 #
 # Two orthogonal enums:
 #   --target  cc | kilo | both   (also a list: cc,kilo)   default: both
-#   --scope   session | user | project                    default: user
+#   --scope   session | user | project                    default: session
+#
+# Default is 'session': cc writes only the current shell's env (instant). The
+# User scope persists across shells but is slow on Windows, so opt into it with
+# --scope user. With the default 'session' the kilo target is skipped (no
+# session analog).
 #
 # Scope maps per target (no analog -> skipped with a note):
 #                 session     user                  project
@@ -18,7 +23,7 @@
 #   kilo          (skip)      ~/.config/kilo         ./kilo.jsonc
 # =============================================================================
 
-APP_VERSION='0.3.4'
+APP_VERSION='0.4.16'
 
 _aiprofil_main() {
     local script_dir adapters profiles_dir
@@ -39,11 +44,11 @@ _aiprofil_main() {
     _ai_info() { printf '\033[36m[aiprofil]\033[0m %s\n' "$*"; }
 
     _ai_use() {
-        local profile="" target="both" scope="user"
+        local profile="" target="both" scope="session"
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --target) target="${2:-both}"; shift 2 ;;
-                --scope)  scope="${2:-user}";  shift 2 ;;
+                --scope)  scope="${2:-session}";  shift 2 ;;
                 -*)       echo "[WARN] unknown flag: $1"; shift ;;
                 *)        profile="$1"; shift ;;
             esac
@@ -87,7 +92,7 @@ _aiprofil_main() {
     _ai_list() {
         bash "${adapters}/kilo-profil.sh" list
         echo "CC active (session): ${CC_PROFILE:-<none>}"
-        echo "Switch defaults: --target both | --scope user"
+        echo "Switch defaults: --target both | --scope session (kilo needs --scope user)"
     }
 
     _ai_status() {
@@ -111,7 +116,7 @@ Actions:
   status [--scope user|project] what each target points at
   use <profile> [--target ...] [--scope ...]
         --target  cc | kilo | both   (default both; list ok: cc,kilo)
-        --scope   session | user | project   (default user)
+        --scope   session | user | project   (default session; kilo needs user)
 
 Profiles: ${profiles_dir}
 Installation: toolbox install --what aiprofil
