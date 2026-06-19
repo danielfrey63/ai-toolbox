@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.29.171'
+$APP_VERSION = '0.30.179'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -524,6 +524,55 @@ function Test-SamePath([string]$a, [string]$b) {
     return $false
 }
 
+# Interactive takeover dialog for a foreign core.hooksPath. Always prints a
+# clear hint on stdout (the previous behaviour buried the verdict on stderr
+# and short-circuited silently). On a TTY, offers two yes/no prompts:
+#   1. Replace with the toolbox hook?  N -> bail out, foreign hook preserved.
+#   2. Also delete the foreign hooks dir?  N -> keep dir on disk, just unset.
+# Off-TTY (pipe, cron, hook context), prints the same hint and skips with a
+# pointer to the manual fix — never hangs waiting for input.
+# Returns $true when core.hooksPath has been unset and the caller may proceed
+# with the install; $false when the foreign hook was kept and the install
+# should bail out.
+function Invoke-ForeignHookTakeover([string]$name, [string]$prepo, [string]$cur) {
+    # Status messages go to [Console]::Out directly, NOT via Write-Output —
+    # this function's return value is read by the caller (`if (-not ...)`),
+    # and any Write-Output stream items would mix into that return as an
+    # array, masking the actual $true/$false verdict.
+    $foreign = $cur
+    if (-not [System.IO.Path]::IsPathRooted($foreign)) {
+        $foreign = Join-Path $prepo $cur
+    }
+    [Console]::Out.WriteLine("  [!] $name  core.hooksPath already set to $cur (not a toolbox install)")
+    if (Test-Path -LiteralPath $foreign -PathType Container) {
+        [Console]::Out.WriteLine("       contents of ${foreign}:")
+        Get-ChildItem -LiteralPath $foreign -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            [Console]::Out.WriteLine("         - $($_.Name)")
+        }
+    }
+    if ([Console]::IsInputRedirected) {
+        [Console]::Out.WriteLine('       (run interactively to take it over, or unset core.hooksPath manually); skipped')
+        return $false
+    }
+    $reply = Read-Host '       Replace it with the toolbox hook? [y/N]'
+    if ($reply -notin @('y', 'Y', 'yes', 'j', 'J', 'ja')) {
+        [Console]::Out.WriteLine("  [.] $name  skipped — foreign hook preserved")
+        return $false
+    }
+    if (Test-Path -LiteralPath $foreign -PathType Container) {
+        $reply2 = Read-Host "       Also delete $foreign (and its contents)? [y/N]"
+        if ($reply2 -in @('y', 'Y', 'yes', 'j', 'J', 'ja')) {
+            Remove-Item -LiteralPath $foreign -Recurse -Force
+            [Console]::Out.WriteLine("  [-] $name  removed foreign hooks dir $foreign")
+        } else {
+            [Console]::Out.WriteLine("  [i] $name  foreign hooks dir $foreign preserved on disk")
+        }
+    }
+    git -C $prepo config --local --unset core.hooksPath | Out-Null
+    [Console]::Out.WriteLine("  [-] $name  core.hooksPath unset (was $cur)")
+    return $true
+}
+
 function Handle-Hook([string]$name, [string]$path) {
     $hooksdir = Join-Path $RepoRoot $path
     if ($Scope -ne 'project') {
@@ -538,7 +587,8 @@ function Handle-Hook([string]$name, [string]$path) {
     switch ($Cmd) {
         'install' {
             if ($cur -and -not (Test-SamePath $cur $hooksdir)) {
-                [Console]::Error.WriteLine("  [!] $name  core.hooksPath already set to $cur — skipped"); return
+                if (-not (Invoke-ForeignHookTakeover $name $prepo $cur)) { return }
+                $cur = ''
             }
             $fresh = $false
             if (Test-SamePath $cur $hooksdir) {

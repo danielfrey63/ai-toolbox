@@ -30,7 +30,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.29.179'
+APP_VERSION='0.30.186'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -594,6 +594,61 @@ _same_hookpath() {  # cur hooksdir
     [ "$1" -ef "$2" ] 2>/dev/null
 }
 
+# Interactive takeover dialog for a foreign core.hooksPath. Always prints a
+# clear hint on stdout (the previous behaviour buried the verdict on stderr
+# and short-circuited silently). On a TTY, offers two yes/no prompts:
+#   1. Replace with the toolbox hook?  N → bail out, foreign hook preserved.
+#   2. Also delete the foreign hooks dir?  N → keep dir on disk, just unset.
+# Off-TTY (pipe, cron, hook context), prints the same hint and skips with a
+# pointer to the manual fix — never hangs waiting for input.
+# Returns 0 when core.hooksPath has been unset and the caller may proceed
+# with the install; 1 when the foreign hook was kept and the install should
+# bail out.
+_foreign_hook_takeover() {  # name prepo cur
+    local name=$1 prepo=$2 cur=$3 reply
+    local foreign=$cur
+    case "$foreign" in
+        /*|[A-Za-z]:[/\\]*) ;;       # absolute (POSIX or Windows drive)
+        *) foreign="$prepo/$cur" ;;  # git stores relative paths repo-relative
+    esac
+    printf '  [!] %-18s core.hooksPath already set to %s (not a toolbox install)\n' \
+        "$name" "$cur"
+    if [ -d "$foreign" ]; then
+        printf '       contents of %s:\n' "$foreign"
+        for f in "$foreign"/* "$foreign"/.[!.]*; do
+            [ -e "$f" ] || continue
+            printf '         - %s\n' "$(basename "$f")"
+        done
+    fi
+    if [ ! -t 0 ]; then
+        printf '       (run interactively to take it over, or unset core.hooksPath manually); skipped\n'
+        return 1
+    fi
+    printf '       Replace it with the toolbox hook? [y/N] '
+    IFS= read -r reply || return 1
+    case "$reply" in
+        y|Y|yes|j|J|ja) ;;
+        *) printf '  [.] %-18s skipped — foreign hook preserved\n' "$name"; return 1 ;;
+    esac
+    if [ -d "$foreign" ]; then
+        printf '       Also delete %s (and its contents)? [y/N] ' "$foreign"
+        IFS= read -r reply || reply=n
+        case "$reply" in
+            y|Y|yes|j|J|ja)
+                rm -rf -- "$foreign"
+                printf '  [-] %-18s removed foreign hooks dir %s\n' "$name" "$foreign"
+                ;;
+            *)
+                printf '  [i] %-18s foreign hooks dir %s preserved on disk\n' \
+                    "$name" "$foreign"
+                ;;
+        esac
+    fi
+    git -C "$prepo" config --local --unset core.hooksPath
+    printf '  [-] %-18s core.hooksPath unset (was %s)\n' "$name" "$cur"
+    return 0
+}
+
 handle_hook() {
     local name=$1 path=$2
     local hooksdir="$REPO_ROOT/$path"
@@ -610,8 +665,8 @@ handle_hook() {
     case "$CMD" in
         install)
             if [ -n "$cur" ] && ! _same_hookpath "$cur" "$hooksdir"; then
-                printf '  [!] %-18s core.hooksPath already set to %s — skipped\n' "$name" "$cur" >&2
-                return
+                _foreign_hook_takeover "$name" "$prepo" "$cur" || return
+                cur=''
             fi
             if _same_hookpath "$cur" "$hooksdir"; then
                 printf '  [=] %-18s core.hooksPath already set\n' "$name"
