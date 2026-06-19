@@ -3,7 +3,7 @@
 #
 # Reads tools/catalog.json and dispatches per tool TYPE to a handler:
 #   skill  — symlink the tool into <scope>/.{claude,codex,agents}/skills/
-#   hook   — point a repo's core.hooksPath at the toolbox hook directory
+#   hook   — insert a managed version-bump block into a repo's pre/post-commit
 #   plugin — claude plugin marketplace add + install (--target claude);
 #            for --target codex|agents the plugin falls back to a skill-link
 #   config — symlink a global config file (CLAUDE.md) into ~/.claude/
@@ -30,7 +30,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.31.189'
+APP_VERSION='0.32.209'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -132,7 +132,7 @@ _help_what() {
 
   Names are listed by `toolbox list`. Types are:
     skill   Skill directory, linked into a CLI's skills/.
-    hook    Git hooks installed via core.hooksPath into a repo.
+    hook    Git hooks installed as a managed line in a repo's pre/post-commit.
     plugin  Real `claude plugin` install (target=claude) or skill-link.
     config  Global config file (e.g. CLAUDE.md) into ~/.claude/.
     bin     Make a CLI available system-wide (exec or sourced shell function).
@@ -459,8 +459,11 @@ handle_bin_source() {
 }
 
 # --- hook handler -------------------------------------------------------------
-# Installs the versioning git-hooks into a repo by pointing its core.hooksPath
-# at the toolbox hook directory. Per-repo: needs --scope project.
+# Installs the versioning git-hooks into a repo by adding a single self-marked
+# shim line to the active hooks dir's pre-commit/post-commit (core.hooksPath if
+# the repo sets one, else .git/hooks). The line calls the toolbox impl; we never
+# touch core.hooksPath, so existing hooks coexist and only our line is
+# added/removed. Per-repo: needs --scope project.
 # Honours --target claude: in that case also installs the edit-bump
 # PostToolUse hook into <prepo>/.claude/settings.json (idempotent, via the
 # two-stage heuristic implemented in _claude_hook_install above).
@@ -579,101 +582,138 @@ _claude_hook_remove() {  # name prepo
     printf '  [-] %-18s claude PostToolUse removed (%s)\n' "$name" "$settings"
 }
 
-# True when two paths denote the same hooks directory, regardless of path
-# format. core.hooksPath is stored verbatim by whichever port set it: the
-# PowerShell port writes a Windows path ("D:\...\tools\githooks"), the bash
-# port a forward-slash MSYS path ("/d/.../tools/githooks"). A plain string
-# compare therefore reports a cross-port install as "not ours" and `status`
-# prunes a perfectly live hook. The `-ef` test resolves both forms to the same
-# inode when they exist, so it matches across drive-letter case, separators and
-# trailing slashes; the exact-string fast path covers the same-port case (and
-# the rare box without a working `-ef`).
-_same_hookpath() {  # cur hooksdir
+# ── managed-line helpers ──────────────────────────────────────────────────────
+# We do NOT hijack core.hooksPath. Instead we add a single, self-marked shim line
+# to the repo's own hook scripts, so our line and any pre-existing hook coexist
+# and only our line is ever added or removed. The trailing marker comment tags
+# ownership. Git runs hook scripts but never rewrites them, so the comment is safe
+# (unlike .git/config, which `git config` reformats). The shim calls the toolbox
+# impl by absolute path, keeping the bump logic centrally updatable.
+_HOOK_MARK='# ai-toolbox:versioning-hooks (managed - do not edit)'
+
+# True when two paths denote the same dir regardless of format (Windows vs MSYS
+# slashes, drive-letter case, trailing slash). The exact-string fast path covers
+# the same-format case; `-ef` resolves both to one inode when they exist.
+_same_hookpath() {  # a b → 0/1
     [ -n "$1" ] || return 1
     [ "$1" = "$2" ] && return 0
     [ "$1" -ef "$2" ] 2>/dev/null
 }
 
-# Interactive takeover dialog for a foreign core.hooksPath. Always prints a
-# clear hint on stdout (the previous behaviour buried the verdict on stderr
-# and short-circuited silently). On a TTY, offers two yes/no prompts:
-#   1. Replace with the toolbox hook?  N → bail out, foreign hook preserved.
-#   2. Also delete the foreign hooks dir?  N → keep dir on disk, just unset.
-# Off-TTY (pipe, cron, hook context), prints the same hint and skips with a
-# pointer to the manual fix — never hangs waiting for input.
-# Returns 0 when core.hooksPath has been unset and the caller may proceed
-# with the install; 1 when the foreign hook was kept and the install should
-# bail out.
-_foreign_hook_takeover() {  # name prepo cur
-    local name=$1 prepo=$2 cur=$3 reply
-    local foreign=$cur
-    case "$foreign" in
-        /*|[A-Za-z]:[/\\]*) ;;       # absolute (POSIX or Windows drive)
-        *) foreign="$prepo/$cur" ;;  # git stores relative paths repo-relative
-    esac
-    printf '  [!] %-18s core.hooksPath already set to %s (not a toolbox install)\n' \
-        "$name" "$cur"
-    if [ -d "$foreign" ]; then
-        printf '       contents of %s:\n' "$foreign"
-        for f in "$foreign"/* "$foreign"/.[!.]*; do
-            [ -e "$f" ] || continue
-            printf '         - %s\n' "$(basename "$f")"
-        done
-    fi
-    if [ ! -t 0 ]; then
-        printf '       (run interactively to take it over, or unset core.hooksPath manually); skipped\n'
-        return 1
-    fi
-    printf '       Replace it with the toolbox hook? [y/N] '
-    IFS= read -r reply || return 1
-    case "$reply" in
-        y|Y|yes|j|J|ja) ;;
-        *) printf '  [.] %-18s skipped — foreign hook preserved\n' "$name"; return 1 ;;
-    esac
-    if [ -d "$foreign" ]; then
-        printf '       Also delete %s (and its contents)? [y/N] ' "$foreign"
-        IFS= read -r reply || reply=n
-        case "$reply" in
-            y|Y|yes|j|J|ja)
-                rm -rf -- "$foreign"
-                printf '  [-] %-18s removed foreign hooks dir %s\n' "$name" "$foreign"
-                ;;
-            *)
-                printf '  [i] %-18s foreign hooks dir %s preserved on disk\n' \
-                    "$name" "$foreign"
-                ;;
+# A repo "legacy" install pointed core.hooksPath at our SHARED toolbox hook dir
+# (pre-block era). We must never write a per-repo block into that shared dir, and
+# such installs need migrating to the block model. True when the repo's
+# core.hooksPath resolves to <toolbox>/tools/githooks.
+_is_legacy_hookpath() {  # prepo → 0/1
+    local cur; cur=$(git -C "$1" config --local core.hooksPath 2>/dev/null || true)
+    [ -n "$cur" ] && _same_hookpath "$cur" "$REPO_ROOT/tools/githooks"
+}
+
+# Active hooks dir of a repo: core.hooksPath if set (absolute kept as-is, a
+# relative value resolved against the repo), else the default .git/hooks. We
+# follow whatever the repo already uses, so we coexist with husky/lefthook/etc.
+# A legacy core.hooksPath that points at our shared toolbox dir is treated as
+# unset (→ .git/hooks) so we never write our block into the toolbox itself.
+_active_hooksdir() {  # prepo → abspath
+    local prepo=$1 cur
+    cur=$(git -C "$prepo" config --local core.hooksPath 2>/dev/null || true)
+    if [ -n "$cur" ] && ! _same_hookpath "$cur" "$REPO_ROOT/tools/githooks"; then
+        case "$cur" in
+            /*|[A-Za-z]:[/\\]*) printf '%s' "$cur" ;;
+            *) printf '%s/%s' "$prepo" "$cur" ;;
         esac
+    else
+        printf '%s/.git/hooks' "$prepo"
     fi
-    git -C "$prepo" config --local --unset core.hooksPath
-    printf '  [-] %-18s core.hooksPath unset (was %s)\n' "$name" "$cur"
-    return 0
+}
+
+# The self-marked shim line for which=pre|post. Forward-slash the toolbox path so
+# it works under git's bundled sh on Windows too; `sh <impl>` avoids depending on
+# the impl's execute bit surviving the checkout. The trailing marker tags it ours.
+_hook_shim_line() {  # which → string
+    printf 'sh "%s/tools/githooks/%s-commit" "$@"   %s' \
+        "$(printf '%s' "$REPO_ROOT" | sed 's#\\#/#g')" "$1" "$_HOOK_MARK"
+}
+
+# Install/refresh our line in <active>/<which>-commit. Echoes 'added' on a fresh
+# insert, 'refreshed' when our marked line was already there.
+_hook_block_install() {  # prepo which → verdict
+    local prepo=$1 which=$2 dir file line tmp
+    dir=$(_active_hooksdir "$prepo"); file="$dir/$which-commit"
+    line=$(_hook_shim_line "$which")
+    mkdir -p "$dir"
+    if [ ! -f "$file" ]; then
+        printf '#!/bin/sh\n' > "$file"
+        chmod +x "$file" 2>/dev/null || true
+    fi
+    if grep -qF "$_HOOK_MARK" "$file"; then
+        # Replace our marked line in place (first match wins; others dropped).
+        tmp=$(awk -v m="$_HOOK_MARK" -v repl="$line" '
+            index($0, m) { if (!d) { print repl; d=1 } next } { print }
+        ' "$file")
+        printf '%s\n' "$tmp" > "$file"
+        printf 'refreshed'
+    else
+        printf '%s\n' "$line" >> "$file"
+        printf 'added'
+    fi
+}
+
+# Strip our marked line from <active>/<which>-commit; delete the file if only a
+# shebang (or blank lines) remains. Echoes 'removed' | 'absent'.
+_hook_block_remove() {  # prepo which → verdict
+    local prepo=$1 which=$2 dir file tmp
+    dir=$(_active_hooksdir "$prepo"); file="$dir/$which-commit"
+    if [ ! -f "$file" ] || ! grep -qF "$_HOOK_MARK" "$file"; then
+        printf 'absent'; return
+    fi
+    # Drop our marked line(s), then trim trailing blank lines.
+    tmp=$(grep -vF "$_HOOK_MARK" "$file" | awk 'NF{p=NR} {a[NR]=$0} END{for(i=1;i<=p;i++) print a[i]}')
+    printf '%s\n' "$tmp" > "$file"
+    # Delete when nothing but a shebang / blanks is left.
+    if awk 'NR==1 && /^#!/ {next} /^[[:space:]]*$/ {next} {f=1} END{exit f?1:0}' "$file"; then
+        rm -f "$file"
+    fi
+    printf 'removed'
+}
+
+# True when our marked line is present in the active pre-commit.
+_hook_block_present() {  # prepo → 0/1
+    local dir; dir=$(_active_hooksdir "$1")
+    [ -f "$dir/pre-commit" ] && grep -qF "$_HOOK_MARK" "$dir/pre-commit"
 }
 
 handle_hook() {
     local name=$1 path=$2
-    local hooksdir="$REPO_ROOT/$path"
     if [ "$SCOPE" != project ]; then
         printf '  [.] %-18s hooks are per-repo — pass --scope project\n' "$name"
         return
     fi
-    local prepo cur curts fresh=''
+    local prepo curts fresh='' hd vpre vpost
     prepo=$(git -C "$PROJECT" rev-parse --show-toplevel 2>/dev/null) || {
         printf '  [!] %-18s --project is not a git repo: %s\n' "$name" "$PROJECT" >&2
         return
     }
-    cur=$(git -C "$prepo" config --local core.hooksPath 2>/dev/null || true)
+    hd=$(_active_hooksdir "$prepo")
     case "$CMD" in
         install)
-            if [ -n "$cur" ] && ! _same_hookpath "$cur" "$hooksdir"; then
-                _foreign_hook_takeover "$name" "$prepo" "$cur" || return
-                cur=''
+            # Migrate a legacy install: drop the core.hooksPath that pointed at
+            # our shared toolbox dir, so git uses .git/hooks where the block goes.
+            if _is_legacy_hookpath "$prepo"; then
+                git -C "$prepo" config --local --unset core.hooksPath
+                printf '  [-] %-18s legacy core.hooksPath unset — migrating to managed line\n' "$name"
             fi
-            if _same_hookpath "$cur" "$hooksdir"; then
-                printf '  [=] %-18s core.hooksPath already set\n' "$name"
+            vpre=$(_hook_block_install "$prepo" pre)
+            vpost=$(_hook_block_install "$prepo" post)
+            if [ "$vpre" = added ]; then
+                printf '  [+] %-18s pre-commit block added -> %s\n' "$name" "$hd/pre-commit"; fresh=1
             else
-                git -C "$prepo" config --local core.hooksPath "$hooksdir"
-                printf '  [+] %-18s core.hooksPath -> %s\n' "$name" "$hooksdir"
-                fresh=1
+                printf '  [=] %-18s pre-commit block refreshed (%s)\n' "$name" "$hd/pre-commit"
+            fi
+            if [ "$vpost" = added ]; then
+                printf '  [+] %-18s post-commit block added -> %s\n' "$name" "$hd/post-commit"; fresh=1
+            else
+                printf '  [=] %-18s post-commit block refreshed (%s)\n' "$name" "$hd/post-commit"
             fi
             curts=$(git -C "$prepo" config --local bumpversion.tagstyle 2>/dev/null || true)
             if [ -n "$TAGSTYLE" ]; then
@@ -731,7 +771,7 @@ handle_hook() {
                     no-settings) cl_suffix=', claude=missing-no-settings' ;;
                 esac
             fi
-            if _same_hookpath "$cur" "$hooksdir"; then
+            if _hook_block_present "$prepo"; then
                 curts=$(git -C "$prepo" config --local bumpversion.tagstyle 2>/dev/null || true)
                 if [ "$cl_state" = "no" ] || [ "$cl_state" = "no-settings" ]; then
                     printf '  [! ] %-18s %s (tagstyle=%s%s)\n' "$name" "$prepo" "${curts:-namespaced}" "$cl_suffix"
@@ -740,21 +780,26 @@ handle_hook() {
                     printf '  [ok] %-18s %s (tagstyle=%s%s)\n' "$name" "$prepo" "${curts:-namespaced}" "$cl_suffix"
                     STATE=ok
                 fi
-            elif [ -n "$cur" ]; then
-                printf '  [? ] %-18s core.hooksPath = %s (not ours)%s\n' "$name" "$cur" "$cl_suffix"
-                STATE=
+            elif _is_legacy_hookpath "$prepo"; then
+                printf '  [! ] %-18s %s (legacy core.hooksPath — re-install to migrate%s)\n' "$name" "$prepo" "$cl_suffix"
+                STATE=partial
             else
                 printf '  [ ] %-18s not installed in %s%s\n' "$name" "$prepo" "$cl_suffix"
                 STATE=
             fi
             ;;
         remove)
-            if _same_hookpath "$cur" "$hooksdir"; then
+            local migrated=''
+            if _is_legacy_hookpath "$prepo"; then
                 git -C "$prepo" config --local --unset core.hooksPath
-                printf '  [-] %-18s core.hooksPath unset (%s)\n' "$name" "$prepo"
-            else
-                printf '  [.] %-18s nothing to remove\n' "$name"
+                printf '  [-] %-18s legacy core.hooksPath unset (%s)\n' "$name" "$prepo"
+                migrated=1
             fi
+            vpre=$(_hook_block_remove "$prepo" pre)
+            vpost=$(_hook_block_remove "$prepo" post)
+            [ "$vpre" = removed ]  && printf '  [-] %-18s pre-commit block removed (%s)\n'  "$name" "$hd/pre-commit"
+            [ "$vpost" = removed ] && printf '  [-] %-18s post-commit block removed (%s)\n' "$name" "$hd/post-commit"
+            [ -z "$migrated" ] && [ "$vpre" = absent ] && [ "$vpost" = absent ] && printf '  [.] %-18s nothing to remove\n' "$name"
             git -C "$prepo" config --local --unset bumpversion.tagstyle 2>/dev/null || true
             git -C "$prepo" config --local --unset push.followTags 2>/dev/null || true
             # Remove the claude PostToolUse hook if the flag says we installed it.
@@ -1055,18 +1100,16 @@ registry_reconcile() {
     local adopted=0 target dir l tgt rel row catname cattype regtype
     printf 'toolbox reconcile — discovering links into %s\n' "$REPO_ROOT"
 
-    # Adopt one repo's versioning hook if its core.hooksPath resolves to our
-    # canonical hook dir but the registry has no matching entry. The recorded
+    # Adopt one repo's versioning hook if our managed line sits in the active
+    # hooks dir's pre-commit but the registry has no matching entry. The recorded
     # target mirrors reality: claude when the repo carries our claudehook flag,
-    # else bare. Foreign/unset hooksPath repos are silently skipped.
+    # else bare. Repos without our block are silently skipped.
     _adopt_repo_hook() {  # repo
-        local repo=$1 prepo cur proj tg hookrel canon name
+        local repo=$1 prepo proj tg hookrel name
         hookrel=$(jq -r 'first(.tools[] | select(.type=="hook") | .path)' "$CATALOG")
         name=$(jq -r 'first(.tools[] | select(.type=="hook") | .name)' "$CATALOG")
-        canon="$REPO_ROOT/$hookrel"
         prepo=$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null) || return 0
-        cur=$(git -C "$prepo" config --local core.hooksPath 2>/dev/null || true)
-        _same_hookpath "$cur" "$canon" || return 0
+        _hook_block_present "$prepo" || return 0
         proj=${prepo//\\//}
         while [ "${proj%/}" != "$proj" ]; do proj=${proj%/}; done
         if [ "$(git -C "$prepo" config --local --bool bumpversion.claudehook 2>/dev/null || true)" = "true" ]; then

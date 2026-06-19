@@ -3,7 +3,7 @@
 # PowerShell port of toolbox.sh for Codex / Windows. See that file for
 # the full description. Reads tools/catalog.json and dispatches per tool TYPE:
 #   skill  — junction (Windows) / symlink (Linux/macOS) into a skills/ dir
-#   hook   — point a repo's core.hooksPath at the toolbox hook directory
+#   hook   — insert a managed version-bump block into a repo's pre/post-commit
 #   plugin — claude plugin marketplace add + install (--target claude); else skill-link
 #   config — symlink a global config file (CLAUDE.md) into ~/.claude/
 #   bin    — install a CLI as a function in the PowerShell $PROFILE — using
@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.31.182'
+$APP_VERSION = '0.32.199'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -109,7 +109,7 @@ Examples:
 
   Names are listed by `toolbox list`. Types are:
     skill   Skill directory, linked into a CLI's skills/.
-    hook    Git hooks installed via core.hooksPath into a repo.
+    hook    Git hooks installed as a managed line in a repo's pre/post-commit.
     plugin  Real `claude plugin` install (target=claude) or skill-link.
     config  Global config file (e.g. CLAUDE.md) into ~/.claude/.
     bin     Make a CLI available system-wide (exec or sourced shell function).
@@ -379,8 +379,11 @@ function Handle-Bin([string]$name, [string]$path, [string]$command, [bool]$sourc
 }
 
 # --- hook handler -------------------------------------------------------------
-# Installs the versioning git-hooks into a repo by pointing its core.hooksPath
-# at the toolbox hook directory. Per-repo: needs --scope project, ignores --target.
+# Installs the versioning git-hooks into a repo by adding a single self-marked
+# shim line to the active hooks dir's pre-commit/post-commit (core.hooksPath if
+# the repo sets one, else .git/hooks). The line calls the toolbox impl; we never
+# touch core.hooksPath, so existing hooks coexist and only our line is
+# added/removed. Per-repo: needs --scope project.
 
 # Printed after a fresh hook install — a README snippet for the target repo so
 # contributors know to activate the hooks too (git hooks are never cloned).
@@ -524,57 +527,104 @@ function Test-SamePath([string]$a, [string]$b) {
     return $false
 }
 
-# Interactive takeover dialog for a foreign core.hooksPath. Always prints a
-# clear hint on stdout (the previous behaviour buried the verdict on stderr
-# and short-circuited silently). On a TTY, offers two yes/no prompts:
-#   1. Replace with the toolbox hook?  N -> bail out, foreign hook preserved.
-#   2. Also delete the foreign hooks dir?  N -> keep dir on disk, just unset.
-# Off-TTY (pipe, cron, hook context), prints the same hint and skips with a
-# pointer to the manual fix — never hangs waiting for input.
-# Returns $true when core.hooksPath has been unset and the caller may proceed
-# with the install; $false when the foreign hook was kept and the install
-# should bail out.
-function Invoke-ForeignHookTakeover([string]$name, [string]$prepo, [string]$cur) {
-    # Status messages go to [Console]::Out directly, NOT via Write-Output —
-    # this function's return value is read by the caller (`if (-not ...)`),
-    # and any Write-Output stream items would mix into that return as an
-    # array, masking the actual $true/$false verdict.
-    $foreign = $cur
-    if (-not [System.IO.Path]::IsPathRooted($foreign)) {
-        $foreign = Join-Path $prepo $cur
+# ── managed-line helpers ─────────────────────────────────────────────────────
+# Mirrors the sh port: we add a single, self-marked shim line to the repo's own
+# hook scripts instead of hijacking core.hooksPath, so existing hooks coexist and
+# only our line is ever added or removed. The trailing marker comment tags
+# ownership. Git runs hook scripts but never rewrites them, so it is safe.
+$script:HookMark = '# ai-toolbox:versioning-hooks (managed - do not edit)'
+
+# A legacy install pointed core.hooksPath at our SHARED toolbox dir (pre-block
+# era). We must never write a per-repo block there; such installs need migrating.
+function Test-LegacyHookPath([string]$prepo) {
+    $cur = (git -C $prepo config --local core.hooksPath 2>$null)
+    return [bool]($cur -and (Test-SamePath $cur (Join-Path $RepoRoot 'tools/githooks')))
+}
+
+# Active hooks dir: core.hooksPath if set (and not our shared toolbox dir), else
+# the default .git/hooks. A legacy pointer at the toolbox dir is treated as unset
+# so we never write our block into the toolbox itself.
+function Get-ActiveHooksDir([string]$prepo) {
+    $cur = (git -C $prepo config --local core.hooksPath 2>$null)
+    if ($cur -and -not (Test-SamePath $cur (Join-Path $RepoRoot 'tools/githooks'))) {
+        if ([System.IO.Path]::IsPathRooted($cur)) { return $cur }
+        return (Join-Path $prepo $cur)
     }
-    [Console]::Out.WriteLine("  [!] $name  core.hooksPath already set to $cur (not a toolbox install)")
-    if (Test-Path -LiteralPath $foreign -PathType Container) {
-        [Console]::Out.WriteLine("       contents of ${foreign}:")
-        Get-ChildItem -LiteralPath $foreign -Force -ErrorAction SilentlyContinue | ForEach-Object {
-            [Console]::Out.WriteLine("         - $($_.Name)")
+    return (Join-Path $prepo '.git/hooks')
+}
+
+# The self-marked shim line for which=pre|post. Forward-slash the toolbox path so
+# it works under git's bundled sh; `sh <impl>` avoids any execute-bit dependency.
+function Get-HookShimLine([string]$which) {
+    ('sh "{0}/tools/githooks/{1}-commit" "$@"   {2}' -f ($RepoRoot -replace '\\', '/'), $which, $script:HookMark)
+}
+
+# Read a hook file as LF lines (one trailing newline trimmed); @() if missing.
+function Get-HookLines([string]$file) {
+    if (-not (Test-Path -LiteralPath $file)) { return @() }
+    $t = ([System.IO.File]::ReadAllText($file) -replace "`r`n", "`n")
+    if ($t.EndsWith("`n")) { $t = $t.Substring(0, $t.Length - 1) }
+    if ($t -eq '') { return @() }
+    # Split already yields an array; callers re-wrap with @(...). Do NOT use the
+    # ,(...) array-wrap here — it nests the array and collapses on flatten.
+    return $t.Split("`n")
+}
+
+# Write hook lines as LF text with exactly one trailing newline (no BOM/CRLF).
+function Set-HookFile([string]$file, [string[]]$lines) {
+    [System.IO.File]::WriteAllText($file, ($lines -join "`n") + "`n")
+}
+
+# Install/refresh our line in <active>/<which>-commit. Returns 'added'|'refreshed'.
+function Install-HookBlock([string]$prepo, [string]$which) {
+    $dir = Get-ActiveHooksDir $prepo
+    $file = Join-Path $dir "$which-commit"
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    $line = Get-HookShimLine $which
+    $lines = @(Get-HookLines $file)
+    if ($lines.Count -eq 0) { $lines = @('#!/bin/sh') }
+    if ($lines | Where-Object { $_.Contains($script:HookMark) }) {
+        # Replace our marked line in place (first match wins; others dropped).
+        $new = @(); $done = $false
+        foreach ($l in $lines) {
+            if ($l.Contains($script:HookMark)) { if (-not $done) { $new += $line; $done = $true } }
+            else { $new += $l }
         }
+        Set-HookFile $file $new
+        return 'refreshed'
     }
-    if ([Console]::IsInputRedirected) {
-        [Console]::Out.WriteLine('       (run interactively to take it over, or unset core.hooksPath manually); skipped')
-        return $false
+    Set-HookFile $file (@($lines) + @($line))
+    return 'added'
+}
+
+# Strip our marked line from <active>/<which>-commit; delete the file if only a
+# shebang (or blank lines) remains. Returns 'removed'|'absent'.
+function Remove-HookBlock([string]$prepo, [string]$which) {
+    $dir = Get-ActiveHooksDir $prepo
+    $file = Join-Path $dir "$which-commit"
+    $lines = @(Get-HookLines $file)
+    if ($lines.Count -eq 0 -or -not ($lines | Where-Object { $_.Contains($script:HookMark) })) { return 'absent' }
+    $kept = @($lines | Where-Object { -not $_.Contains($script:HookMark) })
+    while ($kept.Count -gt 0 -and $kept[-1].Trim() -eq '') {
+        if ($kept.Count -eq 1) { $kept = @() } else { $kept = $kept[0..($kept.Count - 2)] }
     }
-    $reply = Read-Host '       Replace it with the toolbox hook? [y/N]'
-    if ($reply -notin @('y', 'Y', 'yes', 'j', 'J', 'ja')) {
-        [Console]::Out.WriteLine("  [.] $name  skipped — foreign hook preserved")
-        return $false
+    $nontrivial = @($kept | Where-Object { $_ -notmatch '^\s*$' -and $_ -notmatch '^#!' })
+    if ($nontrivial.Count -eq 0) {
+        Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+    } else {
+        Set-HookFile $file $kept
     }
-    if (Test-Path -LiteralPath $foreign -PathType Container) {
-        $reply2 = Read-Host "       Also delete $foreign (and its contents)? [y/N]"
-        if ($reply2 -in @('y', 'Y', 'yes', 'j', 'J', 'ja')) {
-            Remove-Item -LiteralPath $foreign -Recurse -Force
-            [Console]::Out.WriteLine("  [-] $name  removed foreign hooks dir $foreign")
-        } else {
-            [Console]::Out.WriteLine("  [i] $name  foreign hooks dir $foreign preserved on disk")
-        }
-    }
-    git -C $prepo config --local --unset core.hooksPath | Out-Null
-    [Console]::Out.WriteLine("  [-] $name  core.hooksPath unset (was $cur)")
-    return $true
+    return 'removed'
+}
+
+# True when our marked line is present in the active pre-commit.
+function Test-HookBlockPresent([string]$prepo) {
+    $file = Join-Path (Get-ActiveHooksDir $prepo) 'pre-commit'
+    if (-not (Test-Path -LiteralPath $file)) { return $false }
+    return [bool](@(Get-HookLines $file) | Where-Object { $_.Contains($script:HookMark) })
 }
 
 function Handle-Hook([string]$name, [string]$path) {
-    $hooksdir = Join-Path $RepoRoot $path
     if ($Scope -ne 'project') {
         Write-Output "  [.] $name  hooks are per-repo — pass --scope project"
         return
@@ -583,21 +633,22 @@ function Handle-Hook([string]$name, [string]$path) {
     if (-not $prepo) {
         [Console]::Error.WriteLine("  [!] $name  --project is not a git repo: $Project"); return
     }
-    $cur = (git -C $prepo config --local core.hooksPath 2>$null)
+    $hd = Get-ActiveHooksDir $prepo
     switch ($Cmd) {
         'install' {
-            if ($cur -and -not (Test-SamePath $cur $hooksdir)) {
-                if (-not (Invoke-ForeignHookTakeover $name $prepo $cur)) { return }
-                $cur = ''
+            # Migrate a legacy install: drop the core.hooksPath that pointed at
+            # our shared toolbox dir, so git uses .git/hooks where the block goes.
+            if (Test-LegacyHookPath $prepo) {
+                git -C $prepo config --local --unset core.hooksPath
+                Write-Output "  [-] $name  legacy core.hooksPath unset — migrating to managed line"
             }
             $fresh = $false
-            if (Test-SamePath $cur $hooksdir) {
-                Write-Output "  [=] $name  core.hooksPath already set"
-            } else {
-                git -C $prepo config --local core.hooksPath $hooksdir
-                Write-Output "  [+] $name  core.hooksPath -> $hooksdir"
-                $fresh = $true
-            }
+            $vpre = Install-HookBlock $prepo 'pre'
+            $vpost = Install-HookBlock $prepo 'post'
+            if ($vpre -eq 'added') { Write-Output "  [+] $name  pre-commit block added -> $hd/pre-commit"; $fresh = $true }
+            else { Write-Output "  [=] $name  pre-commit block refreshed ($hd/pre-commit)" }
+            if ($vpost -eq 'added') { Write-Output "  [+] $name  post-commit block added -> $hd/post-commit"; $fresh = $true }
+            else { Write-Output "  [=] $name  post-commit block refreshed ($hd/post-commit)" }
             $curts = (git -C $prepo config --local bumpversion.tagstyle 2>$null)
             if ($TagStyle) {
                 if ($curts -eq $TagStyle) {
@@ -652,7 +703,7 @@ function Handle-Hook([string]$name, [string]$path) {
                     'no-settings' { $clSuffix = ', claude=missing-no-settings' }
                 }
             }
-            if (Test-SamePath $cur $hooksdir) {
+            if (Test-HookBlockPresent $prepo) {
                 $curts = (git -C $prepo config --local bumpversion.tagstyle 2>$null)
                 if (-not $curts) { $curts = 'namespaced' }
                 if ($clState -eq 'no' -or $clState -eq 'no-settings') {
@@ -663,14 +714,24 @@ function Handle-Hook([string]$name, [string]$path) {
                     $script:State = 'ok'
                 }
             }
-            elseif ($cur) { Write-Output "  [? ] $name  core.hooksPath = $cur (not ours)$clSuffix" }
-            else          { Write-Output "  [ ] $name  not installed in $prepo$clSuffix" }
+            elseif (Test-LegacyHookPath $prepo) {
+                Write-Output "  [! ] $name  $prepo (legacy core.hooksPath — re-install to migrate$clSuffix)"
+                $script:State = 'partial'
+            }
+            else { Write-Output "  [ ] $name  not installed in $prepo$clSuffix" }
         }
         'remove' {
-            if (Test-SamePath $cur $hooksdir) {
+            $migrated = $false
+            if (Test-LegacyHookPath $prepo) {
                 git -C $prepo config --local --unset core.hooksPath
-                Write-Output "  [-] $name  core.hooksPath unset ($prepo)"
-            } else { Write-Output "  [.] $name  nothing to remove" }
+                Write-Output "  [-] $name  legacy core.hooksPath unset ($prepo)"
+                $migrated = $true
+            }
+            $vpre = Remove-HookBlock $prepo 'pre'
+            $vpost = Remove-HookBlock $prepo 'post'
+            if ($vpre -eq 'removed') { Write-Output "  [-] $name  pre-commit block removed ($hd/pre-commit)" }
+            if ($vpost -eq 'removed') { Write-Output "  [-] $name  post-commit block removed ($hd/post-commit)" }
+            if (-not $migrated -and $vpre -eq 'absent' -and $vpost -eq 'absent') { Write-Output "  [.] $name  nothing to remove" }
             git -C $prepo config --local --unset bumpversion.tagstyle 2>$null
             git -C $prepo config --local --unset push.followTags 2>$null
             # Remove the claude PostToolUse hook if the flag says we installed it.
@@ -979,20 +1040,17 @@ function Reconcile-Adopt([string]$link, [string]$regtype, [string]$sc, [string]$
     }
 }
 
-# Adopt one repo's versioning hook if its core.hooksPath resolves to our
-# canonical hook dir but the registry has no matching entry. The recorded
-# target mirrors reality: claude when the repo carries our claudehook flag,
-# else bare. Foreign/unset hooksPath repos are silently skipped. Mirrors
-# _adopt_repo_hook in the sh port.
+# Adopt one repo's versioning hook if our managed line sits in the active hooks
+# dir's pre-commit but the registry has no matching entry. The recorded target
+# mirrors reality: claude when the repo carries our claudehook flag, else bare.
+# Repos without our block are silently skipped. Mirrors _adopt_repo_hook (sh).
 function Reconcile-AdoptRepoHook([string]$repo) {
     $cat = (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools |
         Where-Object { $_.type -eq 'hook' } | Select-Object -First 1
     if (-not $cat) { return }
-    $canon = Join-Path $RepoRoot $cat.path
     $prepo = (git -C $repo rev-parse --show-toplevel 2>$null)
     if (-not $prepo) { return }
-    $cur = (git -C $prepo config --local core.hooksPath 2>$null)
-    if (-not (Test-SamePath $cur $canon)) { return }
+    if (-not (Test-HookBlockPresent $prepo)) { return }
     $proj = ($prepo -replace '\\', '/').TrimEnd('/')
     $tg = if ((git -C $prepo config --local --bool bumpversion.claudehook 2>$null) -eq 'true') { 'claude' } else { '' }
     $tgLabel = if ($tg) { ", $tg" } else { '' }

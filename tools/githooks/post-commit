@@ -10,11 +10,11 @@
 # re-tagged. Tags are annotated and local; push them with
 # `git push --follow-tags` (or set `git config push.followTags true`).
 #
-# Installed by pointing a repo's core.hooksPath at this directory — see
-# <ai-toolbox>/toolbox.sh ("versioning-hooks" tool). The hook resolves the AI-Toolbox
-# from its own path, so it works inside any repo.
+# Invoked by the managed shim line that `toolbox install --what versioning-hooks`
+# writes into a repo's post-commit (see <ai-toolbox>/toolbox.sh). The hook
+# resolves the AI-Toolbox from its own path, so it works inside any repo.
 
-APP_VERSION='0.6.12'
+APP_VERSION='0.7.15'
 
 repo=$(git rev-parse --show-toplevel) || exit 0
 # Resolve bump-version.sh from this hook's own path (see pre-commit).
