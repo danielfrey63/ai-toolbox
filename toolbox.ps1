@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.30.179'
+$APP_VERSION = '0.31.182'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -979,6 +979,32 @@ function Reconcile-Adopt([string]$link, [string]$regtype, [string]$sc, [string]$
     }
 }
 
+# Adopt one repo's versioning hook if its core.hooksPath resolves to our
+# canonical hook dir but the registry has no matching entry. The recorded
+# target mirrors reality: claude when the repo carries our claudehook flag,
+# else bare. Foreign/unset hooksPath repos are silently skipped. Mirrors
+# _adopt_repo_hook in the sh port.
+function Reconcile-AdoptRepoHook([string]$repo) {
+    $cat = (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools |
+        Where-Object { $_.type -eq 'hook' } | Select-Object -First 1
+    if (-not $cat) { return }
+    $canon = Join-Path $RepoRoot $cat.path
+    $prepo = (git -C $repo rev-parse --show-toplevel 2>$null)
+    if (-not $prepo) { return }
+    $cur = (git -C $prepo config --local core.hooksPath 2>$null)
+    if (-not (Test-SamePath $cur $canon)) { return }
+    $proj = ($prepo -replace '\\', '/').TrimEnd('/')
+    $tg = if ((git -C $prepo config --local --bool bumpversion.claudehook 2>$null) -eq 'true') { 'claude' } else { '' }
+    $tgLabel = if ($tg) { ", $tg" } else { '' }
+    if (Registry-Has $cat.name 'hook' 'project' $tg $proj) {
+        Write-Output ("  [=] {0,-18} already registered (hook{1}) {2}" -f $cat.name, $tgLabel, $proj)
+    } else {
+        Registry-Add $cat.name 'hook' $cat.path 'project' $tg $proj
+        Write-Output ("  [+] {0,-18} adopted (hook{1}) -> {2}" -f $cat.name, $tgLabel, $proj)
+        $script:reconcileAdopted++
+    }
+}
+
 # Discover AI-Toolbox installs that exist on disk but were never recorded — e.g.
 # a skill symlinked by hand, outside `toolbox install`. Walks the global link
 # destinations (per-target skills dirs, the ~/.claude config dir, ~/.local/bin),
@@ -987,8 +1013,9 @@ function Reconcile-Adopt([string]$link, [string]$regtype, [string]$sc, [string]$
 # `status --all` / `remove --all` see them. Always records the on-disk form (a
 # symlink => type "skill"); when the catalog declares a different type it says so
 # but still adopts reality. Project-scope installs (per-repo hooks/skills) can't
-# be found by a global scan — restore those via `install … --scope project`.
-# Mirrors registry_reconcile in the sh port.
+# be found by a global scan — pass `--project PATH` to also adopt project-scoped
+# versioning hooks: if PATH is a git repo its hook is adopted, otherwise every
+# immediate child repo of PATH is scanned. Mirrors registry_reconcile in the sh port.
 function Reconcile-Registry {
     Write-Output "toolbox reconcile — discovering links into $RepoRoot"
     $script:reconcileAdopted = 0
@@ -1010,6 +1037,26 @@ function Reconcile-Registry {
     if (Test-Path -LiteralPath $dir) {
         foreach ($l in (Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue)) {
             Reconcile-Adopt $l.FullName 'bin' 'global' ''
+        }
+    }
+    # Project-scoped versioning hooks (--project PATH). A global scan cannot
+    # find these — git config is per-repo. PATH itself a repo => adopt it;
+    # otherwise scan its immediate children for repos carrying our hook.
+    if ($Project) {
+        $root = (Resolve-Path -LiteralPath $Project -ErrorAction SilentlyContinue)
+        if ($root) {
+            Write-Output "  scanning project hooks under $($root.Path)"
+            if (Test-Path -LiteralPath (Join-Path $root.Path '.git')) {
+                Reconcile-AdoptRepoHook $root.Path
+            } else {
+                foreach ($d in (Get-ChildItem -LiteralPath $root.Path -Directory -ErrorAction SilentlyContinue)) {
+                    if (Test-Path -LiteralPath (Join-Path $d.FullName '.git')) {
+                        Reconcile-AdoptRepoHook $d.FullName
+                    }
+                }
+            }
+        } else {
+            [Console]::Error.WriteLine("  [!] reconcile --project path not found: $Project")
         }
     }
     Write-Output ("  {0} new install(s) adopted`n`n-- registry status after reconcile --" -f $script:reconcileAdopted)

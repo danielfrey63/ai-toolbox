@@ -30,7 +30,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.30.186'
+APP_VERSION='0.31.189'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -1047,10 +1047,41 @@ _registry_has() {  # tool type scope target project
 # re-verifies; when the catalog declares a different type (e.g. a plugin that
 # was instead hand-linked as a skill) it says so but still adopts the real
 # state. Project-scope installs (per-repo hooks/skills) can't be found by a
-# global scan — restore those by re-running `install … --scope project`.
+# global scan — pass `--project PATH` to also adopt project-scoped versioning
+# hooks: if PATH is a git repo its hook is adopted, otherwise every immediate
+# child repo of PATH is scanned (so `reconcile --project ~/Develop` re-adopts a
+# whole tree of repos whose registry entries were lost).
 registry_reconcile() {
     local adopted=0 target dir l tgt rel row catname cattype regtype
     printf 'toolbox reconcile — discovering links into %s\n' "$REPO_ROOT"
+
+    # Adopt one repo's versioning hook if its core.hooksPath resolves to our
+    # canonical hook dir but the registry has no matching entry. The recorded
+    # target mirrors reality: claude when the repo carries our claudehook flag,
+    # else bare. Foreign/unset hooksPath repos are silently skipped.
+    _adopt_repo_hook() {  # repo
+        local repo=$1 prepo cur proj tg hookrel canon name
+        hookrel=$(jq -r 'first(.tools[] | select(.type=="hook") | .path)' "$CATALOG")
+        name=$(jq -r 'first(.tools[] | select(.type=="hook") | .name)' "$CATALOG")
+        canon="$REPO_ROOT/$hookrel"
+        prepo=$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null) || return 0
+        cur=$(git -C "$prepo" config --local core.hooksPath 2>/dev/null || true)
+        _same_hookpath "$cur" "$canon" || return 0
+        proj=${prepo//\\//}
+        while [ "${proj%/}" != "$proj" ]; do proj=${proj%/}; done
+        if [ "$(git -C "$prepo" config --local --bool bumpversion.claudehook 2>/dev/null || true)" = "true" ]; then
+            tg=claude
+        else
+            tg=''
+        fi
+        if _registry_has "$name" hook project "$tg" "$proj"; then
+            printf '  [=] %-18s already registered (hook%s) %s\n' "$name" "${tg:+, $tg}" "$proj"
+        else
+            registry_add "$name" hook "$hookrel" project "$tg" "$proj"
+            printf '  [+] %-18s adopted (hook%s) -> %s\n' "$name" "${tg:+, $tg}" "$proj"
+            adopted=$((adopted + 1))
+        fi
+    }
 
     _adopt() {  # link regtype scope target
         local link=$1 rt=$2 sc=$3 tg=$4 t r row cn ct
@@ -1094,6 +1125,25 @@ registry_reconcile() {
         for l in "$dir"/*; do
             [ -L "$l" ] && _adopt "$l" bin global ''
         done
+    fi
+
+    # Project-scoped versioning hooks (--project PATH). A global scan cannot
+    # find these — git config is per-repo. PATH itself a repo => adopt it;
+    # otherwise scan its immediate children for repos carrying our hook.
+    if [ -n "$PROJECT" ]; then
+        local root
+        if root=$(cd "$PROJECT" 2>/dev/null && pwd); then
+            printf '  scanning project hooks under %s\n' "$root"
+            if [ -d "$root/.git" ]; then
+                _adopt_repo_hook "$root"
+            else
+                for d in "$root"/*/; do
+                    [ -d "$d/.git" ] && _adopt_repo_hook "${d%/}"
+                done
+            fi
+        else
+            printf '  [!] reconcile --project path not found: %s\n' "$PROJECT" >&2
+        fi
     fi
 
     printf '  %d new install(s) adopted\n\n-- registry status after reconcile --\n' "$adopted"
