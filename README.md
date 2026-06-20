@@ -37,7 +37,7 @@ der den Install-Handler bestimmt:
 | Typ | Was es macht |
 |---|---|
 | `skill`  | Skill-Verzeichnis nach `~/.{claude,codex,agents}/skills/` verlinken |
-| `hook`   | `core.hooksPath` eines Repos auf die Toolbox-Git-Hooks zeigen |
+| `hook`   | eine markierte Shim-Zeile in `pre-commit`/`post-commit` eines Repos einfügen (ruft den `toolbox-bump`-Launcher) |
 | `plugin` | echtes `claude plugin`-Install (Target `claude`), sonst Skill-Link |
 | `config` | globale Konfig-Datei (`CLAUDE.md`) nach `~/.claude/` verlinken |
 | `bin`    | einen CLI-Befehl systemweit verfügbar machen — exec (Symlink in `~/.local/bin` / `&` in `$PROFILE`) oder sourced (Funktion in `~/.bashrc` / `.` in `$PROFILE`, Katalog `source: true` — z.B. für env-setzende Tools wie `cc-profil`) |
@@ -68,6 +68,41 @@ toolbox install --what versioning-hooks --scope project
 
 `tools/bump-version.{sh,ps1}` ist der generische Bumper dahinter — er erkennt
 Skills, Agents, Scripts, Plugins und `CLAUDE.md`.
+
+### Wie der Hook im Repo aussieht
+
+`toolbox install` schreibt **keine** `core.hooksPath`-Umleitung mehr, sondern eine
+einzelne, markierte Shim-Zeile in die `pre-commit`/`post-commit` des aktiven
+Hook-Verzeichnisses (`.git/hooks` bzw. ein vorhandenes `core.hooksPath`-Ziel):
+
+```sh
+toolbox-bump pre-commit   # ai-toolbox:versioning-hooks (managed - do not edit)
+```
+
+Das ist **pfadfrei** und damit portabel: `toolbox-bump` ist ein winziger Launcher
+in `~/.local/bin` (von `toolbox install` pro Maschine erzeugt), der auf die
+*lokale* Toolbox zeigt. `~/.local/bin` liegt auf dem PATH von Gits `sh` (Linux
+wie Windows-git-bash). Bestehende Hooks im selben File bleiben unangetastet —
+entfernt/aktualisiert wird nur die markierte Zeile. Die eigentliche Bump-Logik
+liegt zentral in der Toolbox; ein `git pull` dort propagiert Verbesserungen an
+alle Repos automatisch.
+
+### Migration bestehender Installs (z.B. auf anderen Maschinen)
+
+Frühere Versionen schrieben entweder `core.hooksPath` aufs Toolbox-Verzeichnis
+oder eine Shim-Zeile mit hartem Pfad. Nach einem `git pull` der Toolbox:
+
+1. `toolbox status` markiert betroffene Repos mit `[! ] … (old shim path …)` bzw.
+   `(legacy core.hooksPath …)` — „re-install to migrate".
+2. Pro markiertem Repo neu installieren (idempotent; legt die Launcher an und
+   ersetzt nur die markierte Zeile):
+
+   ```bash
+   toolbox install --what versioning-hooks --scope project --project <repo>
+   ```
+
+Hängt das Repo an `--target claude`, dieselbe Flag mitgeben. `~/.local/bin` muss
+auf dem `sh`-PATH liegen (sonst weist der Install darauf hin).
 
 ## Registry
 
