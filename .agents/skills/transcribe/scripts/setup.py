@@ -788,6 +788,52 @@ def venv_python() -> Path:
     return VENV_DIR.joinpath(*sub)
 
 
+def _venv_base_interpreter_ok() -> bool:
+    """True when the venv launcher AND the base interpreter it delegates to
+    both exist on disk.
+
+    A venv keeps its own `python.exe`/`bin/python`, but that launcher is a thin
+    shim that hands off to the base interpreter recorded in `pyvenv.cfg`
+    (`executable`, else the python under `home`). When that base is deleted or
+    moved out from under it - a scoop/pyenv/Homebrew Python upgrade
+    (`...\\python\\3.13.2\\python.exe` -> `3.13.3`), an uninstalled toolchain -
+    the shim still exists, so a bare `venv_python().exists()` reports the venv
+    as ready, yet every launch dies in the worker with a cryptic non-zero exit.
+    Verifying the base path here lets readiness reflect reality and lets
+    provisioning self-heal (rebuild) instead of waving a dead venv through.
+
+    Cheap by design (a file read + a stat), so it stays on the `--check` hot
+    path; a deleted base is the common, catchable case. It does not import the
+    ML stack - that deeper probe would blow the per-invocation budget.
+    """
+    if not venv_python().exists():
+        return False
+    cfg = VENV_DIR / "pyvenv.cfg"
+    try:
+        text = cfg.read_text(encoding="utf-8")
+    except OSError:
+        # No pyvenv.cfg at all -> not a usable venv.
+        return False
+    home = executable = None
+    for line in text.splitlines():
+        key, sep, val = line.partition("=")
+        if not sep:
+            continue
+        key, val = key.strip().lower(), val.strip()
+        if key == "executable":
+            executable = val
+        elif key == "home":
+            home = val
+    # `executable` (Python 3.11+) pins the exact base binary - prefer it.
+    if executable:
+        return Path(executable).exists()
+    if home:
+        base = Path(home) / ("python.exe" if IS_WINDOWS else "python3")
+        return base.exists() or Path(home).exists()
+    # Neither key present (very old/odd venv) - can't verify cheaply; trust it.
+    return True
+
+
 def _gpu_available() -> bool:
     """CUDA GPU present? nvidia-smi on PATH and answering is good enough."""
     smi = shutil.which("nvidia-smi")
@@ -829,6 +875,10 @@ def venv_status() -> dict:
     gpu = _gpu_available()
     if not venv_python().exists():
         return {"ready": False, "reason": "venv missing", "gpu": gpu}
+    if not _venv_base_interpreter_ok():
+        return {"ready": False,
+                "reason": "base interpreter gone (host Python moved/upgraded) - rebuild needed",
+                "gpu": gpu}
     try:
         marker = json.loads(VENV_MARKER.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -877,7 +927,8 @@ def cmd_provision_venv(force: bool = False) -> int:
         marker_py = json.loads(VENV_MARKER.read_text(encoding="utf-8")).get("python")
     except (OSError, ValueError):
         pass
-    if not venv_python().exists() or (marker_py and marker_py != UV_PYTHON_VERSION) or force:
+    if (not venv_python().exists() or not _venv_base_interpreter_ok()
+            or (marker_py and marker_py != UV_PYTHON_VERSION) or force):
         if VENV_DIR.exists():
             shutil.rmtree(VENV_DIR)
         result = subprocess.run(

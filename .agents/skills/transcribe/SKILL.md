@@ -40,6 +40,8 @@ On non-zero exit, follow the table. **Local-first: never ask the user for a clou
 python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py" --venv
 ```
 
+**Self-heal on a moved base Python:** `--check` / `--json` don't just look for the venv directory — they verify the base interpreter recorded in the venv's `pyvenv.cfg` still exists. A venv keeps its own launcher even after the Python it was built against is upgraded or removed (a scoop/pyenv/Homebrew bump), so the old behaviour reported it `ready` and the run then died deep in the worker with a cryptic exit. Now such a venv is reported **not ready** (exit `3`), and `--venv` rebuilds it from scratch (idempotent) instead of pip-installing into a dead venv. A re-run after a Python update repairs itself.
+
 **No host-Python caveat:** the venv is built by `uv` (bootstrapped as a standalone binary into `~/.transcribe/bin/`, same as ffmpeg/yt-dlp), which fetches its own managed CPython 3.13. So the command above works **regardless of the host Python version** — even on a 3.14-only box where the torch wheels wouldn't otherwise resolve. There is no launcher dance and no `py -3.13` requirement anymore. The only platform where it can't provision is one `uv` ships no build for (`venv_buildable: false` in `--json`) — there, fall back to a cloud key.
 
 The installer is idempotent — safe to re-run:
