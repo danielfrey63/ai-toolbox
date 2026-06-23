@@ -11,14 +11,14 @@
 #            function via catalog "source: true" — needed for env-setting tools)
 #
 # Usage:
-#   toolbox.sh <install|status|remove> --target <claude|codex|agents>
+#   toolbox.sh <install|status|remove> --target <claude|codex|agents|kilo>
 #              [--scope global|project] [--project PATH] [--what all|<name>|<type>]
 #              [--tagstyle plain|namespaced]
 #
 # Parameter families:
 #   scope   global (default; base = $HOME) | project (base = --project PATH,
 #           which itself defaults to the current directory)
-#   target  claude | codex | agents  — required unless the selection is hook/config/bin-only
+#   target  claude | codex | agents | kilo  — required unless the selection is hook/config/bin-only
 #   what    all (default) | a tool name | a tool type
 #
 # --tagstyle applies only to hook installs — it sets the repo's
@@ -30,7 +30,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.33.214'
+APP_VERSION='0.34.226'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -78,18 +78,21 @@ EOF
 
 _help_target() {
     cat <<'EOF'
---target <claude|codex|agents>
+--target <claude|codex|agents|kilo>
   Where to install. Required, unless the selection is hook/config/bin-only.
 
   claude   Claude Code      skills link into <scope>/.claude/skills/
   codex    Codex CLI        skills link into <scope>/.codex/skills/
   agents   agentskills.io   skills link into <scope>/.agents/skills/
+  kilo     Kilo Code        skills register in ~/.config/kilo/kilo.jsonc ->
+                            skills.paths (global scope; skill type only)
 
   Config/bin entries ignore --target. Hooks honour --target claude (also
   patches the project's .claude/settings.json with an edit-bump PostToolUse
   hook); --target codex|agents is not yet supported for the edit-bump path.
   Plugins do a real `claude plugin` install for --target claude; for other
-  targets they fall back to a skill-link.
+  targets they fall back to a skill-link. --target kilo handles the skill
+  type only (it edits kilo.jsonc, not a skills/ dir); other types are skipped.
 
   Example:
     toolbox install --what component-audit --target claude
@@ -201,7 +204,7 @@ show_help() {
 # Print the catalog as a readable table — answers "what can I install?".
 print_catalog_list() {
     printf 'toolbox — available tools (%s)\n' "$CATALOG"
-    printf 'Usage: toolbox <install|status|remove|list|reconcile> [--target claude|codex|agents] [--scope global|project] [--project PATH] [--what all|<name>|<type>] [--tagstyle plain|namespaced] [--all] [-h|--help]\n\n'
+    printf 'Usage: toolbox <install|status|remove|list|reconcile> [--target claude|codex|agents|kilo] [--scope global|project] [--project PATH] [--what all|<name>|<type>] [--tagstyle plain|namespaced] [--all] [-h|--help]\n\n'
     printf '  %-20s %-7s %s\n' NAME TYPE DESCRIPTION
     jq -r '.tools[] | [.name, .type, .description] | @tsv' "$CATALOG" \
         | while IFS=$(printf '\t') read -r n t d; do
@@ -250,7 +253,7 @@ done
 # An empty --target is allowed here; whether it is actually required depends on
 # the selected tool types and is checked once the catalog selection is known.
 case "$TARGET" in
-    ''|claude|codex|agents) ;;
+    ''|claude|codex|agents|kilo) ;;
     *) printf 'toolbox: invalid --target: %s\n' "$TARGET" >&2; exit 2 ;;
 esac
 case "$SCOPE" in
@@ -344,7 +347,134 @@ handle_skill() {
         printf '  [!] %-18s source missing: %s\n' "$name" "$src" >&2
         return
     fi
+    if [ "$TARGET" = kilo ]; then
+        handle_skill_kilo "$name" "$src"
+        return
+    fi
     link_artifact "$name" "$src" "$(skill_destdir)"
+}
+
+# --- kilo skill target --------------------------------------------------------
+# Kilo Code (OpenCode-based) discovers skills via the `skills.paths` array in
+# kilo.jsonc, not a skills/ directory. So --target kilo edits that array in
+# place — comment-preserving (no jq: the file carries // comments and provider
+# secrets), idempotent, each entry tagged with a trailing `// toolbox:skill:<name>`
+# so the exact line can be removed again. A .bak is written before each change.
+kilo_config() {
+    [ -n "${TOOLBOX_KILO_CONFIG:-}" ] && { printf '%s\n' "$TOOLBOX_KILO_CONFIG"; return; }
+    local c
+    for c in "$HOME/.config/kilo/kilo.jsonc" "$HOME/.config/kilo.jsonc"; do
+        [ -f "$c" ] && { printf '%s\n' "$c"; return; }
+    done
+    printf '%s\n' "$HOME/.config/kilo/kilo.jsonc"
+}
+# Absolute path -> kilo.jsonc-friendly form (D:/... not /d/... on Windows).
+kilo_pathval() {
+    if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s\n' "$1"; fi
+}
+# Match the rewritten file's final-newline state to the original (Kilo writes
+# none) so an unrelated rewrite stays byte-identical.
+kilo_match_eof() {  # ref tgt
+    if [ -s "$1" ] && [ -n "$(tail -c1 "$1")" ] && [ -z "$(tail -c1 "$2")" ]; then
+        printf '%s' "$(cat "$2")" > "$2.eof" && mv -- "$2.eof" "$2"
+    fi
+}
+# Count remaining per-skill lines inside the toolbox-managed skills block.
+kilo_block_skill_count() {  # file
+    awk '
+        /\/\/>>> toolbox:skills:managed/ {inb=1; next}
+        /\/\/<<< toolbox:skills:managed/ {inb=0; next}
+        inb && /\/\/ toolbox:skill:/ {c++}
+        END { print c+0 }
+    ' "$1"
+}
+
+handle_skill_kilo() {
+    local name=$1 src=$2
+    local f marker val tmp
+    f=$(kilo_config)
+    marker="toolbox:skill:${name}"
+    val=$(kilo_pathval "$src")
+
+    case "$CMD" in
+        status)
+            if [ -f "$f" ] && grep -qF "// $marker" "$f"; then
+                printf '  [ok] %-18s kilo.jsonc skills.paths\n' "$name"; STATE=ok
+            else
+                printf '  [ ] %-18s not in kilo.jsonc\n' "$name"
+            fi
+            ;;
+        remove)
+            if [ -f "$f" ] && grep -qF "// $marker" "$f"; then
+                tmp=$(mktemp); cp -- "$f" "$f.bak"
+                grep -vF "// $marker" "$f" > "$tmp"
+                # if this emptied the block toolbox itself created, drop the block
+                if grep -qF 'toolbox:skills:managed' "$tmp" \
+                   && [ "$(kilo_block_skill_count "$tmp")" -eq 0 ]; then
+                    awk '
+                        /\/\/>>> toolbox:skills:managed/ {skip=1}
+                        !skip { print }
+                        /\/\/<<< toolbox:skills:managed/ {skip=0}
+                    ' "$tmp" > "$tmp.b" && mv -- "$tmp.b" "$tmp"
+                fi
+                kilo_match_eof "$f" "$tmp"; mv -- "$tmp" "$f"
+                printf '  [-] %-18s removed from kilo.jsonc\n' "$name"
+            else
+                printf '  [.] %-18s nothing to remove\n' "$name"
+            fi
+            ;;
+        install)
+            if [ ! -f "$f" ]; then
+                printf '  [!] %-18s kilo.jsonc not found: %s\n' "$name" "$f" >&2; return
+            fi
+            if grep -qF "// $marker" "$f"; then
+                printf '  [=] %-18s already in kilo.jsonc\n' "$name"; return
+            fi
+            tmp=$(mktemp); cp -- "$f" "$f.bak"
+            if grep -qE '"paths"[[:space:]]*:[[:space:]]*\[[[:space:]]*$' "$f"; then
+                # insert as the first element of an existing skills.paths array
+                awk -v v="$val" -v m="$marker" '
+                    { print }
+                    !done && /"paths"[[:space:]]*:[[:space:]]*\[[[:space:]]*$/ {
+                        match($0, /^[[:space:]]*/); ind=substr($0, 1, RLENGTH)
+                        print ind "  \"" v "\", // " m
+                        done=1
+                    }
+                ' "$f" > "$tmp"
+            elif ! grep -qE '"skills"[[:space:]]*:' "$f"; then
+                # no skills key yet — create a self-marked block as first child of
+                # root {. The markers let `remove` drop the whole block once its
+                # last toolbox-managed path is gone (clean round-trip).
+                awk -v v="$val" -v m="$marker" '
+                    !done && /^[[:space:]]*\{[[:space:]]*$/ {
+                        print
+                        print "  //>>> toolbox:skills:managed (toolbox --target kilo) >>>"
+                        print "  \"skills\": {"
+                        print "    \"paths\": ["
+                        print "      \"" v "\" // " m
+                        print "    ]"
+                        print "  },"
+                        print "  //<<< toolbox:skills:managed <<<"
+                        done=1; next
+                    }
+                    { print }
+                ' "$f" > "$tmp"
+            else
+                rm -f "$tmp"
+                printf '  [!] %-18s kilo.jsonc has a "skills" block without a paths array — add manually:\n' "$name" >&2
+                printf '        "%s" // %s\n' "$val" "$marker" >&2
+                return
+            fi
+            if ! grep -qF "// $marker" "$tmp"; then
+                rm -f "$tmp"
+                printf '  [!] %-18s could not edit kilo.jsonc (unexpected layout) — add manually:\n' "$name" >&2
+                printf '        "%s" // %s\n' "$val" "$marker" >&2
+                return
+            fi
+            kilo_match_eof "$f" "$tmp"; mv -- "$tmp" "$f"
+            printf '  [+] %-18s -> kilo.jsonc skills.paths (backup: %s.bak)\n' "$name" "$f"
+            ;;
+    esac
 }
 
 # --- config handler -----------------------------------------------------------
@@ -1317,7 +1447,7 @@ if [ -z "$TARGET" ]; then
     needs_target=$(printf '%s\n' "$selected" \
         | jq -r 'select(.type != "hook" and .type != "config" and .type != "bin") | .name' | head -1)
     if [ -n "$needs_target" ]; then
-        printf 'toolbox: --target is required (claude|codex|agents) — "%s" needs it\n' \
+        printf 'toolbox: --target is required (claude|codex|agents|kilo) — "%s" needs it\n' \
             "$needs_target" >&2
         exit 2
     fi
@@ -1328,6 +1458,10 @@ printf '%s\n' "$selected" | while IFS= read -r tool; do
     name=$(printf '%s' "$tool" | jq -r '.name')
     type=$(printf '%s' "$tool" | jq -r '.type')
     path=$(printf '%s' "$tool" | jq -r '.path')
+    if [ "$TARGET" = kilo ] && [ "$type" != skill ]; then
+        printf '  [.] %-18s --target kilo supports the skill type only — skipped (%s)\n' "$name" "$type"
+        continue
+    fi
     case "$type" in
         skill)  handle_skill "$name" "$path" ;;
         hook)   handle_hook "$name" "$path" ;;

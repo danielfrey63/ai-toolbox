@@ -10,7 +10,7 @@
 #            `&` (exec) or `.` (sourced, catalog "source: true")
 #
 # Usage:
-#   toolbox.ps1 <install|status|remove> --target <claude|codex|agents>
+#   toolbox.ps1 <install|status|remove> --target <claude|codex|agents|kilo>
 #               [--scope global|project] [--project PATH] [--what all|<name>|<type>]
 #               [--tagstyle plain|namespaced]
 #
@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.33.205'
+$APP_VERSION = '0.34.214'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -61,18 +61,21 @@ Examples:
         }
         { $_ -in '--target', 'target' } {
             Write-Output @'
---target <claude|codex|agents>
+--target <claude|codex|agents|kilo>
   Where to install. Required, unless the selection is hook/config/bin-only.
 
   claude   Claude Code      skills link into <scope>/.claude/skills/
   codex    Codex CLI        skills link into <scope>/.codex/skills/
   agents   agentskills.io   skills link into <scope>/.agents/skills/
+  kilo     Kilo Code        skills register in ~/.config/kilo/kilo.jsonc ->
+                            skills.paths (global scope; skill type only)
 
   Config/bin entries ignore --target. Hooks honour --target claude (also
   patches the project's .claude/settings.json with an edit-bump PostToolUse
   hook); --target codex|agents is not yet supported for the edit-bump path.
   Plugins do a real `claude plugin` install for --target claude; for other
-  targets they fall back to a skill-link.
+  targets they fall back to a skill-link. --target kilo handles the skill
+  type only (it edits kilo.jsonc, not a skills/ dir); other types are skipped.
 
   Example:
     toolbox install --what component-audit --target claude
@@ -165,7 +168,7 @@ Examples:
 # Print the catalog as a readable table — answers "what can I install?".
 function Show-CatalogList {
     Write-Output "toolbox — available tools ($Catalog)"
-    Write-Output 'Usage: toolbox <install|status|remove|list|reconcile> [--target claude|codex|agents] [--scope global|project] [--project PATH] [--what all|<name>|<type>] [--tagstyle plain|namespaced] [--all] [-h|--help]'
+    Write-Output 'Usage: toolbox <install|status|remove|list|reconcile> [--target claude|codex|agents|kilo] [--scope global|project] [--project PATH] [--what all|<name>|<type>] [--tagstyle plain|namespaced] [--all] [-h|--help]'
     Write-Output ''
     Write-Output ('  {0,-20} {1,-7} {2}' -f 'NAME', 'TYPE', 'DESCRIPTION')
     foreach ($t in (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools) {
@@ -212,7 +215,7 @@ while ($i -lt $args.Count) {
 # --- validate -----------------------------------------------------------------
 # An empty --target is allowed here; whether it is required depends on the
 # selected tool types and is checked once the catalog selection is known.
-if ($Target -and $Target -notin @('claude', 'codex', 'agents')) {
+if ($Target -and $Target -notin @('claude', 'codex', 'agents', 'kilo')) {
     [Console]::Error.WriteLine("toolbox: invalid --target: $Target"); exit 2
 }
 if ($TagStyle -and $TagStyle -notin @('plain', 'namespaced')) {
@@ -307,7 +310,89 @@ function Handle-Skill([string]$name, [string]$path) {
     if (-not (Test-Path -LiteralPath $src -PathType Container)) {
         [Console]::Error.WriteLine("  [!] $name  source missing: $src"); return
     }
+    if ($Target -eq 'kilo') { Handle-SkillKilo $name $src; return }
     Link-Artifact $name $src (Get-SkillDestDir)
+}
+
+# --- kilo skill target --------------------------------------------------------
+# Kilo Code (OpenCode-based) discovers skills via the `skills.paths` array in
+# kilo.jsonc, not a skills/ directory. --target kilo edits that array in place:
+# comment-preserving (no jq; the file carries // comments and provider secrets),
+# idempotent, each entry tagged `// toolbox:skill:<name>`. A self-marked block
+# is created when no `skills` key exists, so removal restores the file cleanly.
+function Get-KiloConfigPath {
+    if ($env:TOOLBOX_KILO_CONFIG) { return $env:TOOLBOX_KILO_CONFIG }
+    $h = [Environment]::GetFolderPath('UserProfile')
+    foreach ($c in @("$h/.config/kilo/kilo.jsonc", "$h/.config/kilo.jsonc")) {
+        if (Test-Path -LiteralPath $c) { return $c }
+    }
+    return "$h/.config/kilo/kilo.jsonc"
+}
+
+function Handle-SkillKilo([string]$name, [string]$src) {
+    $f = Get-KiloConfigPath
+    $marker = "toolbox:skill:$name"
+    $val = ($src -replace '\\', '/')   # kilo.jsonc uses forward slashes (D:/...)
+    $enc = New-Object Text.UTF8Encoding $false
+
+    switch ($Cmd) {
+        'status' {
+            if ((Test-Path -LiteralPath $f) -and ((Get-Content -LiteralPath $f -Raw) -like "*// $marker*")) {
+                Write-Output "  [ok] $name  kilo.jsonc skills.paths"; $script:State = 'ok'
+            } else { Write-Output "  [ ] $name  not in kilo.jsonc" }
+        }
+        'remove' {
+            if ((Test-Path -LiteralPath $f) -and ((Get-Content -LiteralPath $f -Raw) -like "*// $marker*")) {
+                $raw = [IO.File]::ReadAllText($f)
+                Copy-Item -LiteralPath $f -Destination "$f.bak" -Force
+                # drop the marked path line
+                $new = [regex]::Replace($raw, "(?m)^.*//\s*$([regex]::Escape($marker))\b.*\r?\n", '')
+                # if that emptied the block toolbox created, drop the whole block
+                $bm = [regex]::Match($new, "(?sm)^[ \t]*//>>> toolbox:skills:managed.*?//<<< toolbox:skills:managed.*?\r?\n")
+                if ($bm.Success -and ($bm.Value -notmatch '//\s*toolbox:skill:')) {
+                    $new = $new.Remove($bm.Index, $bm.Length)
+                }
+                [IO.File]::WriteAllText($f, $new, $enc)
+                Write-Output "  [-] $name  removed from kilo.jsonc"
+            } else { Write-Output "  [.] $name  nothing to remove" }
+        }
+        'install' {
+            if (-not (Test-Path -LiteralPath $f)) {
+                [Console]::Error.WriteLine("  [!] $name  kilo.jsonc not found: $f"); return
+            }
+            $raw = [IO.File]::ReadAllText($f)
+            if ($raw -like "*// $marker*") { Write-Output "  [=] $name  already in kilo.jsonc"; return }
+            $nl = if ($raw -match "`r`n") { "`r`n" } else { "`n" }
+            $pathsRe = [regex]'(?m)^([ \t]*)("paths"[ \t]*:[ \t]*\[[ \t]*\r?\n)'
+            if ($pathsRe.IsMatch($raw)) {
+                $new = $pathsRe.Replace($raw, {
+                        param($m)
+                        $ind = $m.Groups[1].Value
+                        $m.Value + $ind + '  "' + $val + '", // ' + $marker + $nl
+                    }, 1)
+            } elseif ($raw -notmatch '"skills"[ \t]*:') {
+                $rootRe = [regex]'(?m)^([ \t]*\{[ \t]*\r?\n)'
+                $block = '  //>>> toolbox:skills:managed (toolbox --target kilo) >>>' + $nl +
+                '  "skills": {' + $nl +
+                '    "paths": [' + $nl +
+                '      "' + $val + '" // ' + $marker + $nl +
+                '    ]' + $nl +
+                '  },' + $nl +
+                '  //<<< toolbox:skills:managed <<<' + $nl
+                $new = $rootRe.Replace($raw, { param($m) $m.Value + $block }, 1)
+            } else {
+                [Console]::Error.WriteLine("  [!] $name  kilo.jsonc has a `"skills`" block without a paths array — add manually:")
+                [Console]::Error.WriteLine("        `"$val`" // $marker"); return
+            }
+            if ($new -notlike "*// $marker*") {
+                [Console]::Error.WriteLine("  [!] $name  could not edit kilo.jsonc (unexpected layout) — add manually:")
+                [Console]::Error.WriteLine("        `"$val`" // $marker"); return
+            }
+            Copy-Item -LiteralPath $f -Destination "$f.bak" -Force
+            [IO.File]::WriteAllText($f, $new, $enc)
+            Write-Output "  [+] $name  -> kilo.jsonc skills.paths (backup: $f.bak)"
+        }
+    }
 }
 
 # --- config handler -----------------------------------------------------------
@@ -1245,12 +1330,16 @@ if (-not $selected) {
 if (-not $Target) {
     $needsTarget = $selected | Where-Object { $_.type -ne 'hook' -and $_.type -ne 'config' -and $_.type -ne 'bin' } | Select-Object -First 1
     if ($needsTarget) {
-        [Console]::Error.WriteLine("toolbox: --target is required (claude|codex|agents) — `"$($needsTarget.name)`" needs it")
+        [Console]::Error.WriteLine("toolbox: --target is required (claude|codex|agents|kilo) — `"$($needsTarget.name)`" needs it")
         exit 2
     }
 }
 
 foreach ($tool in $selected) {
+    if ($Target -eq 'kilo' -and $tool.type -ne 'skill') {
+        Write-Output "  [.] $($tool.name)  --target kilo supports the skill type only — skipped ($($tool.type))"
+        continue
+    }
     switch ($tool.type) {
         'skill'  { Handle-Skill $tool.name $tool.path }
         'hook'   { Handle-Hook $tool.name $tool.path }
