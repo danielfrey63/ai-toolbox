@@ -8,7 +8,7 @@ repository: https://github.com/danielfrey63/ai-toolbox
 license: MIT
 user-invocable: true
 metadata:
-  version: "0.2.6"
+  version: "0.3.27"
 ---
 
 # oracle-mcp — query an Oracle database via the SQLcl MCP server
@@ -48,8 +48,10 @@ gitignored). Pick one connection style:
 - **Wallet / TNS** (Autonomous DB): `TNS_ADMIN` + `ORACLE_TNS_ALIAS`
 
 `ORACLE_MCP_CLIENT` selects the registration target: `print` (default, emits the
-snippet only), `claude` (`claude mcp add`, idempotent), or `kilo` (snippet for
-`~/.config/kilo/kilo.jsonc` — paste by hand, see README JSONC caveat).
+snippet only), `claude` (`claude mcp add`, idempotent), or `kilo` (insert/remove
+a self-marked `oracle` block in Kilo's `kilo.jsonc` idempotently, preserving
+comments — no jq; path via `ORACLE_KILO_CONFIG`, else `~/.config/kilo/kilo.jsonc`,
+else `~/.config/kilo.jsonc`; a `.bak` is written before each change).
 
 ## Querying
 

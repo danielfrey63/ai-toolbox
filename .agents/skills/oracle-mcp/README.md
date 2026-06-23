@@ -33,7 +33,9 @@ bash scripts/setup.sh install
 Set `ORACLE_MCP_CLIENT` in `oracle.env`:
 - `print` — emit the registration snippet only (default, safe)
 - `claude` — `claude mcp add oracle -- sql -mcp` (idempotent)
-- `kilo` — snippet for `~/.config/kilo/kilo.jsonc`
+- `kilo` — insert/remove the `oracle` entry in Kilo's `kilo.jsonc` idempotently,
+  comment-preserving (no jq). Path resolution: `ORACLE_KILO_CONFIG`, else
+  `~/.config/kilo/kilo.jsonc`, else `~/.config/kilo.jsonc`.
 
 ## Connection styles
 
@@ -50,12 +52,28 @@ Set `ORACLE_MCP_CLIENT` in `oracle.env`:
   is **never** exposed to the MCP client or the model.
 - The MCP client config holds only the connection name + `sql -mcp` command.
 
-### JSONC caveat (Kilo)
+### JSONC handling (Kilo)
 
-`~/.config/kilo/kilo.jsonc` contains `//` comments and a `$schema` line. Do
-**not** rewrite it with `jq` (it strips comments and reorders keys). Add the
-`oracle` entry to the existing `mcp` block by hand, or with a
-comment-preserving editor.
+`kilo.jsonc` contains `//` comments, a `$schema` line and (in real installs)
+plaintext provider secrets — so it must **never** be rewritten with `jq` (it
+strips comments, reorders keys, and round-trips the whole file). Instead the
+skill inserts a **self-marked block** as the first child of the `mcp` object:
+
+```jsonc
+"mcp": {
+  //>>> oracle-mcp:managed (oracle-mcp skill) — remove via: setup.sh|ps1 cleanup >>>
+  "oracle": { "type": "local", "command": ["sql", "-mcp"] },
+  //<<< oracle-mcp:managed <<<
+  // ... your other servers, untouched ...
+}
+```
+
+Only those marker lines are added or removed; the rest of the file is left
+byte-for-byte intact (verified by an install→cleanup round-trip). `install` is a
+no-op if the marker is already present; `cleanup` deletes exactly the marked
+block. A `.bak` copy is written next to the config before each mutation. The
+target path is `ORACLE_KILO_CONFIG`, else `~/.config/kilo/kilo.jsonc`, else
+`~/.config/kilo.jsonc`.
 
 ## Offene Verifikation
 

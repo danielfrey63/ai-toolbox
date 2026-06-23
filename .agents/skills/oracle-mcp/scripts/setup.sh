@@ -19,7 +19,7 @@
 # Script version. Named distinctly so sourcing idempotent.sh (which defines
 # its own APP_VERSION) doesn't clobber it. The skill's canonical version is
 # metadata.version in SKILL.md.
-SETUP_VERSION='0.1.0'
+SETUP_VERSION='0.2.0'
 
 set -uo pipefail
 
@@ -43,10 +43,84 @@ load_config() {
 CONN_NAME="${ORACLE_CONN_NAME:-hackathon}"
 MCP_CLIENT="${ORACLE_MCP_CLIENT:-print}"
 
+# Kilo Code config. Path order: explicit override -> ~/.config/kilo/kilo.jsonc
+# -> ~/.config/kilo.jsonc (some installs flatten it). The marker token is the
+# idempotency anchor; it lives inside the template's // markers.
+KILO_MARKER='oracle-mcp:managed'
+resolve_kilo_config() {
+    if [[ -n "${ORACLE_KILO_CONFIG:-}" ]]; then printf '%s\n' "$ORACLE_KILO_CONFIG"; return; fi
+    local c
+    for c in "$HOME/.config/kilo/kilo.jsonc" "$HOME/.config/kilo.jsonc"; do
+        [[ -f "$c" ]] && { printf '%s\n' "$c"; return; }
+    done
+    printf '%s\n' "$HOME/.config/kilo/kilo.jsonc"   # default target if none exists yet
+}
+
 # --- checks (read-only) ------------------------------------------------------
 have_sqlcl()  { command -v sql >/dev/null 2>&1; }
 have_java()   { command -v java >/dev/null 2>&1; }
 have_claude() { command -v claude >/dev/null 2>&1; }
+
+# The managed "oracle" block (marker lines inclusive) sliced from the template,
+# so the template stays the single source of truth. Markers are anchored to the
+# start of the line (^//>>>) so the template's descriptive header — which quotes
+# the marker text mid-line — is not mistaken for the block itself.
+kilo_managed_block() {
+    awk '/^\/\/>>> '"$KILO_MARKER"'/{p=1} p{print} /^\/\/<<< '"$KILO_MARKER"'/{p=0}' \
+        "${CONFIG_DIR}/mcp-registration.jsonc.tmpl"
+}
+
+# Marker present in the Kilo config?
+kilo_registered() {
+    local f; f="$(resolve_kilo_config)"
+    [[ -f "$f" ]] && grep -qF "$KILO_MARKER" "$f"
+}
+
+# Match the target file's final-newline state to the reference's, so a rewrite
+# of a no-trailing-newline file (Kilo writes one) stays byte-identical.
+kilo_match_eof() {
+    local ref="$1" tgt="$2"
+    # tail -c1 yields "" when the last byte is a newline (or the file is empty).
+    if [[ -s "$ref" && -n "$(tail -c1 "$ref")" && -z "$(tail -c1 "$tgt")" ]]; then
+        printf '%s' "$(cat "$tgt")" > "${tgt}.eof" && mv -- "${tgt}.eof" "$tgt"
+    fi
+}
+
+# Insert the managed block as the FIRST child of the `mcp` object (always with a
+# trailing comma -> existing entries are never touched; .jsonc tolerates the
+# trailing comma even if `mcp` was empty). No-op write if no `mcp` opener found.
+kilo_do_install() {
+    local f; f="$(resolve_kilo_config)"
+    [[ -f "$f" ]] || { warn "Kilo config not found: $f"; return 1; }
+    local blk tmp; blk="$(mktemp)"; tmp="$(mktemp)"
+    kilo_managed_block > "$blk"
+    cp -- "$f" "${f}.bak"
+    awk -v bf="$blk" '
+        BEGIN { while ((getline line < bf) > 0) blk[n++]=line }
+        { print }
+        !done && /"mcp"[[:space:]]*:[[:space:]]*\{[[:space:]]*$/ {
+            for (i=0;i<n;i++) print "    " blk[i]; done=1
+        }
+    ' "$f" > "$tmp"
+    if ! grep -qF "$KILO_MARKER" "$tmp"; then rm -f "$tmp" "$blk"; return 1; fi
+    kilo_match_eof "$f" "$tmp"
+    mv -- "$tmp" "$f"; rm -f "$blk"
+}
+
+# Remove the managed block (markers inclusive). Restores the file byte-for-byte.
+kilo_do_cleanup() {
+    local f; f="$(resolve_kilo_config)"
+    [[ -f "$f" ]] || return 0
+    local tmp; tmp="$(mktemp)"
+    cp -- "$f" "${f}.bak"
+    awk '
+        /^[[:space:]]*\/\/>>> '"$KILO_MARKER"'/ {skip=1}
+        !skip { print }
+        /^[[:space:]]*\/\/<<< '"$KILO_MARKER"'/ {skip=0}
+    ' "$f" > "$tmp"
+    kilo_match_eof "$f" "$tmp"
+    mv -- "$tmp" "$f"
+}
 
 # A saved SQLcl connection with our name exists?
 conn_exists() {
@@ -80,7 +154,9 @@ Config: ${CONFIG_FILE}
 Registration target (ORACLE_MCP_CLIENT in oracle.env):
   print   only emit the snippet, change nothing (default)
   claude  register with Claude Code via 'claude mcp add'
-  kilo    emit a snippet for ~/.config/kilo/kilo.jsonc (manual paste)
+  kilo    insert/remove the 'oracle' entry in Kilo's kilo.jsonc, idempotently,
+          preserving comments (no jq). Path: ORACLE_KILO_CONFIG, else
+          ~/.config/kilo/kilo.jsonc, else ~/.config/kilo.jsonc.
 
 Prerequisites (not auto-installed — Oracle license/download required):
   - Oracle SQLcl 25.x on PATH ('sql')   https://www.oracle.com/database/sqldeveloper/technologies/sqlcl/
@@ -104,8 +180,20 @@ cmd_verify() {
     checking "saved SQLcl connection '${CONN_NAME}'"
     if conn_exists; then ok "present"; else warn "not saved yet"; rc=1; fi
 
-    checking "Claude Code MCP registration 'oracle'"
-    if claude_mcp_registered; then ok "registered"; else warn "not registered (ok if target is 'print'/'kilo')"; fi
+    case "$MCP_CLIENT" in
+        kilo)
+            checking "Kilo MCP registration 'oracle'"
+            if kilo_registered; then ok "registered in $(resolve_kilo_config)"; else warn "not registered — run 'install'"; rc=1; fi
+            ;;
+        claude)
+            checking "Claude Code MCP registration 'oracle'"
+            if claude_mcp_registered; then ok "registered"; else warn "not registered — run 'install'"; rc=1; fi
+            ;;
+        *)
+            checking "Claude Code MCP registration 'oracle'"
+            if claude_mcp_registered; then ok "registered"; else warn "not registered (ok if target is 'print')"; fi
+            ;;
+    esac
 
     [[ $rc -eq 0 ]] && ok "ready" || warn "not fully set up — see 'install'"
     return $rc
@@ -157,9 +245,17 @@ cmd_install() {
             fi
             ;;
         kilo)
-            info "ORACLE_MCP_CLIENT=kilo — paste this into the 'mcp' block of ~/.config/kilo/kilo.jsonc:"
-            sed "s/{{ORACLE_CONN_NAME}}/${CONN_NAME}/g" "${CONFIG_DIR}/mcp-registration.jsonc.tmpl" >&2
-            warn "(manual paste; do not jq-rewrite kilo.jsonc — it strips comments. See README.)"
+            local kf; kf="$(resolve_kilo_config)"
+            if [[ ! -f "$kf" ]]; then
+                warn "Kilo config not found: ${kf}"
+                warn "Create it or set ORACLE_KILO_CONFIG, then re-run. Manual snippet for the 'mcp' block:"
+                kilo_managed_block >&2
+            elif desired_state "Kilo MCP 'oracle' in ${kf}" "kilo_registered" "kilo_do_install"; then
+                ok "inserted into ${kf} (backup: ${kf}.bak)"
+            else
+                warn "could not auto-insert (no 'mcp' opener line found). Paste this into the 'mcp' block by hand:"
+                kilo_managed_block >&2
+            fi
             ;;
         *)
             info "ORACLE_MCP_CLIENT=print — registration snippet (change nothing):"
@@ -177,6 +273,13 @@ cmd_cleanup() {
         desired_absent "Claude Code MCP 'oracle'" \
             "! (claude mcp list 2>/dev/null | grep -qiw oracle)" \
             "claude mcp remove oracle"
+    fi
+
+    if kilo_registered; then
+        desired_absent "Kilo MCP 'oracle' in $(resolve_kilo_config)" \
+            "! kilo_registered" "kilo_do_cleanup"
+    else
+        ok "Kilo MCP 'oracle' not present — nothing to remove"
     fi
 
     if conn_exists; then

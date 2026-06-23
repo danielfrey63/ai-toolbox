@@ -1,26 +1,27 @@
 // =============================================================================
-// oracle-mcp — MCP server registration snippet (TEMPLATE)
+// oracle-mcp — MCP server registration block (TEMPLATE / single source)
 // =============================================================================
-// Drop this entry into the `mcp` object of your MCP client's config.
+// This is the canonical "oracle" entry for the `mcp` object of a Kilo Code
+// (~/.config/kilo/kilo.jsonc) or Claude Code MCP config. It is used three ways:
 //
-// For Kilo Code (~/.config/kilo/kilo.jsonc) the surrounding file already has
-// an `mcp` block — add this key inside it. See README "JSONC caveat": edit by
-// hand or with a comment-preserving tool, not a naive `jq` rewrite (jq strips
-// the // comments and the $schema line).
+//   * ORACLE_MCP_CLIENT=kilo   -> the setup script inserts the block (below,
+//                                 including its // markers) as the FIRST child
+//                                 of the existing `mcp` object, idempotently,
+//                                 and removes it again on cleanup. No jq — the
+//                                 surrounding comments and key order survive.
+//   * ORACLE_MCP_CLIENT=print  -> the block is printed for manual paste.
+//   * ORACLE_MCP_CLIENT=claude -> ignored; the script uses `claude mcp add`.
 //
-// For Claude Code, prefer `claude mcp add` over hand-editing — the setup
-// script does this for you when ORACLE_MCP_CLIENT=claude.
+// The `//>>> oracle-mcp:managed` / `//<<< oracle-mcp:managed` markers are the
+// idempotency anchor: install skips if present, cleanup deletes between them.
+// Do NOT remove or rename the markers by hand — run `setup.sh cleanup` instead.
 //
-// The server exposes SQLcl's saved connection "{{ORACLE_CONN_NAME}}"; no
-// credentials appear here — they live in SQLcl's secure store.
+// The server exposes ALL of SQLcl's saved connections (e.g. "{{ORACLE_CONN_NAME}}");
+// no credentials appear here — they live in SQLcl's secure store.
 // =============================================================================
-{
-  "oracle": {
-    "type": "local",
-    "command": ["sql", "-mcp"],
-    "environment": {
-      // Only needed for wallet/TNS connections; harmless to omit otherwise.
-      // "TNS_ADMIN": "/absolute/path/to/wallet"
-    }
-  }
-}
+//>>> oracle-mcp:managed (oracle-mcp skill) — remove via: setup.sh|ps1 cleanup >>>
+"oracle": {
+  "type": "local",
+  "command": ["sql", "-mcp"]
+},
+//<<< oracle-mcp:managed <<<

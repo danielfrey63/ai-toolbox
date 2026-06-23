@@ -11,7 +11,7 @@
 
 param([string]$Action = 'help')
 
-$AppVersion = '0.1.0'
+$AppVersion = '0.2.0'
 $ErrorActionPreference = 'Stop'
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -61,6 +61,66 @@ function Test-ClaudeMcp {
     try { (claude mcp list 2>$null) -match '\boracle\b' } catch { $false }
 }
 
+# --- Kilo Code (~/.config/kilo/kilo.jsonc) ----------------------------------
+$KiloMarker = 'oracle-mcp:managed'
+
+function Get-KiloConfig {
+    if ($env:ORACLE_KILO_CONFIG) { return $env:ORACLE_KILO_CONFIG }
+    $home_ = [Environment]::GetFolderPath('UserProfile')
+    foreach ($c in @("$home_/.config/kilo/kilo.jsonc", "$home_/.config/kilo.jsonc")) {
+        if (Test-Path $c) { return $c }
+    }
+    return "$home_/.config/kilo/kilo.jsonc"   # default target if none exists yet
+}
+
+# The managed "oracle" block (marker lines inclusive) sliced from the template.
+# Markers anchored to start-of-line so the template's descriptive header (which
+# quotes the marker text mid-line) is not mistaken for the block.
+function Get-KiloManagedBlock {
+    $tmpl = Join-Path $ConfigDir 'mcp-registration.jsonc.tmpl'
+    $lines = Get-Content -LiteralPath $tmpl
+    $out = @(); $p = $false
+    foreach ($l in $lines) {
+        if ($l -match "^//>>> $([regex]::Escape($KiloMarker))") { $p = $true }
+        if ($p) { $out += $l }
+        if ($l -match "^//<<< $([regex]::Escape($KiloMarker))") { $p = $false }
+    }
+    return $out
+}
+
+function Test-KiloRegistered {
+    $f = Get-KiloConfig
+    (Test-Path $f) -and ((Get-Content -LiteralPath $f -Raw) -match [regex]::Escape($KiloMarker))
+}
+
+function Install-Kilo {
+    $f = Get-KiloConfig
+    if (-not (Test-Path $f)) { Write-Warn "Kilo config not found: $f"; return $false }
+    $raw = [IO.File]::ReadAllText($f)
+    $nl  = if ($raw -match "`r`n") { "`r`n" } else { "`n" }
+    $block = ((Get-KiloManagedBlock | ForEach-Object { '    ' + $_ }) -join $nl) + $nl
+    # insert as FIRST child of the `mcp` object (after its opener line)
+    $re = [regex]'(?m)^([ \t]*"mcp"[ \t]*:[ \t]*\{[ \t]*\r?\n)'
+    if (-not $re.IsMatch($raw)) { return $false }
+    $new = $re.Replace($raw, { param($m) $m.Groups[1].Value + $block }, 1)
+    if ($new -notmatch [regex]::Escape($KiloMarker)) { return $false }
+    Copy-Item -LiteralPath $f -Destination "$f.bak" -Force
+    [IO.File]::WriteAllText($f, $new, (New-Object Text.UTF8Encoding $false))
+    return $true
+}
+
+function Remove-Kilo {
+    $f = Get-KiloConfig
+    if (-not (Test-Path $f)) { return $true }
+    $raw = [IO.File]::ReadAllText($f)
+    $m = [regex]::Escape($KiloMarker)
+    $re = [regex]"(?s)[ \t]*//>>> $m.*?[ \t]*//<<< $m.*?(\r?\n)"
+    $new = $re.Replace($raw, '')
+    Copy-Item -LiteralPath $f -Destination "$f.bak" -Force
+    [IO.File]::WriteAllText($f, $new, (New-Object Text.UTF8Encoding $false))
+    return $true
+}
+
 function Invoke-Help {
 @"
 oracle-mcp setup $AppVersion — Oracle SQLcl MCP for SQL data queries.
@@ -77,6 +137,9 @@ Config: $ConfigFile
   (copy config/oracle.env.tmpl -> config/oracle.env and fill in; gitignored)
 
 ORACLE_MCP_CLIENT (in oracle.env): print | claude | kilo
+  kilo inserts/removes the 'oracle' entry in Kilo's kilo.jsonc idempotently,
+  preserving comments (no jq). Path: ORACLE_KILO_CONFIG, else
+  ~/.config/kilo/kilo.jsonc, else ~/.config/kilo.jsonc.
 Prerequisites: Oracle SQLcl 25.x on PATH ('sql') + a JVM.
 "@ | Write-Host
 }
@@ -88,7 +151,11 @@ function Invoke-Verify {
     if (Test-Java)  { Write-Ok "JVM found" } else { Write-Warn "java missing"; $rc = 1 }
     if (Test-Path $ConfigFile) { Write-Ok "config present: $ConfigFile" } else { Write-Warn "config absent — run install"; $rc = 1 }
     if (Test-ConnExists) { Write-Ok "saved connection '$(Get-ConnName)' present" } else { Write-Warn "connection not saved"; $rc = 1 }
-    if (Test-ClaudeMcp)  { Write-Ok "Claude Code MCP 'oracle' registered" } else { Write-Warn "Claude MCP not registered (ok for print/kilo)" }
+    switch (Get-McpClient) {
+        'kilo'   { if (Test-KiloRegistered) { Write-Ok "Kilo MCP 'oracle' registered in $(Get-KiloConfig)" } else { Write-Warn "Kilo MCP not registered — run install"; $rc = 1 } }
+        'claude' { if (Test-ClaudeMcp) { Write-Ok "Claude Code MCP 'oracle' registered" } else { Write-Warn "Claude MCP not registered — run install"; $rc = 1 } }
+        default  { if (Test-ClaudeMcp) { Write-Ok "Claude Code MCP 'oracle' registered" } else { Write-Warn "Claude MCP not registered (ok for print)" } }
+    }
     if ($rc -eq 0) { Write-Ok "ready" } else { Write-Warn "not fully set up — see install" }
     return $rc
 }
@@ -120,9 +187,19 @@ function Invoke-Install {
             } else { Write-Warn "ORACLE_MCP_CLIENT=claude but 'claude' not on PATH — skipping" }
         }
         'kilo' {
-            Write-Info "Paste into the 'mcp' block of ~/.config/kilo/kilo.jsonc:"
-            (Get-Content (Join-Path $ConfigDir 'mcp-registration.jsonc.tmpl')) -replace '\{\{ORACLE_CONN_NAME\}\}', (Get-ConnName) | Write-Host
-            Write-Warn "(manual paste; do not jq-rewrite kilo.jsonc — it strips comments. See README.)"
+            $kf = Get-KiloConfig
+            if (-not (Test-Path $kf)) {
+                Write-Warn "Kilo config not found: $kf"
+                Write-Warn "Create it or set ORACLE_KILO_CONFIG, then re-run. Manual snippet for the 'mcp' block:"
+                Get-KiloManagedBlock | Write-Host
+            } elseif (Test-KiloRegistered) {
+                Write-Ok "Kilo MCP 'oracle' already present in $kf — nothing to do"
+            } elseif (Install-Kilo) {
+                Write-Ok "inserted 'oracle' into $kf (backup: $kf.bak)"
+            } else {
+                Write-Warn "could not auto-insert (no 'mcp' opener line found). Paste this by hand:"
+                Get-KiloManagedBlock | Write-Host
+            }
         }
         default {
             Write-Info "ORACLE_MCP_CLIENT=print — registration snippet (change nothing):"
@@ -138,6 +215,13 @@ function Invoke-Cleanup {
         Set-DesiredState "remove Claude Code MCP 'oracle'" `
             { -not (Test-ClaudeMcp) } `
             { claude mcp remove oracle } | Out-Null
+    }
+    if (Test-KiloRegistered) {
+        Set-DesiredState "remove Kilo MCP 'oracle' from $(Get-KiloConfig)" `
+            { -not (Test-KiloRegistered) } `
+            { Remove-Kilo | Out-Null } | Out-Null
+    } else {
+        Write-Ok "Kilo MCP 'oracle' not present — nothing to remove"
     }
     Write-Ok "cleanup done (config file left in place; delete $ConfigFile by hand if desired)"
 }
