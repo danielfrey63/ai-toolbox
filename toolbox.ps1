@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.34.214'
+$APP_VERSION = '0.35.216'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -364,13 +364,49 @@ function Handle-SkillKilo([string]$name, [string]$src) {
             if ($raw -like "*// $marker*") { Write-Output "  [=] $name  already in kilo.jsonc"; return }
             $nl = if ($raw -match "`r`n") { "`r`n" } else { "`n" }
             $pathsRe = [regex]'(?m)^([ \t]*)("paths"[ \t]*:[ \t]*\[[ \t]*\r?\n)'
+            $skillsRe = [regex]'(?m)^([ \t]*)"skills"[ \t]*:[ \t]*\{[ \t]*\r?\n'
+            $skillsEmptyRe = [regex]'(?m)^([ \t]*)"skills"[ \t]*:[ \t]*\{[ \t]*\}([ \t]*,?)[ \t]*\r?\n'
             if ($pathsRe.IsMatch($raw)) {
+                # case 1: insert as the first element of an existing skills.paths array
                 $new = $pathsRe.Replace($raw, {
                         param($m)
                         $ind = $m.Groups[1].Value
                         $m.Value + $ind + '  "' + $val + '", // ' + $marker + $nl
                     }, 1)
+            } elseif ($raw -match '"paths"[ \t]*:') {
+                [Console]::Error.WriteLine("  [!] $name  kilo.jsonc paths array is not in an editable layout — add manually:")
+                [Console]::Error.WriteLine("        `"$val`" // $marker"); return
+            } elseif ($skillsRe.IsMatch($raw)) {
+                # case 2: a multiline skills block exists but has no paths array —
+                # add a self-marked paths array as the first child of skills.
+                $new = $skillsRe.Replace($raw, {
+                        param($m)
+                        $ind = $m.Groups[1].Value
+                        $m.Value +
+                        $ind + '  //>>> toolbox:skills:managed (toolbox --target kilo) >>>' + $nl +
+                        $ind + '  "paths": [' + $nl +
+                        $ind + '    "' + $val + '" // ' + $marker + $nl +
+                        $ind + '  ],' + $nl +
+                        $ind + '  //<<< toolbox:skills:managed <<<' + $nl
+                    }, 1)
+            } elseif ($skillsEmptyRe.IsMatch($raw)) {
+                # case 2b: an empty inline skills block ("skills": {}) — rewrite it
+                # into a block carrying a self-marked paths array.
+                $new = $skillsEmptyRe.Replace($raw, {
+                        param($m)
+                        $ind = $m.Groups[1].Value
+                        $tail = if ($m.Groups[2].Value -match ',') { ',' } else { '' }
+                        $ind + '"skills": {' + $nl +
+                        $ind + '  //>>> toolbox:skills:managed (toolbox --target kilo) >>>' + $nl +
+                        $ind + '  "paths": [' + $nl +
+                        $ind + '    "' + $val + '" // ' + $marker + $nl +
+                        $ind + '  ]' + $nl +
+                        $ind + '  //<<< toolbox:skills:managed <<<' + $nl +
+                        $ind + '}' + $tail + $nl
+                    }, 1)
             } elseif ($raw -notmatch '"skills"[ \t]*:') {
+                # case 3: no skills key — create a self-marked block as first child
+                # of root {. Markers let remove drop the whole block when empty.
                 $rootRe = [regex]'(?m)^([ \t]*\{[ \t]*\r?\n)'
                 $block = '  //>>> toolbox:skills:managed (toolbox --target kilo) >>>' + $nl +
                 '  "skills": {' + $nl +
@@ -381,7 +417,7 @@ function Handle-SkillKilo([string]$name, [string]$src) {
                 '  //<<< toolbox:skills:managed <<<' + $nl
                 $new = $rootRe.Replace($raw, { param($m) $m.Value + $block }, 1)
             } else {
-                [Console]::Error.WriteLine("  [!] $name  kilo.jsonc has a `"skills`" block without a paths array — add manually:")
+                [Console]::Error.WriteLine("  [!] $name  kilo.jsonc has an unexpected skills layout — add manually:")
                 [Console]::Error.WriteLine("        `"$val`" // $marker"); return
             }
             if ($new -notlike "*// $marker*") {

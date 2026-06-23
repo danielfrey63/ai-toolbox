@@ -30,7 +30,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.34.226'
+APP_VERSION='0.35.228'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -432,7 +432,7 @@ handle_skill_kilo() {
             fi
             tmp=$(mktemp); cp -- "$f" "$f.bak"
             if grep -qE '"paths"[[:space:]]*:[[:space:]]*\[[[:space:]]*$' "$f"; then
-                # insert as the first element of an existing skills.paths array
+                # case 1: insert as the first element of an existing skills.paths array
                 awk -v v="$val" -v m="$marker" '
                     { print }
                     !done && /"paths"[[:space:]]*:[[:space:]]*\[[[:space:]]*$/ {
@@ -441,10 +441,50 @@ handle_skill_kilo() {
                         done=1
                     }
                 ' "$f" > "$tmp"
+            elif grep -qE '"paths"[[:space:]]*:' "$f"; then
+                # a paths key exists but not in our line-by-line array form — too
+                # ambiguous to edit safely; fall back to a manual instruction.
+                rm -f "$tmp"
+                printf '  [!] %-18s kilo.jsonc paths array is not in an editable layout — add manually:\n' "$name" >&2
+                printf '        "%s" // %s\n' "$val" "$marker" >&2
+                return
+            elif grep -qE '"skills"[[:space:]]*:[[:space:]]*\{[[:space:]]*$' "$f"; then
+                # case 2: a multiline skills block exists but has no paths array —
+                # add a self-marked paths array as the first child of skills.
+                awk -v v="$val" -v m="$marker" '
+                    { print }
+                    !done && /"skills"[[:space:]]*:[[:space:]]*\{[[:space:]]*$/ {
+                        match($0, /^[[:space:]]*/); ind=substr($0, 1, RLENGTH)
+                        print ind "  //>>> toolbox:skills:managed (toolbox --target kilo) >>>"
+                        print ind "  \"paths\": ["
+                        print ind "    \"" v "\" // " m
+                        print ind "  ],"
+                        print ind "  //<<< toolbox:skills:managed <<<"
+                        done=1
+                    }
+                ' "$f" > "$tmp"
+            elif grep -qE '"skills"[[:space:]]*:[[:space:]]*\{[[:space:]]*\}' "$f"; then
+                # case 2b: an empty inline skills block ("skills": {}) — rewrite
+                # the line into a block carrying a self-marked paths array.
+                awk -v v="$val" -v m="$marker" '
+                    !done && /"skills"[[:space:]]*:[[:space:]]*\{[[:space:]]*\}/ {
+                        match($0, /^[[:space:]]*/); ind=substr($0, 1, RLENGTH)
+                        tail=""; if ($0 ~ /\}[[:space:]]*,[[:space:]]*$/) tail=","
+                        print ind "\"skills\": {"
+                        print ind "  //>>> toolbox:skills:managed (toolbox --target kilo) >>>"
+                        print ind "  \"paths\": ["
+                        print ind "    \"" v "\" // " m
+                        print ind "  ]"
+                        print ind "  //<<< toolbox:skills:managed <<<"
+                        print ind "}" tail
+                        done=1; next
+                    }
+                    { print }
+                ' "$f" > "$tmp"
             elif ! grep -qE '"skills"[[:space:]]*:' "$f"; then
-                # no skills key yet — create a self-marked block as first child of
-                # root {. The markers let `remove` drop the whole block once its
-                # last toolbox-managed path is gone (clean round-trip).
+                # case 3: no skills key yet — create a self-marked block as first
+                # child of root {. The markers let `remove` drop the whole block
+                # once its last toolbox-managed path is gone (clean round-trip).
                 awk -v v="$val" -v m="$marker" '
                     !done && /^[[:space:]]*\{[[:space:]]*$/ {
                         print
@@ -461,7 +501,7 @@ handle_skill_kilo() {
                 ' "$f" > "$tmp"
             else
                 rm -f "$tmp"
-                printf '  [!] %-18s kilo.jsonc has a "skills" block without a paths array — add manually:\n' "$name" >&2
+                printf '  [!] %-18s kilo.jsonc has an unexpected skills layout — add manually:\n' "$name" >&2
                 printf '        "%s" // %s\n' "$val" "$marker" >&2
                 return
             fi
