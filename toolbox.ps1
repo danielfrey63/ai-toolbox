@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.36.218'
+$APP_VERSION = '0.37.220'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -558,7 +558,12 @@ function Test-ClaudeHookMarker([string]$prepo) {
 function _Read-ClaudeSettings([string]$prepo) {
     $settings = Join-Path $prepo '.claude/settings.json'
     if (-not (Test-Path -LiteralPath $settings)) { return $null }
-    try { return Get-Content -LiteralPath $settings -Raw | ConvertFrom-Json -Depth 20 } catch { return $null }
+    # NB: no -Depth on ConvertFrom-Json — that parameter is PowerShell 6.2+ only.
+    # On Windows PowerShell 5.1 it throws a binding error, the catch swallows it,
+    # and every read returns $null → Get-ClaudeHookState reports 'no-settings'
+    # even right after a successful write. settings.json nesting is shallow, so
+    # the default depth is ample. ConvertTo-Json -Depth (the writer) is fine in 5.1.
+    try { return Get-Content -LiteralPath $settings -Raw | ConvertFrom-Json } catch { return $null }
 }
 
 function _Write-ClaudeSettings([string]$prepo, $obj) {
