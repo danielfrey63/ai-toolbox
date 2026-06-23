@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.35.216'
+$APP_VERSION = '0.36.218'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -364,6 +364,7 @@ function Handle-SkillKilo([string]$name, [string]$src) {
             if ($raw -like "*// $marker*") { Write-Output "  [=] $name  already in kilo.jsonc"; return }
             $nl = if ($raw -match "`r`n") { "`r`n" } else { "`n" }
             $pathsRe = [regex]'(?m)^([ \t]*)("paths"[ \t]*:[ \t]*\[[ \t]*\r?\n)'
+            $pathsInlineRe = [regex]'(?m)^([ \t]*)"paths"[ \t]*:[ \t]*\[(.*)\]([ \t]*,?)[ \t]*(\r?\n)'
             $skillsRe = [regex]'(?m)^([ \t]*)"skills"[ \t]*:[ \t]*\{[ \t]*\r?\n'
             $skillsEmptyRe = [regex]'(?m)^([ \t]*)"skills"[ \t]*:[ \t]*\{[ \t]*\}([ \t]*,?)[ \t]*\r?\n'
             if ($pathsRe.IsMatch($raw)) {
@@ -372,6 +373,25 @@ function Handle-SkillKilo([string]$name, [string]$src) {
                         param($m)
                         $ind = $m.Groups[1].Value
                         $m.Value + $ind + '  "' + $val + '", // ' + $marker + $nl
+                    }, 1)
+            } elseif ($pathsInlineRe.IsMatch($raw)) {
+                # case 1-inline: a single-line paths array. Normalize to multiline
+                # so the new entry can carry its // marker without commenting out
+                # siblings that follow it on the same line.
+                $new = $pathsInlineRe.Replace($raw, {
+                        param($m)
+                        $ind = $m.Groups[1].Value
+                        $inner = $m.Groups[2].Value.Trim()
+                        $trail = if ($m.Groups[3].Value -match ',') { ',' } else { '' }
+                        $eol = $m.Groups[4].Value
+                        $s = $ind + '"paths": [' + $nl
+                        if ($inner -eq '') {
+                            $s += $ind + '  "' + $val + '" // ' + $marker + $nl
+                        } else {
+                            $s += $ind + '  "' + $val + '", // ' + $marker + $nl
+                            $s += $ind + '  ' + $inner + $nl
+                        }
+                        $s + $ind + ']' + $trail + $eol
                     }, 1)
             } elseif ($raw -match '"paths"[ \t]*:') {
                 [Console]::Error.WriteLine("  [!] $name  kilo.jsonc paths array is not in an editable layout — add manually:")

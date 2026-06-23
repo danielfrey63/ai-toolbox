@@ -30,7 +30,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.35.228'
+APP_VERSION='0.36.230'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -441,9 +441,33 @@ handle_skill_kilo() {
                         done=1
                     }
                 ' "$f" > "$tmp"
+            elif grep -qE '"paths"[[:space:]]*:[[:space:]]*\[.*\]' "$f"; then
+                # case 1-inline: a single-line paths array. Normalize it to the
+                # multiline form so the new entry can carry its // marker without
+                # commenting out siblings that follow it on the same line.
+                awk -v v="$val" -v m="$marker" '
+                    !done && /"paths"[[:space:]]*:[[:space:]]*\[.*\]/ {
+                        match($0, /^[[:space:]]*/); ind=substr($0, 1, RLENGTH)
+                        pre=$0;  sub(/\[.*/, "[", pre)         # prefix incl. first "["
+                        rest=$0; sub(/^[^[]*\[/, "", rest)     # everything after first "["
+                        pos=0; for (i=length(rest); i>=1; i--) if (substr(rest,i,1)=="]") { pos=i; break }
+                        inner=substr(rest, 1, pos-1); trail=substr(rest, pos+1)
+                        gsub(/^[[:space:]]+|[[:space:]]+$/, "", inner)
+                        print pre
+                        if (inner == "") {
+                            print ind "  \"" v "\" // " m
+                        } else {
+                            print ind "  \"" v "\", // " m
+                            print ind "  " inner
+                        }
+                        print ind "]" trail
+                        done=1; next
+                    }
+                    { print }
+                ' "$f" > "$tmp"
             elif grep -qE '"paths"[[:space:]]*:' "$f"; then
-                # a paths key exists but not in our line-by-line array form — too
-                # ambiguous to edit safely; fall back to a manual instruction.
+                # a paths key exists but not in a layout we can edit safely —
+                # fall back to a manual instruction.
                 rm -f "$tmp"
                 printf '  [!] %-18s kilo.jsonc paths array is not in an editable layout — add manually:\n' "$name" >&2
                 printf '        "%s" // %s\n' "$val" "$marker" >&2
