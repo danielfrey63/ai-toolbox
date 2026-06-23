@@ -8,7 +8,7 @@ repository: https://github.com/danielfrey63/ai-toolbox
 license: MIT
 user-invocable: true
 metadata:
-  version: "0.3.27"
+  version: "0.4.28"
 ---
 
 # oracle-mcp — query an Oracle database via the SQLcl MCP server
