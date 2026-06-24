@@ -125,8 +125,10 @@ kilo_do_cleanup() {
 # A saved SQLcl connection with our name exists?
 conn_exists() {
     have_sqlcl || return 1
-    # `connmgr list` prints saved connection names; tolerate older syntax.
-    { printf 'conn -list\n' | sql -nolog 2>/dev/null; } | grep -qiw "$CONN_NAME"
+    # SQLcl 25.x/26.x list saved connections via `connmgr list` (the older
+    # `conn -list` is rejected as an unknown option on 26.1). Cold-starting the
+    # SQLcl JVM is slow, so this check is intentionally only run on demand.
+    { printf 'connmgr list\nexit\n' | sql -nolog 2>/dev/null; } | grep -qiw "$CONN_NAME"
 }
 
 # MCP server registered with Claude Code under the name "oracle"?

@@ -54,7 +54,9 @@ function Get-McpClient { if ($env:ORACLE_MCP_CLIENT) { $env:ORACLE_MCP_CLIENT } 
 
 function Test-ConnExists {
     if (-not (Test-Sqlcl)) { return $false }
-    try { ("conn -list" | sql -nolog 2>$null) -match "\b$(Get-ConnName)\b" } catch { $false }
+    # SQLcl 25.x/26.x list saved connections via `connmgr list` (older
+    # `conn -list` is rejected as an unknown option on 26.1).
+    try { (("connmgr list`nexit") | sql -nolog 2>$null) -match "\b$(Get-ConnName)\b" } catch { $false }
 }
 function Test-ClaudeMcp {
     if (-not (Test-Claude)) { return $false }
