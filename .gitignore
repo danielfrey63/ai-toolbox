@@ -12,6 +12,6 @@ aiprofil/profiles/*.env
 cc-profil/profiles/*.env
 !cc-profil/profiles/*.env.example
 
-# oracle-mcp — real connection config holds DB host/user/password; only the
+# oracle-skill — real connection config holds DB host/user/password; only the
 # *.tmpl templates are committed.
-.agents/skills/oracle-mcp/config/oracle.env
+.agents/skills/oracle-skill/config/oracle.env

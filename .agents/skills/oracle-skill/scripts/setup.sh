@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# oracle-mcp setup — provision an Oracle MCP server (Oracle SQLcl `sql -mcp`)
+# oracle-skill setup — provision an Oracle MCP server (Oracle SQLcl `sql -mcp`)
 #                    for natural-language SQL data queries. Bash variant.
 # =============================================================================
 # Idempotent (desired-state): every change is check -> mutate-if-needed ->
@@ -46,7 +46,7 @@ MCP_CLIENT="${ORACLE_MCP_CLIENT:-print}"
 # Kilo Code config. Path order: explicit override -> ~/.config/kilo/kilo.jsonc
 # -> ~/.config/kilo.jsonc (some installs flatten it). The marker token is the
 # idempotency anchor; it lives inside the template's // markers.
-KILO_MARKER='oracle-mcp:managed'
+KILO_MARKER='oracle-skill:managed'
 resolve_kilo_config() {
     if [[ -n "${ORACLE_KILO_CONFIG:-}" ]]; then printf '%s\n' "$ORACLE_KILO_CONFIG"; return; fi
     local c
@@ -138,7 +138,7 @@ claude_mcp_registered() {
 # --- sub-commands ------------------------------------------------------------
 cmd_help() {
     cat <<EOF
-oracle-mcp setup ${SETUP_VERSION} — Oracle SQLcl MCP for SQL data queries.
+oracle-skill setup ${SETUP_VERSION} — Oracle SQLcl MCP for SQL data queries.
 
 Usage: bash $(basename "$0") <action>
 
@@ -165,7 +165,7 @@ EOF
 }
 
 cmd_verify() {
-    show_header "oracle-mcp verify"
+    show_header "oracle-skill verify"
     local rc=0
 
     checking "Oracle SQLcl ('sql') on PATH"
@@ -200,7 +200,7 @@ cmd_verify() {
 }
 
 cmd_install() {
-    show_header "oracle-mcp install"
+    show_header "oracle-skill install"
 
     if ! have_sqlcl; then
         fail "Oracle SQLcl not on PATH. Install SQLcl 25.x first (see 'help'), then re-run."
@@ -267,7 +267,7 @@ cmd_install() {
 }
 
 cmd_cleanup() {
-    show_header "oracle-mcp cleanup"
+    show_header "oracle-skill cleanup"
 
     if have_claude; then
         desired_absent "Claude Code MCP 'oracle'" \

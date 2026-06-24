@@ -1,5 +1,5 @@
 // =============================================================================
-// oracle-mcp — MCP server registration block (TEMPLATE / single source)
+// oracle-skill — MCP server registration block (TEMPLATE / single source)
 // =============================================================================
 // This is the canonical "oracle" entry for the `mcp` object of a Kilo Code
 // (~/.config/kilo/kilo.jsonc) or Claude Code MCP config. It is used three ways:
@@ -12,16 +12,16 @@
 //   * ORACLE_MCP_CLIENT=print  -> the block is printed for manual paste.
 //   * ORACLE_MCP_CLIENT=claude -> ignored; the script uses `claude mcp add`.
 //
-// The `//>>> oracle-mcp:managed` / `//<<< oracle-mcp:managed` markers are the
+// The `//>>> oracle-skill:managed` / `//<<< oracle-skill:managed` markers are the
 // idempotency anchor: install skips if present, cleanup deletes between them.
 // Do NOT remove or rename the markers by hand — run `setup.sh cleanup` instead.
 //
 // The server exposes ALL of SQLcl's saved connections (e.g. "{{ORACLE_CONN_NAME}}");
 // no credentials appear here — they live in SQLcl's secure store.
 // =============================================================================
-//>>> oracle-mcp:managed (oracle-mcp skill) — remove via: setup.sh|ps1 cleanup >>>
+//>>> oracle-skill:managed (oracle-skill skill) — remove via: setup.sh|ps1 cleanup >>>
 "oracle": {
   "type": "local",
   "command": ["sql", "-mcp"]
 },
-//<<< oracle-mcp:managed <<<
+//<<< oracle-skill:managed <<<

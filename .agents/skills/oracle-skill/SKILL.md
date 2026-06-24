@@ -1,5 +1,5 @@
 ---
-name: oracle-mcp
+name: oracle-skill
 description: Set up and use an Oracle MCP server for natural-language SQL data queries against an Oracle database. Uses Oracle SQLcl 25.x's built-in MCP server (`sql -mcp`), which exposes named, saved connections so the model can run SQL WITHOUT ever seeing the database password. Use when the user wants to query an Oracle DB, set up Oracle data access for an agent, register an Oracle MCP server, or test Oracle connectivity. Idempotent verify/install/cleanup setup; connection config supports both Easy Connect (on-prem) and wallet/TNS (Autonomous DB).
 argument-hint: "[verify|install|cleanup] or a natural-language question about the data"
 allowed-tools: Bash, Read, AskUserQuestion
@@ -11,7 +11,7 @@ metadata:
   version: "0.4.28"
 ---
 
-# oracle-mcp — query an Oracle database via the SQLcl MCP server
+# oracle-skill — query an Oracle database via the SQLcl MCP server
 
 This skill gives you SQL access to an Oracle database. Oracle SQLcl 25.x ships a
 built-in **MCP server** (`sql -mcp`) that exposes SQLcl's *saved, named

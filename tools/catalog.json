@@ -26,9 +26,9 @@
       "description": "Scaffold, audit or verify-loop idempotent DevOps scripts."
     },
     {
-      "name": "oracle-mcp",
+      "name": "oracle-skill",
       "type": "skill",
-      "path": ".agents/skills/oracle-mcp",
+      "path": ".agents/skills/oracle-skill",
       "description": "Set up + use an Oracle MCP server (SQLcl sql -mcp) for SQL data queries."
     },
     {

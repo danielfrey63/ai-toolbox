@@ -1,4 +1,4 @@
-# oracle-mcp
+# oracle-skill
 
 Set up and use an **Oracle MCP server** for natural-language SQL data queries.
 The skill targets **Oracle SQLcl 25.x's built-in MCP server** (`sql -mcp`) and
@@ -61,9 +61,9 @@ skill inserts a **self-marked block** as the first child of the `mcp` object:
 
 ```jsonc
 "mcp": {
-  //>>> oracle-mcp:managed (oracle-mcp skill) — remove via: setup.sh|ps1 cleanup >>>
+  //>>> oracle-skill:managed (oracle-skill skill) — remove via: setup.sh|ps1 cleanup >>>
   "oracle": { "type": "local", "command": ["sql", "-mcp"] },
-  //<<< oracle-mcp:managed <<<
+  //<<< oracle-skill:managed <<<
   // ... your other servers, untouched ...
 }
 ```
@@ -92,7 +92,7 @@ Once verified against a real SQLcl 25.x install, these can be promoted to
 ## Layout
 
 ```
-oracle-mcp/
+oracle-skill/
 ├── SKILL.md                       skill definition (preflight + query workflow)
 ├── README.md                      this file
 ├── lib/idempotent.sh              desired-state runtime (copied from idempotent-devops)

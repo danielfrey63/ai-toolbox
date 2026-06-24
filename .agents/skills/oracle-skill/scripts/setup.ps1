@@ -1,5 +1,5 @@
 ﻿# =============================================================================
-# oracle-mcp setup — provision an Oracle MCP server (Oracle SQLcl `sql -mcp`)
+# oracle-skill setup — provision an Oracle MCP server (Oracle SQLcl `sql -mcp`)
 #                    for natural-language SQL data queries. PowerShell variant.
 # =============================================================================
 # Mirrors setup.sh. Idempotent: every change is check -> mutate-if-needed ->
@@ -62,7 +62,7 @@ function Test-ClaudeMcp {
 }
 
 # --- Kilo Code (~/.config/kilo/kilo.jsonc) ----------------------------------
-$KiloMarker = 'oracle-mcp:managed'
+$KiloMarker = 'oracle-skill:managed'
 
 function Get-KiloConfig {
     if ($env:ORACLE_KILO_CONFIG) { return $env:ORACLE_KILO_CONFIG }
@@ -123,7 +123,7 @@ function Remove-Kilo {
 
 function Invoke-Help {
 @"
-oracle-mcp setup $AppVersion — Oracle SQLcl MCP for SQL data queries.
+oracle-skill setup $AppVersion — Oracle SQLcl MCP for SQL data queries.
 
 Usage: pwsh setup.ps1 <action>
 
@@ -145,7 +145,7 @@ Prerequisites: Oracle SQLcl 25.x on PATH ('sql') + a JVM.
 }
 
 function Invoke-Verify {
-    Write-Host "=== oracle-mcp verify ===" -ForegroundColor Cyan
+    Write-Host "=== oracle-skill verify ===" -ForegroundColor Cyan
     $rc = 0
     if (Test-Sqlcl) { Write-Ok "SQLcl found: $((Get-Command sql).Source)" } else { Write-Warn "SQLcl missing — install 25.x"; $rc = 1 }
     if (Test-Java)  { Write-Ok "JVM found" } else { Write-Warn "java missing"; $rc = 1 }
@@ -161,7 +161,7 @@ function Invoke-Verify {
 }
 
 function Invoke-Install {
-    Write-Host "=== oracle-mcp install ===" -ForegroundColor Cyan
+    Write-Host "=== oracle-skill install ===" -ForegroundColor Cyan
     if (-not (Test-Sqlcl)) { Write-Fail "Oracle SQLcl not on PATH. Install 25.x first, then re-run."; return }
 
     Set-DesiredState "config file $ConfigFile" `
@@ -210,7 +210,7 @@ function Invoke-Install {
 }
 
 function Invoke-Cleanup {
-    Write-Host "=== oracle-mcp cleanup ===" -ForegroundColor Cyan
+    Write-Host "=== oracle-skill cleanup ===" -ForegroundColor Cyan
     if ((Test-Claude) -and (Test-ClaudeMcp)) {
         Set-DesiredState "remove Claude Code MCP 'oracle'" `
             { -not (Test-ClaudeMcp) } `
