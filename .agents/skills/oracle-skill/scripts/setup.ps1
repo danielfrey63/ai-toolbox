@@ -56,7 +56,16 @@ function Test-ConnExists {
     if (-not (Test-Sqlcl)) { return $false }
     # SQLcl 25.x/26.x list saved connections via `connmgr list` (older
     # `conn -list` is rejected as an unknown option on 26.1).
-    try { (("connmgr list`nexit") | sql -nolog 2>$null) -match "\b$(Get-ConnName)\b" } catch { $false }
+    # NB: `connmgr list` colorizes names with ANSI escapes (e.g. ESC[0;33m...ESC[0m),
+    # so a plain `\b<name>\b` fails (the 'm' before the name is \w). Strip ANSI
+    # codes first, then match with alnum-only boundaries. Use [char]27 for ESC
+    # (PS 5.1 has no `e escape — it would match a literal 'e').
+    try {
+        $out = (("connmgr list`nexit") | sql -nolog 2>$null) -join "`n"
+        $esc = [char]27
+        $clean = [regex]::Replace($out, "$esc\[[0-9;]*m", '')
+        $clean -match "(?<![A-Za-z0-9])$(Get-ConnName)(?![A-Za-z0-9])"
+    } catch { $false }
 }
 function Test-ClaudeMcp {
     if (-not (Test-Claude)) { return $false }

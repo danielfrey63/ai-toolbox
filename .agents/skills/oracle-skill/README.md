@@ -1,116 +1,254 @@
 # oracle-skill
 
-Set up and use an **Oracle MCP server** for natural-language SQL data queries.
-The skill targets **Oracle SQLcl 25.x/26.x's built-in MCP server** (`sql -mcp`) and
-wires it into an MCP client (Claude Code or Kilo) with an idempotent
-`verify / install / cleanup` flow.
+Give an LLM agent read-mostly SQL access to an Oracle database via Oracle SQLcl's
+built-in MCP server (`sql -mcp`). The password is stored in SQLcl's secure store
+and **never reaches the model** — the agent queries by *connection name*.
 
-## Why SQLcl's MCP server (Optionsvergleich)
+> This README is written so an agent (GitHub Copilot, Claude Code, Kilo Code)
+> can install the skill autonomously. Steps are imperative and ordered. The
+> only human-only step is **typing the DB password** into a terminal at §4.
 
-| Option | What it is | Pro | Contra |
-|---|---|---|---|
-| **Oracle SQLcl MCP** (chosen) | `sql -mcp`, built into SQLcl 25.x/26.x | Official Oracle; **password never reaches the model** (saved connection in SQLcl's secure store); supports Easy Connect *and* wallet/Autonomous; nothing extra to write | Needs SQLcl + JVM installed (Oracle download, license acceptance) |
-| python-oracledb (community) | thin Python MCP over `python-oracledb` | Lightweight; thin mode needs no Oracle client; quick to spin up | Community-maintained; credentials typically passed to the server config (more exposure); you own the query surface/safety |
-| DBHub (generic) | bytebase/dbhub, multi-DB MCP | One server for Oracle + Postgres + MySQL …; good when several DBs are in play | Oracle is one backend among many; generic SQL surface; another moving part |
+---
 
-**Decision:** SQLcl wins for a hackathon Oracle test because it is the official
-path and keeps the DB password out of the model and out of the client config —
-the single most valuable property when handing data access to an agent.
+## 0. Preconditions (verify before doing anything)
 
-## Quick start
+| Command | Expected | If missing |
+|---|---|---|
+| `sql -V` | SQLcl 25.x or 26.x | Install Oracle SQLcl + accept license; put `sql` on PATH |
+| `java -version` | any JRE/JDK 11+ | Install a JVM and ensure `java` on PATH |
+
+Stop and tell the user if either is missing — do not auto-install Oracle binaries.
+
+---
+
+## 1. Place the skill folder
+
+All three supported hosts read **the same** `.claude/skills/` convention.
+
+| Scope | Folder |
+|---|---|
+| User (Win) | `C:\Users\<u>\.claude\skills\oracle-skill\` |
+| User (mac/linux) | `~/.claude/skills/oracle-skill/` |
+| Workspace | `<workspace>/.claude/skills/oracle-skill/` |
+
+> **Do not** put it in `%APPDATA%\Code\User\prompts\skills\` — that path is for
+> VS Code `.prompt.md` slash-commands, not `SKILL.md` skills, and Copilot will
+> silently ignore it.
+
+After copy: **reload the host**.
+- VS Code (Copilot): Command Palette → *Developer: Reload Window*
+- Claude Code / Kilo: restart the CLI / extension
+
+---
+
+## 2. Configure the connection
 
 ```bash
-# 1. preflight
-bash scripts/setup.sh verify           # Windows: pwsh scripts/setup.ps1 verify
-
-# 2. configure
-cp config/oracle.env.tmpl config/oracle.env   # then edit (gitignored)
-
-# 3. install (scaffolds config, guides connection-save, registers the server)
-bash scripts/setup.sh install
+cp config/oracle.env.tmpl config/oracle.env     # gitignored — never commit
 ```
 
-Set `ORACLE_MCP_CLIENT` in `oracle.env`:
-- `print` — emit the registration snippet only (default, safe)
-- `claude` — `claude mcp add oracle -- sql -mcp` (idempotent)
-- `kilo` — insert/remove the `oracle` entry in Kilo's `kilo.jsonc` idempotently,
-  comment-preserving (no jq). Path resolution: `ORACLE_KILO_CONFIG`, else
-  `~/.config/kilo/kilo.jsonc`, else `~/.config/kilo.jsonc`.
+Edit `config/oracle.env`. Pick **one** style:
 
-## Connection styles
+| Field | Style A (Easy Connect, on-prem) | Style B (TNS / Wallet, Autonomous) |
+|---|---|---|
+| `ORACLE_CONN_NAME` | logical name the MCP server will expose (e.g. `hackathon`) | same |
+| `ORACLE_USER` | DB user | DB user |
+| `ORACLE_PASSWORD` | leave empty — prompted at §4 | same |
+| `ORACLE_HOST` / `ORACLE_PORT` / `ORACLE_SERVICE` | **set** | leave |
+| `TNS_ADMIN` | leave | absolute path to directory with `tnsnames.ora` (+ wallet for Autonomous) |
+| `ORACLE_TNS_ALIAS` | leave | TNS alias from that `tnsnames.ora` |
+| `ORACLE_MCP_CLIENT` | `print` (Copilot), `claude`, or `kilo` | same |
 
-Connection details live in `config/oracle.env` (copied from `oracle.env.tmpl`,
-gitignored). Pick **one** style:
+**`TNS_ADMIN` placement (Style B):** use a stable, non-synced local path such as
+`~/.oracle/tns/` or `C:\Users\<u>\.oracle\tns\`. **Avoid OneDrive / Google
+Drive** — paths break on other machines and may leak `tnsnames.ora` into sync.
 
-- **Easy Connect** (on-prem): `ORACLE_HOST` / `ORACLE_PORT` / `ORACLE_SERVICE`
-- **Wallet / TNS** (Autonomous DB, mTLS): `TNS_ADMIN` → directory holding
-  `tnsnames.ora` (+ `sqlnet.ora` / wallet), `ORACLE_TNS_ALIAS` → an entry from
-  that `tnsnames.ora` (e.g. `mydb_high`). To switch databases, point
-  `TNS_ADMIN` at a different directory or pick a different `ORACLE_TNS_ALIAS`.
-  With Easy Connect, `tnsnames.ora` is not used at all — the two styles are
-  alternatives.
+---
 
-> **Note (current limitation):** the values in `oracle.env` are *informational*
-> today — the skill does **not** yet assemble the connect string for you. When
-> you run the deferred `connect -save` step (below), you type the
-> `host:port/service` or the TNS alias by hand. `ORACLE_CONN_NAME` *is* used:
-> it is the saved-connection name the MCP server exposes.
+## 3. Run verify
 
-## Security
+```powershell
+# Windows
+powershell -File scripts\setup.ps1 verify
+```
+```bash
+# macOS / Linux
+bash scripts/setup.sh verify
+```
 
-- The real `config/oracle.env` is **gitignored**; only `oracle.env.tmpl` (with
-  placeholders) is committed.
-- The password is consumed once when saving the SQLcl connection and stored in
-  SQLcl's secure store — it is **not** persisted in `oracle.env` afterward and
-  is **never** exposed to the MCP client or the model.
-- The MCP client config holds only the connection name + `sql -mcp` command.
+Expect all `[OK]` except *connection not saved* (fixed in §4) and the MCP-client
+line (fixed in §5). Exit code 0 = ready; non-zero = surface what's missing.
 
-### JSONC handling (Kilo)
+---
 
-`kilo.jsonc` contains `//` comments, a `$schema` line and (in real installs)
-plaintext provider secrets — so it must **never** be rewritten with `jq` (it
-strips comments, reorders keys, and round-trips the whole file). Instead the
-skill inserts a **self-marked block** as the first child of the `mcp` object:
+## 4. Save the SQLcl connection (interactive — user types password)
+
+The agent must launch this in a **visible, attached terminal** and then hand
+control to the user for the password prompt. Never relay the password through a
+tool call or LLM-routed input.
+
+```powershell
+# Windows (only for Style B: TNS)
+$env:TNS_ADMIN = "C:\Users\<u>\.oracle\tns"
+sql /nolog
+```
+```bash
+# macOS / Linux (only for Style B)
+export TNS_ADMIN="$HOME/.oracle/tns"
+sql /nolog
+```
+
+At the `SQL>` prompt:
+
+```
+connect -save <ORACLE_CONN_NAME> -savepwd <ORACLE_USER>@<connect-target>
+```
+
+where `<connect-target>` is:
+- Style A: `host:port/service_name` (matching `oracle.env`)
+- Style B: the TNS alias (e.g. `GISATEST`)
+
+SQLcl prints `Kennwort?` / `Password?` — the **user** types it, presses Enter.
+Then verify and exit:
+
+```
+connmgr list                       -- should show <ORACLE_CONN_NAME>
+connmgr test <ORACLE_CONN_NAME>    -- "Verbindungstest erfolgreich"
+exit
+```
+
+---
+
+## 5. Register the MCP server with the chat host
+
+Pick the block that matches your host.
+
+### 5a. GitHub Copilot (VS Code) — manual
+
+Set `ORACLE_MCP_CLIENT=print` in `oracle.env`. Then edit:
+
+| OS | MCP config path |
+|---|---|
+| Windows | `%APPDATA%\Code\User\mcp.json` |
+| macOS | `~/Library/Application Support/Code/User/mcp.json` |
+| Linux | `~/.config/Code/User/mcp.json` |
 
 ```jsonc
-"mcp": {
-  //>>> oracle-skill:managed (oracle-skill skill) — remove via: setup.sh|ps1 cleanup >>>
-  "oracle": { "type": "local", "command": ["sql", "-mcp"] },
-  //<<< oracle-skill:managed <<<
-  // ... your other servers, untouched ...
+{
+  "servers": {
+    "oracle": {
+      "type": "stdio",
+      "command": "sql",
+      "args": ["-mcp"]
+    }
+  },
+  "inputs": []
 }
 ```
 
-Only those marker lines are added or removed; the rest of the file is left
-byte-for-byte intact (verified by an install→cleanup round-trip). `install` is a
-no-op if the marker is already present; `cleanup` deletes exactly the marked
-block. A `.bak` copy is written next to the config before each mutation. The
-target path is `ORACLE_KILO_CONFIG`, else `~/.config/kilo/kilo.jsonc`, else
-`~/.config/kilo.jsonc`.
+Start it: Command Palette → *MCP: List Servers* → `oracle` → *Start*. In the
+chat tool picker, enable the `oracle` server's tools.
 
-## Offene Verifikation
+### 5b. Claude Code — automated
 
-Two credential-/state-bearing steps are intentionally **deferred** (the script
-prints guarded instructions instead of mutating) until confirmed against the
-target SQLcl build:
+Set `ORACLE_MCP_CLIENT=claude`. Then `install` (§5d) runs `claude mcp add oracle -- sql -mcp`
+idempotently. Manual equivalent:
 
-1. **Saving the connection** — run interactively:
-   `connect -save <name> -savepwd <user>@<easyconnect-or-tns>`. The exact flag
-   set varies across SQLcl versions; verify before automating. (SQLcl 26.1 also
-   exposes `connmgr add` / `connmgr test` as a non-interactive path — a future
-   version of this skill may build the connect string from `oracle.env` and use
-   it.)
-2. **Dropping the connection** in `cleanup` — on SQLcl 26.1 the command is
-   `connmgr delete <name>` (the older `conn -delete` no longer applies). Still
-   printed as a guarded hint rather than run automatically.
+```bash
+claude mcp add oracle -- sql -mcp
+claude mcp list                       # expect 'oracle'
+```
 
-> **Detection (implemented):** the saved-connection check uses
-> `connmgr list` — verified against SQLcl 26.1.2. The older `conn -list` is
-> rejected as an unknown option on 26.x.
+### 5c. Kilo Code — automated (comment-preserving)
 
-Once the save/drop mutations are verified end-to-end against a real install,
-they can be promoted to `desired_state` mutations in `scripts/setup.sh` /
-`setup.ps1`.
+Set `ORACLE_MCP_CLIENT=kilo` (optionally `ORACLE_KILO_CONFIG` for a custom
+`kilo.jsonc` path; defaults: `~/.config/kilo/kilo.jsonc`, then `~/.config/kilo.jsonc`).
+`install` inserts a self-marked block as the first child of the `mcp` object
+without touching surrounding comments / `$schema` / secrets; `cleanup` removes
+exactly that block. A `.bak` is written before each mutation.
+
+### 5d. Run install
+
+```powershell
+powershell -File scripts\setup.ps1 install       # Windows
+bash scripts/setup.sh install                    # mac/linux
+```
+
+Re-run `verify` — expect `ready`.
+
+---
+
+## 6. Querying
+
+**Preferred** (once the MCP tools are visible in the chat host): call the
+`oracle` MCP server's tool with the connection name and the SQL.
+
+**Terminal fallback** (always works, scriptable):
+
+```powershell
+@"
+connect -name <ORACLE_CONN_NAME>
+SET SQLFORMAT ANSICONSOLE
+<your SQL>;
+EXIT
+"@ | sql /nolog
+```
+
+Only run **read-only** SQL (`SELECT`, `EXPLAIN`, `DESC`) without explicit user
+confirmation. Any DML/DDL (`INSERT/UPDATE/DELETE/CREATE/ALTER/DROP/TRUNCATE`)
+requires an explicit *"yes, run it"* from the user, ideally with an estimated
+row-impact shown first.
+
+---
+
+## 7. Cleanup (uninstall)
+
+```bash
+bash scripts/setup.sh cleanup        # or powershell setup.ps1 cleanup
+```
+
+Removes the MCP registration (Claude or Kilo) idempotently. Dropping the saved
+SQLcl connection is **printed as a hint** rather than executed (SQLcl 26.1:
+`connmgr delete <name>`) — run it by hand if desired. `config/oracle.env`
+is intentionally left in place.
+
+---
+
+## Security
+
+- `config/oracle.env` is **gitignored**; only `oracle.env.tmpl` is committed.
+- `ORACLE_PASSWORD` is consumed once at §4, then lives in SQLcl's secure store —
+  not in `oracle.env`, not in the MCP client config, never in the model.
+- The MCP client config holds only the connection name and `sql -mcp` launch.
+- The agent must refuse to log, echo, or `Write-Host` any password it ever sees.
+
+---
+
+## Known issues & fixes
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `verify` reports *connection not saved* although `connmgr list` shows it | `connmgr list` colorizes the name with ANSI (`ESC[0;33m…ESC[0m`); surrounding `m`/`[` are word-chars so `\b<name>\b` fails | Strip ANSI then match with alnum-only lookarounds. Applied in `setup.ps1` `Test-ConnExists`. |
+| Same as above, on Windows PowerShell 5.1 | PS 5.1 has no `` `e `` escape (PS 6+ only); the literal `` `e `` matches `e`, not ESC (0x1B) | Use `[char]27` in the regex (also applied). |
+| `sql /@<name>` → `ORA-12154` | `/@name` treats `<name>` as a TNS alias, not a saved connection | From `sql /nolog`, use `connect -name <name>`. |
+| `sql -S <name>` → "Verbindung konnte nicht hergestellt werden" | `-S` is silent-mode for a connect-string arg, not a saved-name lookup | Same — `connect -name` inside `sql /nolog`. |
+| `tnsnames.ora` works on dev, not on CI / another box | Path under OneDrive / Google Drive isn't mounted there | Move file to `~/.oracle/tns/` (or `%USERPROFILE%\.oracle\tns\`). |
+| Skill invisible to Copilot after install | Placed in `%APPDATA%\Code\User\prompts\skills\` | Move to `~/.claude/skills/oracle-skill/`; reload window. |
+| `bash setup.sh` reports connection missing on a working install | The bash detector has the same ANSI blind spot as the original PowerShell one (not yet patched here) | Workaround: check `connmgr list` manually; PR welcome. |
+
+---
+
+## Deferred mutations (intentionally not automated)
+
+The credential-bearing **save** (`connect -save … -savepwd …`) and the
+**drop** (`connmgr delete <name>` on SQLcl 26.1) are printed as guarded hints
+instead of being run by the script. They can be promoted to `desired_state`
+mutations once verified end-to-end against the target SQLcl build.
+
+Saved-connection **detection** uses `connmgr list` (verified on SQLcl 26.1.2);
+the older `conn -list` is rejected as unknown on 26.x.
+
+---
 
 ## Layout
 
@@ -118,11 +256,11 @@ they can be promoted to `desired_state` mutations in `scripts/setup.sh` /
 oracle-skill/
 ├── SKILL.md                       skill definition (preflight + query workflow)
 ├── README.md                      this file
-├── lib/idempotent.sh              desired-state runtime (copied from idempotent-devops)
+├── lib/idempotent.sh              desired-state runtime (bash)
 ├── scripts/
 │   ├── setup.sh                   bash: help|verify|install|cleanup
-│   └── setup.ps1                  PowerShell mirror
+│   └── setup.ps1                  PowerShell mirror (Win-safe: PS 5.1 + 7)
 └── config/
     ├── oracle.env.tmpl            connection template (placeholders)
-    └── mcp-registration.jsonc.tmpl  MCP registration snippet
+    └── mcp-registration.jsonc.tmpl  MCP registration snippet (Kilo / print)
 ```
