@@ -142,14 +142,14 @@ ORACLE_MCP_CLIENT (in oracle.env): print | claude | kilo
   kilo inserts/removes the 'oracle' entry in Kilo's kilo.jsonc idempotently,
   preserving comments (no jq). Path: ORACLE_KILO_CONFIG, else
   ~/.config/kilo/kilo.jsonc, else ~/.config/kilo.jsonc.
-Prerequisites: Oracle SQLcl 25.x on PATH ('sql') + a JVM.
+Prerequisites: Oracle SQLcl 25.x/26.x on PATH ('sql') + a JVM.
 "@ | Write-Host
 }
 
 function Invoke-Verify {
     Write-Host "=== oracle-skill verify ===" -ForegroundColor Cyan
     $rc = 0
-    if (Test-Sqlcl) { Write-Ok "SQLcl found: $((Get-Command sql).Source)" } else { Write-Warn "SQLcl missing — install 25.x"; $rc = 1 }
+    if (Test-Sqlcl) { Write-Ok "SQLcl found: $((Get-Command sql).Source)" } else { Write-Warn "SQLcl missing — install 25.x/26.x"; $rc = 1 }
     if (Test-Java)  { Write-Ok "JVM found" } else { Write-Warn "java missing"; $rc = 1 }
     if (Test-Path $ConfigFile) { Write-Ok "config present: $ConfigFile" } else { Write-Warn "config absent — run install"; $rc = 1 }
     if (Test-ConnExists) { Write-Ok "saved connection '$(Get-ConnName)' present" } else { Write-Warn "connection not saved"; $rc = 1 }
@@ -164,7 +164,7 @@ function Invoke-Verify {
 
 function Invoke-Install {
     Write-Host "=== oracle-skill install ===" -ForegroundColor Cyan
-    if (-not (Test-Sqlcl)) { Write-Fail "Oracle SQLcl not on PATH. Install 25.x first, then re-run."; return }
+    if (-not (Test-Sqlcl)) { Write-Fail "Oracle SQLcl not on PATH. Install 25.x/26.x first, then re-run."; return }
 
     Set-DesiredState "config file $ConfigFile" `
         { Test-Path $ConfigFile } `

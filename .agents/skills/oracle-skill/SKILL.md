@@ -1,6 +1,6 @@
 ---
 name: oracle-skill
-description: Set up and use an Oracle MCP server for natural-language SQL data queries against an Oracle database. Uses Oracle SQLcl 25.x's built-in MCP server (`sql -mcp`), which exposes named, saved connections so the model can run SQL WITHOUT ever seeing the database password. Use when the user wants to query an Oracle DB, set up Oracle data access for an agent, register an Oracle MCP server, or test Oracle connectivity. Idempotent verify/install/cleanup setup; connection config supports both Easy Connect (on-prem) and wallet/TNS (Autonomous DB).
+description: Set up and use an Oracle MCP server for natural-language SQL data queries against an Oracle database. Uses Oracle SQLcl 25.x/26.x's built-in MCP server (`sql -mcp`), which exposes named, saved connections so the model can run SQL WITHOUT ever seeing the database password. Use when the user wants to query an Oracle DB, set up Oracle data access for an agent, register an Oracle MCP server, or test Oracle connectivity. Idempotent verify/install/cleanup setup; connection config supports both Easy Connect (on-prem) and wallet/TNS (Autonomous DB).
 argument-hint: "[verify|install|cleanup] or a natural-language question about the data"
 allowed-tools: Bash, Read, AskUserQuestion
 homepage: https://github.com/danielfrey63/ai-toolbox
@@ -8,12 +8,12 @@ repository: https://github.com/danielfrey63/ai-toolbox
 license: MIT
 user-invocable: true
 metadata:
-  version: "0.5.31"
+  version: "0.6.40"
 ---
 
 # oracle-skill — query an Oracle database via the SQLcl MCP server
 
-This skill gives you SQL access to an Oracle database. Oracle SQLcl 25.x ships a
+This skill gives you SQL access to an Oracle database. Oracle SQLcl 25.x/26.x ships a
 built-in **MCP server** (`sql -mcp`) that exposes SQLcl's *saved, named
 connections*. The key property: **the password never reaches the model** — it
 lives in SQLcl's secure store, and you query through the connection name.
@@ -39,7 +39,7 @@ every turn.
 | `cleanup` | Unregister the MCP server; optionally drop the saved connection. |
 
 **Prerequisites are not auto-installed** (Oracle download + license acceptance):
-SQLcl 25.x on PATH (`sql`) and a JVM. If missing, `verify`/`install` tell the
+SQLcl 25.x/26.x on PATH (`sql`) and a JVM. If missing, `verify`/`install` tell the
 user exactly what to get.
 
 **Config** lives in `config/oracle.env` (copy from `oracle.env.tmpl`,
@@ -70,6 +70,8 @@ connection. Prefer read-only queries; confirm with the user before any DML/DDL.
 ## Open verification
 
 The credential-bearing connection-save and the connection-drop are **deferred**
-(printed as guarded instructions, not auto-run) until the exact
-`connect -save` / `conn -delete` syntax is confirmed against the target SQLcl
-build. See `README.md` → "Offene Verifikation".
+(printed as guarded instructions, not auto-run) until the save/drop syntax is
+confirmed end-to-end against the target SQLcl build: `connect -save` for saving,
+`connmgr delete <name>` for dropping on SQLcl 26.1. The saved-connection
+*detection* uses `connmgr list` (verified on 26.1.2). See `README.md` →
+"Offene Verifikation".

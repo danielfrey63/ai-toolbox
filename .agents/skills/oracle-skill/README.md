@@ -1,7 +1,7 @@
 # oracle-skill
 
 Set up and use an **Oracle MCP server** for natural-language SQL data queries.
-The skill targets **Oracle SQLcl 25.x's built-in MCP server** (`sql -mcp`) and
+The skill targets **Oracle SQLcl 25.x/26.x's built-in MCP server** (`sql -mcp`) and
 wires it into an MCP client (Claude Code or Kilo) with an idempotent
 `verify / install / cleanup` flow.
 
@@ -9,7 +9,7 @@ wires it into an MCP client (Claude Code or Kilo) with an idempotent
 
 | Option | What it is | Pro | Contra |
 |---|---|---|---|
-| **Oracle SQLcl MCP** (chosen) | `sql -mcp`, built into SQLcl 25.x | Official Oracle; **password never reaches the model** (saved connection in SQLcl's secure store); supports Easy Connect *and* wallet/Autonomous; nothing extra to write | Needs SQLcl + JVM installed (Oracle download, license acceptance) |
+| **Oracle SQLcl MCP** (chosen) | `sql -mcp`, built into SQLcl 25.x/26.x | Official Oracle; **password never reaches the model** (saved connection in SQLcl's secure store); supports Easy Connect *and* wallet/Autonomous; nothing extra to write | Needs SQLcl + JVM installed (Oracle download, license acceptance) |
 | python-oracledb (community) | thin Python MCP over `python-oracledb` | Lightweight; thin mode needs no Oracle client; quick to spin up | Community-maintained; credentials typically passed to the server config (more exposure); you own the query surface/safety |
 | DBHub (generic) | bytebase/dbhub, multi-DB MCP | One server for Oracle + Postgres + MySQL …; good when several DBs are in play | Oracle is one backend among many; generic SQL surface; another moving part |
 
@@ -39,9 +39,22 @@ Set `ORACLE_MCP_CLIENT` in `oracle.env`:
 
 ## Connection styles
 
+Connection details live in `config/oracle.env` (copied from `oracle.env.tmpl`,
+gitignored). Pick **one** style:
+
 - **Easy Connect** (on-prem): `ORACLE_HOST` / `ORACLE_PORT` / `ORACLE_SERVICE`
-- **Wallet / TNS** (Autonomous DB, mTLS): `TNS_ADMIN` → unzipped wallet dir,
-  `ORACLE_TNS_ALIAS` → a `tnsnames.ora` entry (e.g. `mydb_high`)
+- **Wallet / TNS** (Autonomous DB, mTLS): `TNS_ADMIN` → directory holding
+  `tnsnames.ora` (+ `sqlnet.ora` / wallet), `ORACLE_TNS_ALIAS` → an entry from
+  that `tnsnames.ora` (e.g. `mydb_high`). To switch databases, point
+  `TNS_ADMIN` at a different directory or pick a different `ORACLE_TNS_ALIAS`.
+  With Easy Connect, `tnsnames.ora` is not used at all — the two styles are
+  alternatives.
+
+> **Note (current limitation):** the values in `oracle.env` are *informational*
+> today — the skill does **not** yet assemble the connect string for you. When
+> you run the deferred `connect -save` step (below), you type the
+> `host:port/service` or the TNS alias by hand. `ORACLE_CONN_NAME` *is* used:
+> it is the saved-connection name the MCP server exposes.
 
 ## Security
 
@@ -81,13 +94,23 @@ Two credential-/state-bearing steps are intentionally **deferred** (the script
 prints guarded instructions instead of mutating) until confirmed against the
 target SQLcl build:
 
-1. **Saving the connection** — `connect -save <name> -savepwd <user>@<connect>`.
-   The exact flag set varies across SQLcl versions; verify before automating.
-2. **Dropping the connection** in `cleanup` — `conn -delete <name>` (syntax to
-   confirm).
+1. **Saving the connection** — run interactively:
+   `connect -save <name> -savepwd <user>@<easyconnect-or-tns>`. The exact flag
+   set varies across SQLcl versions; verify before automating. (SQLcl 26.1 also
+   exposes `connmgr add` / `connmgr test` as a non-interactive path — a future
+   version of this skill may build the connect string from `oracle.env` and use
+   it.)
+2. **Dropping the connection** in `cleanup` — on SQLcl 26.1 the command is
+   `connmgr delete <name>` (the older `conn -delete` no longer applies). Still
+   printed as a guarded hint rather than run automatically.
 
-Once verified against a real SQLcl 25.x install, these can be promoted to
-`desired_state` mutations in `scripts/setup.sh` / `setup.ps1`.
+> **Detection (implemented):** the saved-connection check uses
+> `connmgr list` — verified against SQLcl 26.1.2. The older `conn -list` is
+> rejected as an unknown option on 26.x.
+
+Once the save/drop mutations are verified end-to-end against a real install,
+they can be promoted to `desired_state` mutations in `scripts/setup.sh` /
+`setup.ps1`.
 
 ## Layout
 

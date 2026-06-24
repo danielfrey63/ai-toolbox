@@ -8,7 +8,7 @@
 #
 # Sub-commands: help | verify | install | cleanup
 #
-# What the MCP server is: Oracle SQLcl 25.x ships a built-in MCP server,
+# What the MCP server is: Oracle SQLcl 25.x/26.x ships a built-in MCP server,
 # launched as `sql -mcp`. It exposes SQLcl's *named, saved connections* to an
 # MCP client (Claude Code, Kilo, ...) so the model can run SQL WITHOUT ever
 # seeing the database password — the credential lives in SQLcl's secure store.
@@ -161,7 +161,7 @@ Registration target (ORACLE_MCP_CLIENT in oracle.env):
           ~/.config/kilo/kilo.jsonc, else ~/.config/kilo.jsonc.
 
 Prerequisites (not auto-installed — Oracle license/download required):
-  - Oracle SQLcl 25.x on PATH ('sql')   https://www.oracle.com/database/sqldeveloper/technologies/sqlcl/
+  - Oracle SQLcl 25.x/26.x on PATH ('sql')   https://www.oracle.com/database/sqldeveloper/technologies/sqlcl/
   - A JVM (unless using a SQLcl build with bundled GraalVM)
 EOF
 }
@@ -171,7 +171,7 @@ cmd_verify() {
     local rc=0
 
     checking "Oracle SQLcl ('sql') on PATH"
-    if have_sqlcl; then ok "found: $(command -v sql)"; else warn "missing — install SQLcl 25.x"; rc=1; fi
+    if have_sqlcl; then ok "found: $(command -v sql)"; else warn "missing — install SQLcl 25.x/26.x"; rc=1; fi
 
     checking "JVM ('java') available"
     if have_java; then ok "found"; else warn "missing — SQLcl needs Java unless GraalVM-bundled"; rc=1; fi
@@ -205,7 +205,7 @@ cmd_install() {
     show_header "oracle-skill install"
 
     if ! have_sqlcl; then
-        fail "Oracle SQLcl not on PATH. Install SQLcl 25.x first (see 'help'), then re-run."
+        fail "Oracle SQLcl not on PATH. Install SQLcl 25.x/26.x first (see 'help'), then re-run."
         return 1
     fi
 
@@ -286,8 +286,10 @@ cmd_cleanup() {
 
     if conn_exists; then
         if confirm_destructive "drop saved SQLcl connection '${CONN_NAME}'?"; then
-            warn "connection drop deferred — verify 'conn -delete ${CONN_NAME}' syntax for your"
-            warn "SQLcl version, then run it manually (see README)."
+            warn "connection drop deferred — on SQLcl 26.1 run it manually:"
+            warn "    sql /nolog"
+            warn "    SQL> connmgr delete ${CONN_NAME}"
+            warn "(the older 'conn -delete' no longer applies; see README.)"
         fi
     else
         ok "no saved connection '${CONN_NAME}' — nothing to drop"
