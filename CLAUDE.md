@@ -7,6 +7,7 @@ Zwei strikt getrennte Sprach-Domänen:
 - **Englisch — Code & Commits.** Jegliche Skripte, Quellcode, Programmierung, Kommentare *im Code* und Commit-Messages sind **immer** auf Englisch. Ausnahmslos, in allen Repos.
 - **Deutsch (Schweiz) — Kommunikation.** Konversation, Zusammenfassungen und Markdown-Dateien, die dem Austausch zwischen Mensch und Maschine dienen (Hand-offs, Notizen, Pläne, CLAUDE.md, …), sind auf Deutsch.
 - **Umlaute & ss.** Wo Deutsch geschrieben wird: IMMER echte Umlaute (ä, ö, ü, é) und `ss` statt `ß` — NIEMALS `ae`, `oe`, `ue` als Ersatz.
+- **Markdown: ein Absatz = eine Zeile.** Keine Pseudosatz-/Spiegel-Umbrüche (hard wraps) innerhalb von Absätzen oder Listenpunkten. Zeilenumbrüche nur an echten Struktur-Grenzen (Absatz, Listenpunkt, Überschrift, Tabellenzeile, Code-Zeile). Gilt für alle neu geschriebenen oder umgeschriebenen Markdown-Dateien; beim Editieren bestehender Dateien betroffene Absätze auf Einzeiler zusammenziehen.
 
 ## Umgebungen
 
@@ -114,4 +115,7 @@ Wenn Upstream Pfade umgezogen hat, IMMER nachträglich prüfen:
 
 - Claude Code cached Dateien lokal — gecachte Versionen können veraltet sein. Falls Änderungen nicht berücksichtigt werden: explizit auf aktuelle Version hinweisen oder Neuladen anfordern.
 
-<!-- APP_VERSION: 0.2.4 -->
+<!-- APP_VERSION: 0.3.6 -->
+# graphify
+- **graphify** (`~/.claude/skills/graphify/SKILL.md`) - any input to knowledge graph. Trigger: `/graphify`
+When the user types `/graphify`, invoke the Skill tool with `skill: "graphify"` before doing anything else.
