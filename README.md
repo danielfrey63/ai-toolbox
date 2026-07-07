@@ -50,15 +50,11 @@ fehlende in die Registry nach — so werden auch von Hand (ausserhalb von
 Installs (Hooks, Repo-Skills) findet der globale Scan nicht — die stellt man per
 `install … --scope project --project <repo>` wieder her.
 
-`validate` ist ein reiner Lese-Check des Katalogs gegen die Platte (kein
-`--target`/`--scope` nötig): jeder Eintrag muss auf einen existierenden Pfad
-zeigen, `skill`/`plugin`-Verzeichnisse brauchen ein `SKILL.md` mit gültigem
-`name`/`description`-Frontmatter, `bin`-Einträge brauchen ein `command`-Feld
-und (bei `.sh`-Pfaden) ein `.ps1`-Gegenstück. Exit-Code 1 bei mindestens einem
-Fehler — praktisch als Gate vor dem Push einer Katalog-Änderung.
+`validate` ist ein reiner Lese-Check des Katalogs gegen die Platte (kein `--target`/`--scope` nötig): jeder Eintrag muss auf einen existierenden Pfad zeigen, `skill`/`plugin`-Verzeichnisse brauchen ein `SKILL.md` mit gültigem `name`/`description`-Frontmatter, `bin`-Einträge brauchen ein `command`-Feld und (bei `.sh`-Pfaden) ein `.ps1`-Gegenstück. Exit-Code 1 bei mindestens einem Fehler. Der `pre-commit`-Hook führt den Check automatisch aus, sobald ein Commit in der Toolbox `tools/catalog.json` oder eine `SKILL.md` berührt — kaputte Katalog-Stände kommen so gar nicht erst in die History.
 
-Vollständige Referenz: `toolbox --help`. Alle Befehle sind idempotent — beliebig
-oft ausführbar, ohne Schaden.
+`tests/parity.sh` hält die beiden handgepflegten CLI-Ports synchron: der Harness fährt `validate` (sauberes + absichtlich kaputtes Fixture) und `list` durch `toolbox.sh` **und** `toolbox.ps1` in Wegwerf-Sandboxes und vergleicht Exit-Codes, Status-Zeilen und Fehler-Zähler. Mit `--lint` laufen zusätzlich shellcheck/PSScriptAnalyzer (informativ), sofern installiert.
+
+Vollständige Referenz: `toolbox --help`. Alle Befehle sind idempotent — beliebig oft ausführbar, ohne Schaden.
 
 ## Versionierung
 
@@ -126,25 +122,20 @@ toolbox remove --all     # alles Installierte wieder entfernen
 Vor jeder Aktion wird gegen die Realität verifiziert — der Index kann nicht
 gefährlich driften, und `status --all` heilt ihn.
 
-## `cc-profil` — Profile-Wechsel für Claude Code
+## `aiprofil` — Backend-Profile für Claude Code & Kilo
 
-Schaltet zwischen benannten Sets von Umgebungsvariablen um — API-Key, Foundry-
-Endpoint, Modell-Defaults, Git-Identität, …. Jedes Profil ist eine `.env`-Datei
-unter `cc-profil/profiles/`; `use` exportiert die Vars in die aktuelle Shell,
-`list` zeigt die verfügbaren Profile.
+Schaltet zwischen benannten Backend-Profilen um — API-Key, Foundry-Endpoint, Modell-Defaults, Git-Identität, …. Jedes Profil ist eine `.env`-Datei unter `aiprofil/profiles/`; `aiprofil use <profil> [--target cc|kilo|both] [--scope session|user|project]` projiziert es über die Adapter `cc-profil` (env-Vars für Claude Code) und `kilo-profil` (`kilo.jsonc`) auf die Ziele, `aiprofil list` zeigt Profile plus aktiven Zustand, `aiprofil status` was jedes Ziel gerade verwendet.
 
-Einmalig installieren (legt die sourcing-Funktion in `~/.bashrc` bzw.
-PowerShell-`$PROFILE` an):
+Einmalig installieren (legt die sourcing-Funktion in `~/.bashrc` bzw. PowerShell-`$PROFILE` an):
 
 ```bash
-toolbox install --what cc-profil
+toolbox install --what aiprofil
 # danach in einer neuen Shell oder nach `source ~/.bashrc`:
-cc-profil list
-cc-profil use <name>
+aiprofil list
+aiprofil use <name>
 ```
 
-Die echten `.env`-Dateien enthalten Live-Schlüssel und sind **gitignored**;
-nur `*.env.example`-Vorlagen und `.managed-vars` sind versioniert.
+Die echten `.env`-Dateien enthalten Live-Schlüssel und sind **gitignored**; nur `*.env.example`-Vorlagen und `.managed-vars` sind versioniert. Das Top-Level-Verzeichnis `cc-profil/` enthält nur noch Deprecation-Shims, die alte `~/.bashrc`-Verdrahtungen auf `aiprofil/adapters/` weiterleiten.
 
 ## Repo-Aufbau
 
@@ -153,9 +144,13 @@ ai-toolbox/
 ├── toolbox.sh / toolbox.ps1     ← die CLI (bash + PowerShell)
 ├── CLAUDE.md                    ← globale Claude-Konfiguration
 ├── .agents/skills/              ← integrierte Skills (component-audit, discover, fable-mode, transcribe, …)
-├── cc-profil/                   ← Profil-Switcher (env-Vars für Claude Code)
-│   ├── cc-profil.sh / .ps1
+├── aiprofil/                    ← Backend-Profil-Switcher (Claude Code + Kilo)
+│   ├── aiprofil.sh / .ps1
+│   ├── adapters/                ← cc-profil, kilo-profil
 │   └── profiles/                ← *.env.example getrackt, echte *.env lokal
+├── cc-profil/                   ← Deprecation-Shims (alter cc-profil-Pfad)
+├── tests/
+│   └── parity.sh                ← Parity-Harness toolbox.sh ↔ toolbox.ps1
 └── tools/
     ├── catalog.json             ← der Tool-Katalog
     ├── bump-version.{sh,ps1}    ← Versions-Bumper
