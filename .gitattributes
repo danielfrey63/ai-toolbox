@@ -1,0 +1,26 @@
+# Line-ending policy: LF everywhere, on every platform.
+#
+# This repo is used from git-bash/WSL on Windows and from Linux/macOS; shell
+# scripts, git hooks and the toolbox CLI break with CRLF under sh/bash, and
+# PowerShell 7 is happy with LF. eol=lf overrides any local core.autocrlf,
+# so checkouts are byte-identical across machines.
+
+* text=auto
+
+*.sh   text eol=lf
+*.ps1  text eol=lf
+*.py   text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+*.yml  text eol=lf
+*.env  text eol=lf
+*.env.example text eol=lf
+
+# Extension-less git hook templates
+tools/githooks/* text eol=lf
+
+# Binary assets — never touch
+*.png binary
+*.jpg binary
+*.gif binary
+*.pdf binary
