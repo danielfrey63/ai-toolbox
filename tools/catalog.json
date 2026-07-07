@@ -38,6 +38,12 @@
       "description": "Set up + use an Oracle MCP server (SQLcl sql -mcp) for SQL data queries."
     },
     {
+      "name": "single-file-spa",
+      "type": "skill",
+      "path": ".agents/skills/single-file-spa",
+      "description": "Offline single-file SPA archetype in three tiers (monolith, file-linked, sections+build)."
+    },
+    {
       "name": "versioning-hooks",
       "type": "hook",
       "path": "tools/githooks",
