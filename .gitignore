@@ -2,7 +2,6 @@ artefacts
 .claude/hook-log.txt
 .claude/settings.local.json
 .codex/hook-log.txt
-.agents/skills/watch/HANDOFF.md
 
 # aiprofil — real profile .env files hold live API/foundry/SSH keys; only the
 # *.example templates and .managed-vars are committed. The legacy cc-profil/
