@@ -30,13 +30,21 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.37.235'
+APP_VERSION='0.38.238'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
 # symlink (the "bin" install) $0 is the link, not the real script.
 REPO_ROOT=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 CATALOG="$REPO_ROOT/tools/catalog.json"
+
+# git-bash/MSYS: without this, `ln -s` silently DEEP-COPIES instead of linking
+# (installs then look fine but never receive upstream updates). nativestrict
+# makes ln fail loudly when a real symlink cannot be created (needs Windows
+# Developer Mode or admin) — a hard error beats a silent copy.
+case "$(uname -s)" in
+    MINGW*|MSYS*) export MSYS="winsymlinks:nativestrict${MSYS:+ $MSYS}" ;;
+esac
 
 # --- help ---------------------------------------------------------------------
 # General overview + per-switch detail. Every screen ends with the same
@@ -451,7 +459,13 @@ link_artifact() {
                 printf '  [!] %-18s exists and is not a symlink — skipped\n' "$name" >&2
                 return
             fi
-            ln -s "$src" "$link"
+            if ! ln -s "$src" "$link" || [ ! -L "$link" ]; then
+                # A non-symlink result means ln fell back to copying (MSYS
+                # without symlink privilege) — remove the copy and fail loudly.
+                [ -e "$link" ] && [ ! -L "$link" ] && rm -rf "$link"
+                printf '  [!] %-18s could not create a real symlink at %s (on Windows: enable Developer Mode or run elevated)\n' "$name" "$link" >&2
+                return 1
+            fi
             printf '  [+] %-18s -> %s\n' "$name" "$link"
             ;;
         status)
