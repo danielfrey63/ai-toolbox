@@ -17,6 +17,7 @@ Danach steht der Befehl `toolbox` überall zur Verfügung:
 
 ```bash
 toolbox list                                       # was ist installierbar?
+toolbox validate                                    # stimmt der Katalog noch mit der Platte überein?
 toolbox install --what discover --target claude
 toolbox install --what versioning-hooks --scope project
 toolbox status --all                                # was ist wo installiert?
@@ -30,9 +31,9 @@ toolbox reconcile                                   # bestehende Links finden + 
 
 ## Die `toolbox`-CLI
 
-`toolbox <install|status|remove|list|reconcile>` installiert, prüft und entfernt
-Einträge aus dem Katalog `tools/catalog.json`. Jeder Eintrag hat einen Typ,
-der den Install-Handler bestimmt:
+`toolbox <install|status|remove|list|reconcile|validate>` installiert, prüft und
+entfernt Einträge aus dem Katalog `tools/catalog.json`. Jeder Eintrag hat einen
+Typ, der den Install-Handler bestimmt:
 
 | Typ | Was es macht |
 |---|---|
@@ -48,6 +49,13 @@ fehlende in die Registry nach — so werden auch von Hand (ausserhalb von
 `toolbox install`) angelegte Links von `status`/`remove` erfasst. Projekt-weite
 Installs (Hooks, Repo-Skills) findet der globale Scan nicht — die stellt man per
 `install … --scope project --project <repo>` wieder her.
+
+`validate` ist ein reiner Lese-Check des Katalogs gegen die Platte (kein
+`--target`/`--scope` nötig): jeder Eintrag muss auf einen existierenden Pfad
+zeigen, `skill`/`plugin`-Verzeichnisse brauchen ein `SKILL.md` mit gültigem
+`name`/`description`-Frontmatter, `bin`-Einträge brauchen ein `command`-Feld
+und (bei `.sh`-Pfaden) ein `.ps1`-Gegenstück. Exit-Code 1 bei mindestens einem
+Fehler — praktisch als Gate vor dem Push einer Katalog-Änderung.
 
 Vollständige Referenz: `toolbox --help`. Alle Befehle sind idempotent — beliebig
 oft ausführbar, ohne Schaden.

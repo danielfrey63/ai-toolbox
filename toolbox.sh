@@ -30,7 +30,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.36.230'
+APP_VERSION='0.37.235'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -54,7 +54,7 @@ _help_general() {
 toolbox — install AI-Toolbox tools (Claude Code / Codex / agentskills).
 
 Usage:
-  toolbox <install|status|remove|list|reconcile> [options]
+  toolbox <install|status|remove|list|reconcile|validate> [options]
   toolbox --help [<switch>]
 
 Commands:
@@ -64,11 +64,14 @@ Commands:
   list      Print the catalog (name, type, description).
   reconcile Discover existing links into this repo (e.g. hand-made symlinks)
             and register any that are missing, so status/remove see them.
+  validate  Check the catalog against disk — every entry's path exists and,
+            for skills/plugins, its SKILL.md carries valid frontmatter.
 
 For switch detail:  toolbox --help <switch>      e.g.  toolbox --help --target
 
 Examples:
   toolbox list
+  toolbox validate
   toolbox install --what cli
   toolbox install --what versioning-hooks --scope project
   toolbox status --all
@@ -204,7 +207,7 @@ show_help() {
 # Print the catalog as a readable table — answers "what can I install?".
 print_catalog_list() {
     printf 'toolbox — available tools (%s)\n' "$CATALOG"
-    printf 'Usage: toolbox <install|status|remove|list|reconcile> [--target claude|codex|agents|kilo] [--scope global|project] [--project PATH] [--what all|<name>|<type>] [--tagstyle plain|namespaced] [--all] [-h|--help]\n\n'
+    printf 'Usage: toolbox <install|status|remove|list|reconcile|validate> [--target claude|codex|agents|kilo] [--scope global|project] [--project PATH] [--what all|<name>|<type>] [--tagstyle plain|namespaced] [--all] [-h|--help]\n\n'
     printf '  %-20s %-7s %s\n' NAME TYPE DESCRIPTION
     jq -r '.tools[] | [.name, .type, .description] | @tsv' "$CATALOG" \
         | while IFS=$(printf '\t') read -r n t d; do
@@ -213,12 +216,137 @@ print_catalog_list() {
     printf '\nSelect one with --what <name> or a group with --what <type>; default is all.\n'
 }
 
+# --- validate command ----------------------------------------------------------
+# Checks the catalog for drift against disk: a renamed/removed source path, a
+# SKILL.md whose frontmatter is missing or no longer matches the catalog name,
+# a bin entry missing its PowerShell sibling. Read-only, needs no --target or
+# --scope — safe to run any time (e.g. before pushing a catalog change).
+
+# The YAML frontmatter block of a SKILL.md (the lines between the first pair
+# of "---" markers), without the markers themselves.
+_frontmatter() {  # file -> block
+    awk '
+        NR==1 && $0!="---" {exit}
+        NR==1 {next}
+        /^---[[:space:]]*$/ {exit}
+        {print}
+    ' "$1"
+}
+
+# A skill/plugin directory must carry a SKILL.md with non-empty name+description
+# frontmatter fields. Echoes 0 (ok), 1 (fail — printed to stderr) or 2 (ok, but
+# the frontmatter name differs from the catalog name — printed to stdout).
+validate_skill_dir() {  # name src -> 0/1/2
+    local name=$1 src=$2 fm fmname fmdesc
+    if [ ! -f "$src/SKILL.md" ]; then
+        printf '  [!] %-18s missing SKILL.md: %s/SKILL.md\n' "$name" "$src" >&2
+        return 1
+    fi
+    fm=$(_frontmatter "$src/SKILL.md")
+    fmname=$(printf '%s\n' "$fm" | sed -n 's/^name:[[:space:]]*//p' | head -1)
+    fmdesc=$(printf '%s\n' "$fm" | sed -n 's/^description:[[:space:]]*//p' | head -1)
+    if [ -z "$fmname" ] || [ -z "$fmdesc" ]; then
+        printf '  [!] %-18s SKILL.md frontmatter missing name/description: %s/SKILL.md\n' "$name" "$src" >&2
+        return 1
+    fi
+    if [ "$fmname" != "$name" ]; then
+        printf '  [i] %-18s SKILL.md name "%s" != catalog name "%s"\n' "$name" "$fmname" "$name"
+        return 2
+    fi
+    return 0
+}
+
+# Walks every catalog entry (index-based, not piped — a piped `while read`
+# forks a subshell and the fail/warn counters below would not survive it) and
+# checks it resolves to something real on disk. Prints one line per entry plus
+# a summary; exit status is non-zero iff any entry failed.
+run_validate() {
+    local n i tool name type path desc src fail=0 warn=0 total=0
+    local cmdname ps1 mkt plg rc
+    n=$(jq '.tools | length' "$CATALOG")
+    i=0
+    while [ "$i" -lt "$n" ]; do
+        tool=$(jq -c ".tools[$i]" "$CATALOG")
+        i=$((i + 1)); total=$((total + 1))
+        name=$(printf '%s' "$tool" | jq -r '.name // empty')
+        type=$(printf '%s' "$tool" | jq -r '.type // empty')
+        path=$(printf '%s' "$tool" | jq -r '.path // empty')
+        desc=$(printf '%s' "$tool" | jq -r '.description // empty')
+        if [ -z "$name" ] || [ -z "$type" ] || [ -z "$path" ] || [ -z "$desc" ]; then
+            printf '  [!] %-18s missing required field(s) (name/type/path/description)\n' "${name:-?}" >&2
+            fail=$((fail + 1)); continue
+        fi
+        case "$type" in
+            skill|hook|plugin|config|bin) ;;
+            *) printf '  [!] %-18s unknown type: %s\n' "$name" "$type" >&2
+               fail=$((fail + 1)); continue ;;
+        esac
+        src="$REPO_ROOT/$path"
+        case "$type" in
+            skill)
+                [ -d "$src" ] || { printf '  [!] %-18s source missing: %s\n' "$name" "$src" >&2; fail=$((fail + 1)); continue; }
+                validate_skill_dir "$name" "$src"; rc=$?
+                [ "$rc" = 1 ] && { fail=$((fail + 1)); continue; }
+                [ "$rc" = 2 ] && warn=$((warn + 1))
+                ;;
+            plugin)
+                [ -d "$src" ] || { printf '  [!] %-18s source missing: %s\n' "$name" "$src" >&2; fail=$((fail + 1)); continue; }
+                validate_skill_dir "$name" "$src"; rc=$?
+                [ "$rc" = 1 ] && { fail=$((fail + 1)); continue; }
+                [ "$rc" = 2 ] && warn=$((warn + 1))
+                mkt=$(printf '%s' "$tool" | jq -r '.marketplace // empty')
+                plg=$(printf '%s' "$tool" | jq -r '.plugin // empty')
+                if [ -z "$mkt" ] || [ -z "$plg" ]; then
+                    printf '  [!] %-18s plugin missing marketplace/plugin field\n' "$name" >&2
+                    fail=$((fail + 1)); continue
+                fi
+                ;;
+            hook)
+                [ -d "$src" ] || { printf '  [!] %-18s source missing: %s\n' "$name" "$src" >&2; fail=$((fail + 1)); continue; }
+                if [ ! -f "$src/pre-commit" ] || [ ! -f "$src/post-commit" ]; then
+                    printf '  [!] %-18s hook dir missing pre-commit/post-commit: %s\n' "$name" "$src" >&2
+                    fail=$((fail + 1)); continue
+                fi
+                ;;
+            config)
+                [ -f "$src" ] || { printf '  [!] %-18s source missing: %s\n' "$name" "$src" >&2; fail=$((fail + 1)); continue; }
+                ;;
+            bin)
+                [ -f "$src" ] || { printf '  [!] %-18s source missing: %s\n' "$name" "$src" >&2; fail=$((fail + 1)); continue; }
+                cmdname=$(printf '%s' "$tool" | jq -r '.command // empty')
+                if [ -z "$cmdname" ]; then
+                    printf '  [!] %-18s bin missing "command" field\n' "$name" >&2
+                    fail=$((fail + 1)); continue
+                fi
+                case "$path" in
+                    *.sh)
+                        ps1="${path%.sh}.ps1"
+                        if [ ! -f "$REPO_ROOT/$ps1" ]; then
+                            printf '  [i] %-18s no PowerShell sibling: %s\n' "$name" "$ps1"
+                            warn=$((warn + 1))
+                        fi
+                        ;;
+                esac
+                ;;
+        esac
+        printf '  [ok] %-18s %s\n' "$name" "$path"
+    done
+    printf '\n%d tool(s) checked' "$total"
+    [ "$warn" -gt 0 ] && printf ', %d warning(s)' "$warn"
+    if [ "$fail" -gt 0 ]; then
+        printf ', %d failure(s)\n' "$fail"
+        return 1
+    fi
+    printf ' — all OK\n'
+    return 0
+}
+
 # --- command ------------------------------------------------------------------
 CMD=${1:-}
 case "$CMD" in
-    install|status|remove|list|reconcile) shift ;;
+    install|status|remove|list|reconcile|validate) shift ;;
     -h|--help) show_help "${2:-}"; exit $? ;;
-    '') printf 'toolbox: missing command (install|status|remove|list|reconcile)\n' >&2; exit 2 ;;
+    '') printf 'toolbox: missing command (install|status|remove|list|reconcile|validate)\n' >&2; exit 2 ;;
     *)  printf 'toolbox: unknown command: %s\n' "$CMD" >&2; exit 2 ;;
 esac
 
@@ -278,6 +406,13 @@ command -v jq >/dev/null 2>&1 \
 if [ "$CMD" = list ]; then
     print_catalog_list
     exit 0
+fi
+
+# "validate" is a read-only catalog/disk consistency check — no scope/target/
+# selection needed either.
+if [ "$CMD" = validate ]; then
+    run_validate
+    exit $?
 fi
 
 # --- skill handler ------------------------------------------------------------

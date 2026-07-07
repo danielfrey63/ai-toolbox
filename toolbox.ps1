@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.37.220'
+$APP_VERSION = '0.38.226'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -39,7 +39,7 @@ function Show-Help([string]$topic = '') {
 toolbox — install AI-Toolbox tools (Claude Code / Codex / agentskills).
 
 Usage:
-  toolbox <install|status|remove|list> [options]
+  toolbox <install|status|remove|list|reconcile|validate> [options]
   toolbox --help [<switch>]
 
 Commands:
@@ -49,11 +49,14 @@ Commands:
   list      Print the catalog (name, type, description).
   reconcile Discover existing links into this repo (e.g. hand-made symlinks)
             and register any that are missing, so status/remove see them.
+  validate  Check the catalog against disk — every entry's path exists and,
+            for skills/plugins, its SKILL.md carries valid frontmatter.
 
 For switch detail:  toolbox --help <switch>      e.g.  toolbox --help --target
 
 Examples:
   toolbox list
+  toolbox validate
   toolbox install --what cli
   toolbox install --what versioning-hooks --scope project
   toolbox status --all
@@ -168,7 +171,7 @@ Examples:
 # Print the catalog as a readable table — answers "what can I install?".
 function Show-CatalogList {
     Write-Output "toolbox — available tools ($Catalog)"
-    Write-Output 'Usage: toolbox <install|status|remove|list|reconcile> [--target claude|codex|agents|kilo] [--scope global|project] [--project PATH] [--what all|<name>|<type>] [--tagstyle plain|namespaced] [--all] [-h|--help]'
+    Write-Output 'Usage: toolbox <install|status|remove|list|reconcile|validate> [--target claude|codex|agents|kilo] [--scope global|project] [--project PATH] [--what all|<name>|<type>] [--tagstyle plain|namespaced] [--all] [-h|--help]'
     Write-Output ''
     Write-Output ('  {0,-20} {1,-7} {2}' -f 'NAME', 'TYPE', 'DESCRIPTION')
     foreach ($t in (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools) {
@@ -177,11 +180,142 @@ function Show-CatalogList {
     Write-Output "`nSelect one with --what <name> or a group with --what <type>; default is all."
 }
 
+# --- validate -------------------------------------------------------------------
+# Checks the catalog for drift against disk: a renamed/removed source path, a
+# SKILL.md whose frontmatter is missing or no longer matches the catalog name,
+# a bin entry missing its PowerShell sibling. Read-only, needs no --target or
+# --scope — safe to run any time (e.g. before pushing a catalog change).
+
+# The YAML frontmatter block of a SKILL.md (the lines between the first pair
+# of "---" markers), without the markers themselves.
+function Get-Frontmatter([string]$file) {
+    $lines = Get-Content -LiteralPath $file
+    if ($lines.Count -eq 0 -or $lines[0] -ne '---') { return @() }
+    $end = -1
+    for ($j = 1; $j -lt $lines.Count; $j++) {
+        if ($lines[$j] -match '^---\s*$') { $end = $j; break }
+    }
+    if ($end -lt 0) { return @() }
+    return $lines[1..($end - 1)]
+}
+
+# A skill/plugin directory must carry a SKILL.md with non-empty name+description
+# frontmatter fields. Returns 'ok' | 'fail' | 'warn' (warn = frontmatter name
+# differs from the catalog name); prints findings as it goes.
+function Test-SkillDir([string]$name, [string]$src) {
+    $skillmd = Join-Path $src 'SKILL.md'
+    if (-not (Test-Path -LiteralPath $skillmd -PathType Leaf)) {
+        [Console]::Error.WriteLine("  [!] $name  missing SKILL.md: $skillmd")
+        return 'fail'
+    }
+    $fm = Get-Frontmatter $skillmd
+    $fmName = (@($fm | Where-Object { $_ -match '^name:\s*' }) | Select-Object -First 1) -replace '^name:\s*', ''
+    $fmDesc = (@($fm | Where-Object { $_ -match '^description:\s*' }) | Select-Object -First 1) -replace '^description:\s*', ''
+    if (-not $fmName -or -not $fmDesc) {
+        [Console]::Error.WriteLine("  [!] $name  SKILL.md frontmatter missing name/description: $skillmd")
+        return 'fail'
+    }
+    if ($fmName -ne $name) {
+        # Console.Out, not Write-Output: the caller captures this function's
+        # return value ($verdict = Test-SkillDir ...), and Write-Output here
+        # would join the pipeline right alongside 'warn' — silently swallowing
+        # this line into the captured array instead of printing it.
+        [Console]::Out.WriteLine("  [i] $name  SKILL.md name `"$fmName`" != catalog name `"$name`"")
+        return 'warn'
+    }
+    return 'ok'
+}
+
+# Walks every catalog entry and checks it resolves to something real on disk.
+# Prints one line per entry plus a summary; returns 0 iff nothing failed.
+function Invoke-Validate {
+    $fail = 0; $warn = 0
+    $tools = @((Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools)
+    foreach ($t in $tools) {
+        $name = $t.name; $type = $t.type; $path = $t.path; $desc = $t.description
+        if (-not $name -or -not $type -or -not $path -or -not $desc) {
+            [Console]::Error.WriteLine("  [!] $($name ?? '?')  missing required field(s) (name/type/path/description)")
+            $fail++; continue
+        }
+        if ($type -notin @('skill', 'hook', 'plugin', 'config', 'bin')) {
+            [Console]::Error.WriteLine("  [!] $name  unknown type: $type")
+            $fail++; continue
+        }
+        $src = Join-Path $RepoRoot $path
+        $failed = $false
+        switch ($type) {
+            'skill' {
+                if (-not (Test-Path -LiteralPath $src -PathType Container)) {
+                    [Console]::Error.WriteLine("  [!] $name  source missing: $src"); $fail++; $failed = $true; break
+                }
+                $verdict = Test-SkillDir $name $src
+                if ($verdict -eq 'fail') { $fail++; $failed = $true }
+                elseif ($verdict -eq 'warn') { $warn++ }
+            }
+            'plugin' {
+                if (-not (Test-Path -LiteralPath $src -PathType Container)) {
+                    [Console]::Error.WriteLine("  [!] $name  source missing: $src"); $fail++; $failed = $true; break
+                }
+                $verdict = Test-SkillDir $name $src
+                if ($verdict -eq 'fail') { $fail++; $failed = $true; break }
+                elseif ($verdict -eq 'warn') { $warn++ }
+                if (-not $t.marketplace -or -not $t.plugin) {
+                    [Console]::Error.WriteLine("  [!] $name  plugin missing marketplace/plugin field"); $fail++; $failed = $true
+                }
+            }
+            'hook' {
+                if (-not (Test-Path -LiteralPath $src -PathType Container)) {
+                    [Console]::Error.WriteLine("  [!] $name  source missing: $src"); $fail++; $failed = $true; break
+                }
+                if (-not (Test-Path -LiteralPath (Join-Path $src 'pre-commit') -PathType Leaf) -or
+                    -not (Test-Path -LiteralPath (Join-Path $src 'post-commit') -PathType Leaf)) {
+                    [Console]::Error.WriteLine("  [!] $name  hook dir missing pre-commit/post-commit: $src"); $fail++; $failed = $true
+                }
+            }
+            'config' {
+                if (-not (Test-Path -LiteralPath $src -PathType Leaf)) {
+                    [Console]::Error.WriteLine("  [!] $name  source missing: $src"); $fail++; $failed = $true
+                }
+            }
+            'bin' {
+                if (-not (Test-Path -LiteralPath $src -PathType Leaf)) {
+                    [Console]::Error.WriteLine("  [!] $name  source missing: $src"); $fail++; $failed = $true; break
+                }
+                if (-not $t.command) {
+                    [Console]::Error.WriteLine("  [!] $name  bin missing `"command`" field"); $fail++; $failed = $true; break
+                }
+                if ($path -match '\.sh$') {
+                    $ps1 = $path -replace '\.sh$', '.ps1'
+                    if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot $ps1) -PathType Leaf)) {
+                        [Console]::Out.WriteLine("  [i] $name  no PowerShell sibling: $ps1")
+                        $warn++
+                    }
+                }
+            }
+        }
+        if ($failed) { continue }
+        # Console.Out, not Write-Output: the caller does `exit (Invoke-Validate)`,
+        # which captures this function's whole pipeline output — Write-Output here
+        # would vanish into that captured array instead of reaching the console,
+        # and the numeric verdict below would arrive wrapped in a string array
+        # instead of a plain int. Console.Out bypasses the pipeline entirely.
+        [Console]::Out.WriteLine("  [ok] $name  $path")
+    }
+    $summary = "`n$($tools.Count) tool(s) checked"
+    if ($warn -gt 0) { $summary += ", $warn warning(s)" }
+    if ($fail -gt 0) {
+        [Console]::Out.WriteLine("$summary, $fail failure(s)")
+        return 1
+    }
+    [Console]::Out.WriteLine("$summary — all OK")
+    return 0
+}
+
 # --- command ------------------------------------------------------------------
 $Cmd = if ($args.Count -ge 1) { [string]$args[0] } else { '' }
 if ($Cmd -in @('-h', '--help')) { Show-Help ([string]$args[1]); exit 0 }
-if ($Cmd -notin @('install', 'status', 'remove', 'list', 'reconcile')) {
-    [Console]::Error.WriteLine("toolbox: missing or unknown command (install|status|remove|list|reconcile)")
+if ($Cmd -notin @('install', 'status', 'remove', 'list', 'reconcile', 'validate')) {
+    [Console]::Error.WriteLine("toolbox: missing or unknown command (install|status|remove|list|reconcile|validate)")
     exit 2
 }
 
@@ -237,6 +371,10 @@ if (-not (Test-Path -LiteralPath $Catalog)) {
 
 # "list" just prints the catalog — no scope/target/selection needed.
 if ($Cmd -eq 'list') { Show-CatalogList; exit 0 }
+
+# "validate" is a read-only catalog/disk consistency check — no scope/target/
+# selection needed either.
+if ($Cmd -eq 'validate') { exit (Invoke-Validate) }
 
 # --- skill handler ------------------------------------------------------------
 function Get-SkillDestDir {
