@@ -15,7 +15,7 @@
 # repo: the hook resolves the AI-Toolbox from its own path, so bump-version.sh is
 # found even when this runs inside a foreign repo.
 
-APP_VERSION='0.7.14'
+APP_VERSION='0.8.17'
 
 repo=$(git rev-parse --show-toplevel) || exit 0
 # This hook lives in <ai-toolbox>/tools/githooks/ — resolve bump-version.sh
@@ -24,6 +24,23 @@ repo=$(git rev-parse --show-toplevel) || exit 0
 toolbox=$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd) || exit 0
 bump="$toolbox/tools/bump-version.sh"
 [ -x "$bump" ] || exit 0
+
+# Gate (AI-Toolbox repo only): staged catalog or SKILL.md changes must pass
+# `toolbox validate` before the commit proceeds. In foreign repos $repo and
+# $toolbox differ and the gate is skipped. Under git-bash $repo is Windows-
+# style (D:/…) while $toolbox is MSYS-style (/d/…), so string equality alone
+# is not enough — -ef compares the actual directories (same idiom as
+# _same_hookpath in toolbox.sh).
+if { [ "$repo" = "$toolbox" ] || [ "$repo" -ef "$toolbox" ] 2>/dev/null; } \
+    && [ -x "$toolbox/toolbox.sh" ]; then
+    if git diff --cached --name-only --diff-filter=ACMDR \
+        | grep -qE '^tools/catalog\.json$|(^|/)SKILL\.md$'; then
+        if ! "$toolbox/toolbox.sh" validate; then
+            echo "pre-commit: toolbox validate failed — fix the catalog/disk mismatch before committing." >&2
+            exit 1
+        fi
+    fi
+fi
 
 # Resolve staged files (added/copied/modified) to unique artifact targets.
 targets=$(
