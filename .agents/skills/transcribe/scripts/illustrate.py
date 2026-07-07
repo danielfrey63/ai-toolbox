@@ -30,6 +30,14 @@ to keep the whole frame.
 
 Idempotent: the spec is the desired state. Re-running with the same spec
 clears prior `ill_*.png` and reproduces identical output.
+
+Scouting helpers (for standalone runs on an existing report, where the 512px
+analysis frames are gone):
+  --sheet          tile the video into contact sheets (one frame every
+                   --interval seconds) so the model can find slide moments
+                   without hand-rolled ffmpeg incantations
+  --extract T ...  pull single native-resolution frames at the given
+                   timestamps for precise bbox estimation
 """
 from __future__ import annotations
 
@@ -90,9 +98,70 @@ def _crop_one(ffmpeg: str, video: str, t: float, bbox, out_path: Path) -> bool:
     return True
 
 
+# --- Scouting: contact sheets + single-frame extraction ----------------------
+
+def _make_sheets(ffmpeg: str, video: str, out_dir: Path,
+                 interval: int, tile: str, width: int) -> int:
+    """Tile the video into contact sheets; print the tile→timestamp mapping.
+
+    No drawtext timestamps — fontconfig-less ffmpeg builds segfault on the
+    drawtext filter, and the mapping is pure arithmetic anyway:
+    t = interval * ((sheet-1)*cols*rows + row*cols + col), zero-based tiles.
+    """
+    m = re.fullmatch(r"(\d+)x(\d+)", tile)
+    if not m:
+        sys.stderr.write(f"[illustrate] ERROR: --sheet-tile must look like 6x5, got {tile!r}\n")
+        return 2
+    cols, rows = int(m.group(1)), int(m.group(2))
+    for old in out_dir.glob("sheet_*.png"):
+        old.unlink()
+    cmd = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", video,
+        "-vf", f"fps=1/{interval},scale={width}:-1,tile={cols}x{rows}",
+        "-vsync", "vfr",
+        str(out_dir / "sheet_%02d.png"),
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    sheets = sorted(out_dir.glob("sheet_*.png"))
+    if r.returncode != 0 or not sheets:
+        sys.stderr.write(f"[illustrate] ERROR: sheet extraction failed: {r.stderr.strip()}\n")
+        return 1
+    print(f"[illustrate] wrote {len(sheets)} contact sheet(s) -> {out_dir}")
+    print(f"[illustrate] mapping: t = {interval} * ((sheet-1)*{cols * rows} + row*{cols} + col)"
+          f"  (zero-based row/col, {cols}x{rows} tiles, 1 frame per {interval}s)")
+    for i, s in enumerate(sheets):
+        start, end = i * cols * rows * interval, ((i + 1) * cols * rows - 1) * interval
+        print(f"  - {s.name}  covers t={_fmt_ts(start)}..{_fmt_ts(end)}")
+    return 0
+
+
+def _extract_frames(ffmpeg: str, video: str, out_dir: Path, stamps: list[float]) -> int:
+    """Write one native-resolution PNG per timestamp for bbox estimation."""
+    written = []
+    for t in stamps:
+        path = out_dir / f"frame_t{int(t):05d}.png"
+        cmd = [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-ss", f"{max(0.0, t):.3f}", "-i", video,
+            "-frames:v", "1", str(path),
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode == 0 and path.exists():
+            written.append(path)
+        else:
+            sys.stderr.write(f"[illustrate] WARNING: frame extraction failed at t={t:.1f}s\n")
+    if not written:
+        sys.stderr.write("[illustrate] ERROR: no frames extracted\n")
+        return 1
+    print(f"[illustrate] wrote {len(written)} frame(s) -> {out_dir}")
+    for p in written:
+        print(f"  - {p.name}")
+    return 0
+
+
 # --- Refinement (Pillow, isolated) ------------------------------------------
 
-def _refine_worker(paths: list[str], tol: int = 14, pad: int = 6) -> None:
+def _refine_worker(paths: list[str], tol: int = 14, pad: int = 6) -> dict[str, str]:
     """Trim near-uniform margins from each PNG in place (runs under Pillow).
 
     Picks the background colour from the four corners, builds a tolerance mask
@@ -101,9 +170,23 @@ def _refine_worker(paths: list[str], tol: int = 14, pad: int = 6) -> None:
     step a noisy slide's bbox snaps back to the full frame), and crops to the
     mask's bounding box plus a small pad. Only applies the trim when it removes
     a meaningful border (>2% on a side) so a full-bleed diagram is left alone.
-    """
-    from PIL import Image, ImageChops, ImageFilter  # noqa: PLC0415 — only in worker
 
+    Also judges each final crop: a tiny or near-uniform result means the bbox
+    almost certainly missed its target region. Returns {path: reason} for such
+    suspects and mirrors each verdict as a "SUSPECT\\tpath\\treason" stdout line
+    so the uv-subprocess path can report through its pipe.
+    """
+    from PIL import Image, ImageChops, ImageFilter, ImageStat  # noqa: PLC0415 — only in worker
+
+    def _suspect(im) -> "str | None":
+        w, h = im.size
+        if w < 64 or h < 64:
+            return f"tiny crop ({w}x{h}px)"
+        if ImageStat.Stat(im.convert("L")).stddev[0] < 8:
+            return "near-uniform content (bbox likely missed the target)"
+        return None
+
+    verdicts: dict[str, str] = {}
     for p in paths:
         try:
             im = Image.open(p).convert("RGB")
@@ -119,42 +202,51 @@ def _refine_worker(paths: list[str], tol: int = 14, pad: int = 6) -> None:
         # while a real ≥2px-wide edge survives. Fall back to the raw mask if
         # erosion wiped everything (thin-line content).
         box = mask.filter(ImageFilter.MinFilter(3)).getbbox() or mask.getbbox()
-        if not box:
-            continue
-        l, u, r, b = box
-        # Only trim if at least one side has a real margin to remove.
-        if l < w * 0.02 and u < h * 0.02 and r > w * 0.98 and b > h * 0.98:
-            continue
-        l = max(0, l - pad)
-        u = max(0, u - pad)
-        r = min(w, r + pad)
-        b = min(h, b + pad)
-        if r - l < 8 or b - u < 8:
-            continue  # degenerate; keep the original crop
-        im.crop((l, u, r, b)).save(p)
+        if box:
+            l, u, r, b = box
+            # Only trim if at least one side has a real margin to remove and
+            # the result isn't degenerate.
+            full_bleed = l < w * 0.02 and u < h * 0.02 and r > w * 0.98 and b > h * 0.98
+            if not full_bleed:
+                l = max(0, l - pad)
+                u = max(0, u - pad)
+                r = min(w, r + pad)
+                b = min(h, b + pad)
+                if r - l >= 8 and b - u >= 8:
+                    im = im.crop((l, u, r, b))
+                    im.save(p)
+        reason = _suspect(im)
+        if reason:
+            verdicts[p] = reason
+            print(f"SUSPECT\t{p}\t{reason}", flush=True)
+    return verdicts
 
 
-def _refine(paths: list[Path]) -> str:
-    """Refine crops in place. Returns a one-line status for the caller to log."""
+def _refine(paths: list[Path]) -> tuple[str, dict[str, str]]:
+    """Refine crops in place. Returns (one-line status, {path: suspect reason})."""
     if not paths:
-        return "no crops"
+        return "no crops", {}
     strs = [str(p) for p in paths]
     try:
         import PIL  # noqa: F401, PLC0415
-        _refine_worker(strs)
-        return f"refined {len(strs)} (in-process Pillow)"
+        return f"refined {len(strs)} (in-process Pillow)", _refine_worker(strs)
     except ImportError:
         pass
     uv = find_tool("uv") or shutil.which("uv")
     if not uv:
-        return "skipped (no Pillow, no uv)"
+        return "skipped (no Pillow, no uv)", {}
     cmd = [uv, "run", "--no-project", "--with", "pillow",
            "python", __file__, "--refine-worker", *strs]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         sys.stderr.write(f"[illustrate] refine worker failed: {r.stderr.strip()}\n")
-        return "skipped (uv/Pillow error)"
-    return f"refined {len(strs)} (uv --with pillow)"
+        return "skipped (uv/Pillow error)", {}
+    verdicts: dict[str, str] = {}
+    for line in r.stdout.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) == 3 and parts[0] == "SUSPECT":
+            verdicts[parts[1]] = parts[2]
+    return f"refined {len(strs)} (uv --with pillow)", verdicts
 
 
 # --- Dedup (reuses frames.py dHash) -----------------------------------------
@@ -222,6 +314,16 @@ def main() -> int:
     ap.add_argument("--dedup-threshold", type=int, default=6,
                     help="min dHash Hamming distance to treat crops as distinct (default 6)")
     ap.add_argument("--no-refine", action="store_true", help="skip the Pillow margin trim")
+    ap.add_argument("--sheet", action="store_true",
+                    help="scouting: write tiled contact sheets instead of cropping")
+    ap.add_argument("--interval", type=int, default=30,
+                    help="--sheet: seconds between sampled frames (default 30)")
+    ap.add_argument("--sheet-tile", default="6x5",
+                    help="--sheet: tile grid COLSxROWS (default 6x5)")
+    ap.add_argument("--sheet-width", type=int, default=320,
+                    help="--sheet: width of each tile in px (default 320)")
+    ap.add_argument("--extract", type=float, nargs="+", metavar="T",
+                    help="scouting: write native-res frames at these timestamps (seconds)")
     args = ap.parse_args()
 
     # Internal re-exec path: just refine and exit (runs inside `uv run --with pillow`).
@@ -229,8 +331,10 @@ def main() -> int:
         _refine_worker(args.refine_worker)
         return 0
 
-    if not (args.video and args.spec and args.out_dir):
-        ap.error("--video, --spec and --out-dir are required")
+    if not (args.video and args.out_dir):
+        ap.error("--video and --out-dir are required")
+    if not (args.sheet or args.extract or args.spec):
+        ap.error("--spec is required (or use --sheet / --extract for scouting)")
 
     ffmpeg = find_tool("ffmpeg")
     if ffmpeg is None:
@@ -241,6 +345,15 @@ def main() -> int:
     if not Path(video).exists():
         sys.stderr.write(f"[illustrate] ERROR: video not found: {video}\n")
         return 2
+
+    # Scouting modes: no spec involved, just help the model see the video.
+    if args.sheet or args.extract:
+        scout_dir = Path(args.out_dir).expanduser().resolve()
+        scout_dir.mkdir(parents=True, exist_ok=True)
+        if args.sheet:
+            return _make_sheets(ffmpeg, video, scout_dir,
+                                args.interval, args.sheet_tile, args.sheet_width)
+        return _extract_frames(ffmpeg, video, scout_dir, args.extract)
 
     try:
         spec = json.loads(Path(args.spec).read_text(encoding="utf-8"))
@@ -279,8 +392,10 @@ def main() -> int:
         sys.stderr.write("[illustrate] ERROR: no crops were produced\n")
         return 1
 
+    suspects: dict[str, str] = {}
     if not args.no_refine:
-        sys.stderr.write(f"[illustrate] {_refine([Path(it['_path']) for it in items])}\n")
+        status, suspects = _refine([Path(it["_path"]) for it in items])
+        sys.stderr.write(f"[illustrate] {status}\n")
 
     items = _dedup(ffmpeg, items, args.dedup_threshold)
 
@@ -294,6 +409,7 @@ def main() -> int:
                 "caption": it["caption"],
                 "type": it["type"],
                 "path": Path(it["_path"]).name,
+                **({"suspect": suspects[it["_path"]]} if it["_path"] in suspects else {}),
             }
             for it in items
         ],
@@ -307,7 +423,15 @@ def main() -> int:
     print(f"[illustrate] wrote {len(items)} illustration(s) -> {out_dir}")
     print(f"[illustrate] manifest: {manifest_path}")
     for it in manifest["illustrations"]:
-        print(f"  - [{it['timestamp_label']}] {it['path']}  ({it['type']}) {it['caption']}")
+        mark = "  [SUSPECT]" if "suspect" in it else ""
+        print(f"  - [{it['timestamp_label']}] {it['path']}  ({it['type']}) {it['caption']}{mark}")
+    n_suspect = sum(1 for it in manifest["illustrations"] if "suspect" in it)
+    if n_suspect:
+        # Plain ASCII dash: Windows consoles decode stderr as cp1252 and mangle em-dashes.
+        sys.stderr.write(
+            f"[illustrate] {n_suspect} crop(s) flagged SUSPECT (see manifest) - the bbox "
+            f"probably missed its target; adjust the spec entry and re-run.\n"
+        )
     return 0
 
 

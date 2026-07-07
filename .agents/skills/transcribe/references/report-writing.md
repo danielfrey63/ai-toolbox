@@ -78,6 +78,22 @@ Otherwise, from the frames already read:
      --out-dir "<base>.illustrations"
    ```
    It prints the surviving crops and writes `<base>.illustrations/manifest.json`. **Read the manifest** — dedup may have dropped near-duplicate slides, so the manifest (not your spec) is the authoritative list of what to embed. The crops are PNGs at native resolution, idempotent on re-run.
+5. **Check for SUSPECT flags and iterate.** Entries whose crop came out tiny or near-uniform carry a `"suspect"` reason in the manifest (and a `[SUSPECT]` mark in the stdout list) — the bbox almost certainly missed its target region. Fix those bboxes in the spec and re-run (the spec is the desired state; re-runs are cheap and idempotent). Then **Read the final PNGs** and verify each crop shows what its caption claims — trimmed slivers of browser chrome or a neighbouring section mean the bbox needs one more nudge.
+
+### Standalone re-run on an existing report (analysis frames gone)
+
+When the report already exists but has no illustrations (older run, or the step was skipped), don't hand-roll ffmpeg — `illustrate.py` has scouting modes:
+
+```bash
+# 1. Contact sheets: 1 frame per 30s, tiled 6x5 — find the slide moments
+python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" --video "<video>" --sheet --out-dir "<scratch>/sheets"
+# prints the tile→timestamp formula; Read the sheets, note candidate times
+
+# 2. Native-res frames at the candidate times — estimate precise bboxes
+python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" --video "<video>" --extract 270 560 840 --out-dir "<scratch>/frames"
+```
+
+Then continue with the spec + crop steps above. (Do NOT use ffmpeg `drawtext` for timestamp overlays — fontconfig-less builds segfault on it; the printed mapping formula replaces it.)
 
 The embedding happens in SKILL.md Step 5; the work happens here because the Summary references the illustrations.
 
