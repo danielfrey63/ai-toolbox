@@ -4,7 +4,7 @@ description: Discover the most interesting recent videos across AI, frontier mod
 allowed-tools: Bash, Read
 user-invocable: true
 metadata:
-  version: "0.1.2"
+  version: "0.2.3"
 ---
 
 # /discover — curate recent interesting videos
@@ -29,8 +29,10 @@ No API key, no auth. Searches go directly to YouTube via yt-dlp's scraper.
 
 ## How to invoke
 
+`${CLAUDE_SKILL_DIR}` refers to this skill's directory (the folder containing this SKILL.md); if the variable is unset, substitute that absolute path. On Windows use `python` instead of `python3`.
+
 ```bash
-python3 ~/.claude/skills/discover/scripts/discover.py
+python3 "${CLAUDE_SKILL_DIR}/scripts/discover.py"
 ```
 
 That's the default — runs every topic in `topics.json` against the last 14 days, ranks by views/day, prints the top 20.
@@ -53,20 +55,20 @@ That's the default — runs every topic in `topics.json` against the last 14 day
 
 ```bash
 # Today's hot picks across only frontier models and skills
-python3 ~/.claude/skills/discover/scripts/discover.py --topics "Frontier Models,Skills" --days 3
+python3 "${CLAUDE_SKILL_DIR}/scripts/discover.py" --topics "Frontier Models,Skills" --days 3
 
 # Wider net — last month, top 40, no shorts allowed
-python3 ~/.claude/skills/discover/scripts/discover.py --days 30 --top 40 --min-duration 600
+python3 "${CLAUDE_SKILL_DIR}/scripts/discover.py" --days 30 --top 40 --min-duration 600
 
 # Pipe top 5 URLs into /transcribe for content summaries
-python3 ~/.claude/skills/discover/scripts/discover.py --json --top 5 \
+python3 "${CLAUDE_SKILL_DIR}/scripts/discover.py" --json --top 5 \
   | jq -r '.[].url'
 # (then invoke /transcribe on each URL)
 ```
 
 ## Topic configuration
 
-Edit `~/.claude/skills/discover/scripts/topics.json`. The file is a JSON object: `{"Topic Name": ["query 1", "query 2", ...]}`. Multiple queries per topic broaden coverage — they're all run, results deduped by video ID.
+Edit `${CLAUDE_SKILL_DIR}/scripts/topics.json`. The file is a JSON object: `{"Topic Name": ["query 1", "query 2", ...]}`. Multiple queries per topic broaden coverage — they're all run, results deduped by video ID.
 
 Default topics ship with 2–3 queries each across:
 - **AI** — general AI news / Anthropic announcements / Claude releases
