@@ -49,7 +49,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from frames import _dhash_from_file, _hash_sidecar_path
+from frames import _hash_sidecar_path
 from setup import find_tool
 
 
@@ -249,14 +249,24 @@ def _refine(paths: list[Path]) -> tuple[str, dict[str, str]]:
     return f"refined {len(strs)} (uv --with pillow)", verdicts
 
 
-# --- Dedup (reuses frames.py dHash) -----------------------------------------
+# --- Dedup (fine-grained dHash) -----------------------------------------------
+
+# Crops are often near-white text slides that a coarse 9x8 dHash (frames.py's
+# analysis-frame variant) cannot tell apart — two DIFFERENT Confluence pages
+# hash within a couple of bits and one gets silently eaten. Illustrations are
+# few, so we can afford a 17x16 sidecar → 256-bit hash, which separates text
+# layouts cleanly while a re-shown identical slide (cursor moved, few pixels)
+# still lands within threshold.
+_HASH_W, _HASH_H = 17, 16  # -> (W-1)*H = 256 bits
+_HASH_BITS = (_HASH_W - 1) * _HASH_H
+
 
 def _gray_sidecar(ffmpeg: str, png: Path) -> Path | None:
-    """Write a 9x8 grayscale raw sidecar for dHash. Returns its path or None."""
+    """Write a 17x16 grayscale raw sidecar for dHash. Returns its path or None."""
     side = _hash_sidecar_path(png)
     cmd = [
         ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(png),
-        "-vf", "scale=9:8,format=gray", "-frames:v", "1",
+        "-vf", f"scale={_HASH_W}:{_HASH_H},format=gray", "-frames:v", "1",
         "-f", "rawvideo", "-pix_fmt", "gray", str(side),
     ]
     if subprocess.run(cmd, capture_output=True).returncode == 0 and side.exists():
@@ -264,38 +274,64 @@ def _gray_sidecar(ffmpeg: str, png: Path) -> Path | None:
     return None
 
 
-def _dedup(ffmpeg: str, items: list[dict], threshold: int) -> list[dict]:
-    """Drop crops whose dHash is within `threshold` bits of an already-kept one.
+def _dhash(side: Path) -> "int | None":
+    """Row-wise gradient hash over a WxH grayscale raw file (W*H bytes)."""
+    try:
+        raw = side.read_bytes()
+    except OSError:
+        return None
+    if len(raw) != _HASH_W * _HASH_H:
+        return None
+    bits = 0
+    for row in range(_HASH_H):
+        base = row * _HASH_W
+        for col in range(_HASH_W - 1):
+            bits = (bits << 1) | (1 if raw[base + col] < raw[base + col + 1] else 0)
+    return bits
 
-    O(n²) against all kept hashes (illustration counts are tiny, and a slide
-    can reappear far apart in time, so last-kept-only would miss it). Removes
-    the dropped PNG from disk; cleans up all sidecars at the end.
+
+def _dedup(ffmpeg: str, items: list[dict], threshold: int) -> tuple[list[dict], list[dict]]:
+    """Drop crops whose dHash is within threshold of an already-kept one.
+
+    `threshold` keeps its historical per-64-bit semantics (default 6) and is
+    scaled to the 256-bit hash internally. Entries with `no_dedup` are always
+    kept. O(n²) against all kept hashes (illustration counts are tiny, and a
+    slide can reappear far apart in time). Removes dropped PNGs from disk and
+    returns (kept, dropped) — dropped entries carry `_dup_of` (the kept id) so
+    the manifest can report them instead of losing them silently.
     """
+    eff = threshold * (_HASH_BITS // 64)
     for it in items:
         side = _gray_sidecar(ffmpeg, Path(it["_path"]))
-        it["_hash"] = _dhash_from_file(side) if side else None
+        it["_hash"] = _dhash(side) if side else None
 
     kept: list[dict] = []
-    dropped = 0
+    dropped: list[dict] = []
     for it in items:
         h = it["_hash"]
-        if h is not None and any(
-            k["_hash"] is not None and bin(k["_hash"] ^ h).count("1") < threshold
-            for k in kept
-        ):
+        dup = None
+        if h is not None and not it.get("_no_dedup"):
+            dup = next(
+                (k for k in kept
+                 if k["_hash"] is not None and bin(k["_hash"] ^ h).count("1") < eff),
+                None,
+            )
+        if dup is not None:
             Path(it["_path"]).unlink(missing_ok=True)
-            dropped += 1
+            it["_dup_of"] = dup["id"]
+            dropped.append(it)
             continue
         kept.append(it)
 
     for it in items:
         _hash_sidecar_path(Path(it["_path"])).unlink(missing_ok=True)
-    if dropped:
+    for it in dropped:
         sys.stderr.write(
-            f"[illustrate] dedup: kept {len(kept)} of {len(items)} crops "
-            f"(dropped {dropped} near-duplicate slides, threshold {threshold})\n"
+            f"[illustrate] dedup: dropped id={it['id']} [{it['timestamp_label']}] as "
+            f"near-duplicate of id={it['_dup_of']} (threshold {threshold}/64bit -> {eff}/{_HASH_BITS}bit); "
+            f"add \"no_dedup\": true to that spec entry if it is genuinely distinct\n"
         )
-    return kept
+    return kept, dropped
 
 
 def _fmt_ts(t: float) -> str:
@@ -386,6 +422,7 @@ def main() -> int:
             items.append({
                 "id": eid, "timestamp": round(t, 2), "timestamp_label": _fmt_ts(t),
                 "caption": caption, "type": etype, "_path": str(path),
+                "_no_dedup": bool(entry.get("no_dedup")),
             })
 
     if not items:
@@ -397,10 +434,15 @@ def main() -> int:
         status, suspects = _refine([Path(it["_path"]) for it in items])
         sys.stderr.write(f"[illustrate] {status}\n")
 
-    items = _dedup(ffmpeg, items, args.dedup_threshold)
+    items, dup_dropped = _dedup(ffmpeg, items, args.dedup_threshold)
 
     manifest = {
         "video": str(Path(video).resolve()),
+        "dropped_duplicates": [
+            {"id": it["id"], "timestamp": it["timestamp"], "caption": it["caption"],
+             "duplicate_of": it["_dup_of"]}
+            for it in dup_dropped
+        ],
         "illustrations": [
             {
                 "id": it["id"],

@@ -77,7 +77,7 @@ Otherwise, from the frames already read:
      --spec "<base>.illustrations.spec.json" \
      --out-dir "<base>.illustrations"
    ```
-   It prints the surviving crops and writes `<base>.illustrations/manifest.json`. **Read the manifest** — dedup may have dropped near-duplicate slides, so the manifest (not your spec) is the authoritative list of what to embed. The crops are PNGs at native resolution, idempotent on re-run.
+   It prints the surviving crops and writes `<base>.illustrations/manifest.json`. **Read the manifest** — dedup may have dropped near-duplicate slides (they are listed under `dropped_duplicates` with the surviving id), so the manifest (not your spec) is the authoritative list of what to embed. If a drop was a false positive (two genuinely different but visually similar slides), add `"no_dedup": true` to that spec entry and re-run. The crops are PNGs at native resolution, idempotent on re-run.
 5. **Check for SUSPECT flags and iterate.** Entries whose crop came out tiny or near-uniform carry a `"suspect"` reason in the manifest (and a `[SUSPECT]` mark in the stdout list) — the bbox almost certainly missed its target region. Fix those bboxes in the spec and re-run (the spec is the desired state; re-runs are cheap and idempotent). Then **Read the final PNGs** and verify each crop shows what its caption claims — trimmed slivers of browser chrome or a neighbouring section mean the bbox needs one more nudge.
 
 ### Standalone re-run on an existing report (analysis frames gone)
