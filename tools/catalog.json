@@ -20,6 +20,12 @@
       "description": "Transcribe a video or audio file — captions/Whisper, frames, diarization."
     },
     {
+      "name": "fable-mode",
+      "type": "skill",
+      "path": ".agents/skills/fable-mode",
+      "description": "Five-phase Fable-grade reasoning protocol (Scope, Evidence, Attack, Verify, Report)."
+    },
+    {
       "name": "idempotent-devops",
       "type": "skill",
       "path": ".agents/skills/idempotent-devops",
