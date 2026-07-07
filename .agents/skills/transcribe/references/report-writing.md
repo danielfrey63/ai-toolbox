@@ -63,14 +63,15 @@ Some frames *are* the content — an architecture diagram, a chart with the key 
 Otherwise, from the frames already read:
 
 1. **Select the decisive frames.** Pick the ones carrying an illustration that *materially aids understanding* — diagrams, architecture/data-flow slides, charts, tables, screenshots with substantive content. `[CUT]` frames are the prime candidates (slides land on scene cuts). Exclude talking-head, transitions, decorative title cards, and anything redundant. Be selective: typically **3–10** for a talk, often fewer.
-2. **For each, give a normalized bounding box** `[x, y, w, h]` in `0..1` of the illustration *region within the frame* (estimate it from the image — the script trims uniform margins afterwards, so a slightly generous box is fine; omit `bbox` to keep the whole frame). Add a short `caption` (use canonical names from the Inventar) and a `type` (`Architektur` / `Diagramm` / `Chart` / `Tabelle` / `Screenshot` / `Slide`).
-3. **Write the spec** to `<base>.illustrations.spec.json` (the `Write` tool) as a JSON list:
+2. **Themen-Abdeckung — cross-check the selection against the transcript.** Visual triage alone systematically drops slides that *look* decorative but *are* the discussion (real miss: a photo pair with red/green classification dots looked "nur illustrativ", yet the speakers spent 3+ minutes on exactly that accessibility classification). So: walk the major discussion topics (anything spanning ≳2 minutes or recurring), take each topic's transcript time window, and check that at least one selected illustration falls inside it — or name the explicit reason why the topic needs none. For an uncovered window, scout it with `--extract-range <start> <end> --step 10` and pick the frame where the discussed visual is fully on screen. A visual the speakers talk *about* is content, never decoration.
+3. **For each, give a normalized bounding box** `[x, y, w, h]` in `0..1` of the illustration *region within the frame* (estimate it from the image — the script trims uniform margins afterwards, so a slightly generous box is fine; omit `bbox` to keep the whole frame). Add a short `caption` (use canonical names from the Inventar) and a `type` (`Architektur` / `Diagramm` / `Chart` / `Tabelle` / `Screenshot` / `Slide`).
+4. **Write the spec** to `<base>.illustrations.spec.json` (the `Write` tool) as a JSON list:
    ```json
    [ { "id": 1, "timestamp": 734.0, "bbox": [0.08, 0.12, 0.84, 0.76],
        "caption": "Zielarchitektur DfA-GIS", "type": "Architektur" } ]
    ```
    `timestamp` is in seconds (the absolute `t=` of the frame). `<base>` is the report base (the `.md` stem from the header's saved-files lines).
-4. **Run the cropper**, passing the `**Video file:**` path from the report header verbatim:
+5. **Run the cropper**, passing the `**Video file:**` path from the report header verbatim:
    ```bash
    python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" \
      --video "<Video file from header>" \
@@ -78,7 +79,7 @@ Otherwise, from the frames already read:
      --out-dir "<base>.illustrations"
    ```
    It prints the surviving crops and writes `<base>.illustrations/manifest.json`. **Read the manifest** — dedup may have dropped near-duplicate slides (they are listed under `dropped_duplicates` with the surviving id), so the manifest (not your spec) is the authoritative list of what to embed. If a drop was a false positive (two genuinely different but visually similar slides), add `"no_dedup": true` to that spec entry and re-run. The crops are PNGs at native resolution, idempotent on re-run.
-5. **Check for SUSPECT flags and iterate.** Entries whose crop came out tiny or near-uniform carry a `"suspect"` reason in the manifest (and a `[SUSPECT]` mark in the stdout list) — the bbox almost certainly missed its target region. Fix those bboxes in the spec and re-run (the spec is the desired state; re-runs are cheap and idempotent). Then **Read the final PNGs** and verify each crop shows what its caption claims — trimmed slivers of browser chrome or a neighbouring section mean the bbox needs one more nudge.
+6. **Check for SUSPECT flags and iterate.** Entries whose crop came out tiny or near-uniform carry a `"suspect"` reason in the manifest (and a `[SUSPECT]` mark in the stdout list) — the bbox almost certainly missed its target region. Fix those bboxes in the spec and re-run (the spec is the desired state; re-runs are cheap and idempotent). Then **Read the final PNGs** and verify each crop shows what its caption claims — trimmed slivers of browser chrome or a neighbouring section mean the bbox needs one more nudge.
 
 ### Standalone re-run on an existing report (analysis frames gone)
 
@@ -91,6 +92,10 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" --video "<video>" --sheet --
 
 # 2. Native-res frames at the candidate times — estimate precise bboxes
 python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" --video "<video>" --extract 270 560 840 --out-dir "<scratch>/frames"
+
+# 3. Transcript says minutes 4:46-8:16 discuss topic X but no candidate found?
+#    Sample that window densely and pick the frame where X is fully on screen
+python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" --video "<video>" --extract-range 286 496 --step 10 --out-dir "<scratch>/topic-x"
 ```
 
 Then continue with the spec + crop steps above. (Do NOT use ffmpeg `drawtext` for timestamp overlays — fontconfig-less builds segfault on it; the printed mapping formula replaces it.)

@@ -360,6 +360,11 @@ def main() -> int:
                     help="--sheet: width of each tile in px (default 320)")
     ap.add_argument("--extract", type=float, nargs="+", metavar="T",
                     help="scouting: write native-res frames at these timestamps (seconds)")
+    ap.add_argument("--extract-range", type=float, nargs=2, metavar=("START", "END"),
+                    help="scouting: sample native-res frames across a discussion window "
+                         "(seconds; use transcript timestamps to pick the window)")
+    ap.add_argument("--step", type=float, default=10.0,
+                    help="--extract-range: seconds between sampled frames (default 10)")
     args = ap.parse_args()
 
     # Internal re-exec path: just refine and exit (runs inside `uv run --with pillow`).
@@ -369,8 +374,8 @@ def main() -> int:
 
     if not (args.video and args.out_dir):
         ap.error("--video and --out-dir are required")
-    if not (args.sheet or args.extract or args.spec):
-        ap.error("--spec is required (or use --sheet / --extract for scouting)")
+    if not (args.sheet or args.extract or args.extract_range or args.spec):
+        ap.error("--spec is required (or use --sheet / --extract / --extract-range for scouting)")
 
     ffmpeg = find_tool("ffmpeg")
     if ffmpeg is None:
@@ -383,13 +388,22 @@ def main() -> int:
         return 2
 
     # Scouting modes: no spec involved, just help the model see the video.
-    if args.sheet or args.extract:
+    if args.sheet or args.extract or args.extract_range:
         scout_dir = Path(args.out_dir).expanduser().resolve()
         scout_dir.mkdir(parents=True, exist_ok=True)
         if args.sheet:
             return _make_sheets(ffmpeg, video, scout_dir,
                                 args.interval, args.sheet_tile, args.sheet_width)
-        return _extract_frames(ffmpeg, video, scout_dir, args.extract)
+        stamps = list(args.extract or [])
+        if args.extract_range:
+            start, end = args.extract_range
+            if end < start or args.step <= 0:
+                ap.error("--extract-range needs START <= END and --step > 0")
+            t = start
+            while t <= end:
+                stamps.append(round(t, 3))
+                t += args.step
+        return _extract_frames(ffmpeg, video, scout_dir, stamps)
 
     try:
         spec = json.loads(Path(args.spec).read_text(encoding="utf-8"))
