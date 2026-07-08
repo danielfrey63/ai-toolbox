@@ -49,6 +49,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Windows consoles default to cp1252; captions carry arrows/dashes that would
+# raise UnicodeEncodeError mid-print AFTER the crops are already written,
+# turning a successful run into exit 1. Degrade unencodable chars instead.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="replace")
+
 from frames import _hash_sidecar_path
 from setup import find_tool
 
