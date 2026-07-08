@@ -214,6 +214,8 @@ Append (don't overwrite) — the stub header above stays intact. For URL sources
 *Abb. — Zielarchitektur DfA-GIS [12:14]*
 ```
 
+When the relative path contains spaces (typical for meeting recordings), wrap it in angle brackets — `![…](<my video.illustrations/ill_01….png>)` — otherwise CommonMark truncates the URL at the first space.
+
 Place each image once, where it carries the most explanatory weight; don't scatter the same crop across sections. If the manifest is empty or absent, there's nothing to embed — move on.
 
 **After the append, surface Übersicht + Summary in chat.** The chat / console is where the user actually reads the result; the saved file is the persistent artifact. Echo the **full `## Übersicht`** block (Kernaussagen + Chapter-Struktur — quick orient, ~15 lines) and the **full `## Summary`** block (thematic catalog) into your final chat message, then a short pointer block listing the three companion files **as markdown links with `file://` URLs** so the user can click through (clickable in Claude Code and most modern terminals):
