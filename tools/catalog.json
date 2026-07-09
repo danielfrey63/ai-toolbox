@@ -20,6 +20,12 @@
       "description": "Transcribe a video or audio file — captions/Whisper, frames, diarization."
     },
     {
+      "name": "gdrive",
+      "type": "skill",
+      "path": ".agents/skills/gdrive",
+      "description": "Read Google-native files (.gsheet/.gdoc/.gslides pointers) from a Drive sync folder via Google MCP tools."
+    },
+    {
       "name": "fable-mode",
       "type": "skill",
       "path": ".agents/skills/fable-mode",
