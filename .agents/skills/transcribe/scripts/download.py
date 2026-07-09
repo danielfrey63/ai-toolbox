@@ -7,12 +7,13 @@ transcribe.py can parse them without needing Whisper.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
-from setup import find_tool
+from setup import TRANSCRIBE_BIN_DIR, find_tool
 
 
 VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".m4v", ".avi", ".flv", ".wmv"}
@@ -92,9 +93,16 @@ def download_url(url: str, out_dir: Path) -> dict:
         url,
     ]
 
+    # yt-dlp discovers its JS runtime (deno, needed for YouTube's EJS
+    # challenges) via PATH. The standalone deno from setup.py lives in
+    # ~/.transcribe/bin/, which usually isn't on PATH - prepend it so a
+    # system-installed yt-dlp finds it too.
+    env = dict(os.environ)
+    env["PATH"] = str(TRANSCRIBE_BIN_DIR) + os.pathsep + env.get("PATH", "")
+
     # yt-dlp may exit non-zero if a subtitle variant fails (e.g. 429) even when
     # the video itself downloaded fine. Treat "video file present" as success.
-    result = subprocess.run(cmd, stdout=sys.stderr, stderr=sys.stderr)
+    result = subprocess.run(cmd, stdout=sys.stderr, stderr=sys.stderr, env=env)
     video = _pick_video(out_dir)
     if video is None:
         raise SystemExit(

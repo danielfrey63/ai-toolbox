@@ -113,6 +113,21 @@ UV_URLS = {
     "macos-amd64": UV_BASE + "uv-x86_64-apple-darwin.tar.gz",
     "macos-arm64": UV_BASE + "uv-aarch64-apple-darwin.tar.gz",
 }
+
+# deno = yt-dlp's default JS runtime for YouTube's EJS challenges. Without
+# one on PATH, yt-dlp warns that YouTube extraction is deprecated and some
+# formats may be missing. Recommended, not required: only YouTube URL
+# downloads benefit, so a missing deno never fails the preflight - the
+# installer drops it into ~/.transcribe/bin/ alongside the other binaries,
+# and download.py prepends that dir to the yt-dlp subprocess PATH.
+DENO_BASE = "https://github.com/denoland/deno/releases/latest/download/"
+DENO_URLS = {
+    "linux-amd64": DENO_BASE + "deno-x86_64-unknown-linux-gnu.zip",
+    "linux-arm64": DENO_BASE + "deno-aarch64-unknown-linux-gnu.zip",
+    "windows-x64": DENO_BASE + "deno-x86_64-pc-windows-msvc.zip",
+    "macos-amd64": DENO_BASE + "deno-x86_64-apple-darwin.zip",
+    "macos-arm64": DENO_BASE + "deno-aarch64-apple-darwin.zip",
+}
 # The .env template is a real file at the repo / skill root, not an embedded
 # string - one canonical source, browsable in the repo, shipped in the skill
 # bundle via `git archive`. scripts/ is one level below the root.
@@ -326,6 +341,39 @@ def find_uv() -> str | None:
     return shutil.which("uv")
 
 
+def _download_and_extract_binary(url: str, bin_name: str, out: Path) -> bool:
+    """Download an archive, locate `bin_name` inside it, install it to `out`.
+
+    Shared by the single-binary installs (uv, deno). Handles .zip and
+    .tar.gz/.tar.xz archives; chmods +x on Unix. Returns True on success."""
+    TRANSCRIBE_BIN_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f"transcribe-{out.stem}-") as tmp:
+        tmp_path = Path(tmp)
+        archive_path = tmp_path / url.rsplit("/", 1)[-1]
+        _download(url, archive_path)
+
+        sys.stderr.write(f"[setup] extracting {archive_path.name}...\n")
+        if url.endswith(".zip"):
+            with zipfile.ZipFile(archive_path) as zf:
+                zf.extractall(tmp_path)
+        else:
+            mode = "r:xz" if url.endswith(".xz") else "r:gz"
+            with tarfile.open(archive_path, mode) as tf:
+                try:
+                    tf.extractall(tmp_path, filter="data")
+                except TypeError:
+                    tf.extractall(tmp_path)
+
+        src = next((p for p in tmp_path.rglob(bin_name) if p.is_file()), None)
+        if not src:
+            sys.stderr.write(f"[setup] could not find {bin_name} inside the archive\n")
+            return False
+        shutil.copy2(src, out)
+        if not IS_WINDOWS:
+            out.chmod(0o755)
+    return True
+
+
 def _install_uv(force: bool = False) -> str | None:
     """Drop the uv binary into TRANSCRIBE_BIN_DIR. Returns its path, or None
     if the platform has no uv build. Idempotent: no-op when already present."""
@@ -342,37 +390,42 @@ def _install_uv(force: bool = False) -> str | None:
         )
         return None
 
-    url = UV_URLS[target]
     suffix = ".exe" if target == "windows-x64" else ""
     out = TRANSCRIBE_BIN_DIR / f"uv{suffix}"
-    TRANSCRIBE_BIN_DIR.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="transcribe-uv-") as tmp:
-        tmp_path = Path(tmp)
-        archive_path = tmp_path / url.rsplit("/", 1)[-1]
-        _download(url, archive_path)
-
-        sys.stderr.write(f"[setup] extracting {archive_path.name}...\n")
-        if url.endswith(".zip"):
-            with zipfile.ZipFile(archive_path) as zf:
-                zf.extractall(tmp_path)
-        else:  # .tar.gz
-            with tarfile.open(archive_path, "r:gz") as tf:
-                try:
-                    tf.extractall(tmp_path, filter="data")
-                except TypeError:
-                    tf.extractall(tmp_path)
-
-        uv_name = f"uv{suffix}"
-        uv_src = next((p for p in tmp_path.rglob(uv_name) if p.is_file()), None)
-        if not uv_src:
-            sys.stderr.write(f"[setup] could not find {uv_name} inside the archive\n")
-            return None
-        shutil.copy2(uv_src, out)
-        if target != "windows-x64":
-            out.chmod(0o755)
-
+    if not _download_and_extract_binary(UV_URLS[target], f"uv{suffix}", out):
+        return None
     sys.stderr.write(f"[setup] installed uv -> {out}\n")
     return str(out)
+
+
+def _install_deno(force: bool = False) -> bool:
+    """Drop the deno binary into TRANSCRIBE_BIN_DIR so yt-dlp has its default
+    JS runtime for YouTube extraction. Recommended, not required - callers
+    treat a failure as a warning, never as a setup failure.
+
+    Idempotent: no-op when a deno is already findable (standalone or PATH).
+    Uses _uv_target() because the arch mapping is identical (deno ships
+    arch-specific macOS builds too)."""
+    existing = find_tool("deno")
+    if existing and not force:
+        sys.stderr.write(f"[setup] deno already available: {existing}\n")
+        return True
+
+    target = _uv_target()
+    if not target or target not in DENO_URLS:
+        sys.stderr.write(
+            f"[setup] no deno build for this platform "
+            f"({platform.system()} / {platform.machine()}) - YouTube downloads "
+            "will run without a JS runtime.\n"
+        )
+        return False
+
+    suffix = ".exe" if target == "windows-x64" else ""
+    out = TRANSCRIBE_BIN_DIR / f"deno{suffix}"
+    if not _download_and_extract_binary(DENO_URLS[target], f"deno{suffix}", out):
+        return False
+    sys.stderr.write(f"[setup] installed deno -> {out}\n")
+    return True
 
 
 def ensure_uv() -> str:
@@ -389,7 +442,7 @@ def ensure_uv() -> str:
 
 
 def cmd_install_binaries(force: bool = False) -> int:
-    """Download standalone ffmpeg + ffprobe + yt-dlp into ~/.transcribe/bin/."""
+    """Download standalone ffmpeg + ffprobe + yt-dlp (+ deno) into ~/.transcribe/bin/."""
     target = _detect_target()
     if not target:
         sys.stderr.write(
@@ -409,6 +462,12 @@ def cmd_install_binaries(force: bool = False) -> int:
         _install_ffmpeg(target, force=force)
     except Exception as exc:
         sys.stderr.write(f"[setup] ffmpeg install failed: {exc}\n")
+    # Recommended, not required: a deno failure is a warning, never exit != 0.
+    try:
+        _install_deno(force=force)
+    except Exception as exc:
+        sys.stderr.write(f"[setup] deno install failed (YouTube downloads will "
+                         f"run without a JS runtime): {exc}\n")
 
     missing = _check_binaries()
     if missing:
@@ -1051,6 +1110,9 @@ def _status() -> dict:
         "status": status,
         "first_run": is_first_run(),
         "missing_binaries": missing,
+        # Recommended-but-optional binaries (currently just deno, yt-dlp's JS
+        # runtime for YouTube). Never affects `status` or exit codes.
+        "recommended_missing": [] if find_tool("deno") else ["deno"],
         "whisper_backend": backend,
         "has_api_key": has_key,
         "diarize_configured": diarize_configured,
@@ -1094,8 +1156,15 @@ def cmd_check() -> int:
     # alternatives, not "needed".
     suggest_diarize = not _diarize_is_dismissed() and not s["diarize_configured"]
 
+    # deno is recommended (yt-dlp's JS runtime for YouTube extraction) but
+    # never required: local-file transcription doesn't touch it. Missing deno
+    # therefore prints a hint but keeps exit 0; the hint self-silences once
+    # the installer has dropped deno into ~/.transcribe/bin/.
+    deno_missing = bool(s["recommended_missing"])
+
     # Fully ready -> stay silent (Claude's per-turn preflight shouldn't spam).
-    if not s["missing_binaries"] and not needs_transcription and not suggest_diarize:
+    if (not s["missing_binaries"] and not needs_transcription
+            and not suggest_diarize and not deno_missing):
         return 0
 
     installer = Path(__file__).resolve()
@@ -1104,6 +1173,13 @@ def cmd_check() -> int:
         sys.stderr.write(
             "[transcribe] missing binaries: "
             f"{', '.join(s['missing_binaries'])}. Run: python3 {installer}\n"
+        )
+
+    if deno_missing:
+        sys.stderr.write(
+            "[transcribe] deno (yt-dlp's JS runtime for YouTube extraction) is "
+            "missing - YouTube downloads run in deprecated no-JS mode and may "
+            f"lose formats. Run: python3 {installer} --install-binaries\n"
         )
 
     if needs_transcription:
@@ -1240,6 +1316,20 @@ def cmd_install() -> int:
             print(f"[setup] unsupported platform ({system}) for auto-install. Install manually:", file=sys.stderr)
             print(f"  missing: {', '.join(missing)}", file=sys.stderr)
             return 2
+
+    # deno (recommended): the required-binaries block above only runs when
+    # ffmpeg/yt-dlp are missing, so ensure deno separately - it ships
+    # standalone zips for every supported platform (incl. macOS), so this
+    # never needs the brew detour. Best-effort: a failure is a warning only.
+    if find_tool("deno") is None:
+        try:
+            _install_deno()
+        except Exception as exc:
+            print(
+                f"[setup] deno install failed (YouTube downloads will run "
+                f"without a JS runtime): {exc}",
+                file=sys.stderr,
+            )
 
     created = _scaffold_env()
     if created:
