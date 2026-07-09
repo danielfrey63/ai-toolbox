@@ -225,12 +225,18 @@ def _download(url: str, dest: Path) -> None:
 
 
 def _install_ytdlp(target: str, force: bool = False) -> bool:
-    """Drop yt-dlp[.exe] into TRANSCRIBE_BIN_DIR."""
+    """Drop yt-dlp[.exe] into TRANSCRIBE_BIN_DIR.
+
+    Desired-state: skip the download when find_tool() already resolves
+    yt-dlp (standalone dir first, then PATH). --force still fetches a
+    standalone copy - the escape hatch for a broken/outdated PATH version
+    (find_tool prefers ~/.transcribe/bin/, so the fresh copy wins)."""
+    existing = find_tool("yt-dlp")
+    if existing and not force:
+        sys.stderr.write(f"[setup] yt-dlp already available: {existing} (use --force to refresh)\n")
+        return True
     suffix = ".exe" if target == "windows-x64" else ""
     out = TRANSCRIBE_BIN_DIR / f"yt-dlp{suffix}"
-    if out.exists() and not force:
-        sys.stderr.write(f"[setup] yt-dlp already in {out} (use --force to refresh)\n")
-        return True
     url = YTDLP_URLS.get(target)
     if not url:
         sys.stderr.write(f"[setup] no yt-dlp standalone for target '{target}'\n")
@@ -244,6 +250,20 @@ def _install_ytdlp(target: str, force: bool = False) -> bool:
 
 def _install_ffmpeg(target: str, force: bool = False) -> bool:
     """Unpack ffmpeg+ffprobe into TRANSCRIBE_BIN_DIR. macOS routes through brew."""
+    # Desired-state: skip when find_tool() already resolves both binaries
+    # (standalone dir first, then PATH). Checked before the macOS branch so
+    # a Mac with brew-installed ffmpeg skips cleanly instead of being told
+    # to run brew again. --force still fetches standalone copies as the
+    # escape hatch for a broken/outdated PATH version (not on macOS - no
+    # bundled build there).
+    existing_ffmpeg = find_tool("ffmpeg")
+    existing_ffprobe = find_tool("ffprobe")
+    if existing_ffmpeg and existing_ffprobe and not force:
+        sys.stderr.write(
+            f"[setup] ffmpeg+ffprobe already available: {existing_ffmpeg} (use --force to refresh)\n"
+        )
+        return True
+
     if target == "macos":
         sys.stderr.write(
             "[setup] macOS auto-install for ffmpeg is not bundled - "
@@ -254,11 +274,6 @@ def _install_ffmpeg(target: str, force: bool = False) -> bool:
     suffix = ".exe" if target == "windows-x64" else ""
     ffmpeg_out = TRANSCRIBE_BIN_DIR / f"ffmpeg{suffix}"
     ffprobe_out = TRANSCRIBE_BIN_DIR / f"ffprobe{suffix}"
-    if ffmpeg_out.exists() and ffprobe_out.exists() and not force:
-        sys.stderr.write(
-            f"[setup] ffmpeg+ffprobe already in {TRANSCRIBE_BIN_DIR} (use --force to refresh)\n"
-        )
-        return True
 
     url = FFMPEG_URLS.get(target)
     if not url:

@@ -63,7 +63,7 @@ It scaffolds `~/.config/transcribe/.env` with commented placeholders at `0600` p
 python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py" --install-binaries [--force]
 ```
 
-Same as what the default installer routes to on Linux/Windows. Add `--force` to refresh existing binaries.
+Same as what the default installer routes to on Linux/Windows. Desired-state: anything `find_tool()` already resolves (standalone dir first, then PATH) is skipped — no re-download when a system-installed version exists. Add `--force` to download standalone copies regardless; since `find_tool()` prefers `~/.transcribe/bin/`, that's the escape hatch when a PATH version is broken or outdated.
 
 **No cloud key? That's the normal, fully-supported case — do not ask for one.** Transcription runs on-device via whisper-local (the managed venv), which the installer provisions automatically. Cloud keys (`GROQ_API_KEY` / `OPENAI_API_KEY`) are an opt-in speed upgrade, not a requirement — only set one up if the user explicitly asks for cloud transcription, in which case write the matching line into `~/.config/transcribe/.env`. If the local venv genuinely can't be built (`venv_buildable: false` in `--json` — i.e. `uv` ships no binary for this platform), offer a cloud key as the fallback; only then is `--no-whisper` (frames-only for caption-less videos) the degraded path.
 
