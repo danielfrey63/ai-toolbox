@@ -7,7 +7,7 @@ homepage: https://github.com/danielfrey63/ai-toolbox
 repository: https://github.com/danielfrey63/ai-toolbox
 license: MIT
 metadata:
-  version: "0.0.1"
+  version: "0.1.2"
 ---
 
 # /gdrive — Google-native Dateien aus einem Drive-Sync-Ordner lesen
@@ -38,12 +38,32 @@ Die Google-MCP-Tools sind meist deferred. Alle benötigten Tools in **einem** To
 
 | Pointer | Primärweg | Fallback |
 |---------|-----------|----------|
-| `.gsheet` | `google-sheets`-MCP: `list_sheets(doc_id)` → `get_sheet_data` pro Tab (strukturiert, mit Formeln via `get_sheet_formulas`) | `claude_ai_Google_Drive.read_file_content(doc_id)` (Text-Export) |
+| `.gsheet` | `google-sheets`-MCP: `list_sheets(doc_id)` → `get_sheet_data` pro Tab (strukturiert, mit Formeln via `get_sheet_formulas`) | `claude_ai_Google_Drive.read_file_content(doc_id)` — **ACHTUNG: liefert nur das erste Tab** (verifiziert an einem 7-Tab-Sheet). Für alle Tabs das XLSX-Export-Rezept unten verwenden. |
 | `.gdoc` | `claude_ai_Google_Drive.read_file_content(doc_id)` | `download_file_content` (Export) |
 | `.gslides` / `.gdraw` | `claude_ai_Google_Drive.read_file_content(doc_id)` | `download_file_content`, dann lokal weiterverarbeiten |
 | kein Pointer, nur Name bekannt | `claude_ai_Google_Drive.search_files(name)` → ID → wie oben | `list_recent_files` |
 
 Mehrere Tabs oder mehrere Sheets batchen (`get_multiple_sheet_data` / `get_multiple_spreadsheet_summary`) statt einzeln abzurufen — schneller und schonender für Rate-Limits.
+
+## Sheets vollständig lesen ohne Sheets-API (XLSX-Export-Rezept)
+
+Wenn der `google-sheets`-MCP 403 liefert und mehr als das erste Tab gebraucht wird:
+
+1. `claude_ai_Google_Drive.download_file_content(fileId, exportMimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")` — liefert JSON `{content: <base64>, title, mimeType}`. Grosse Antworten persistiert der Harness als Datei (Pfad steht in der Fehlermeldung) statt sie inline zurückzugeben.
+2. Base64 dekodieren und mit `openpyxl` alle Tabs dumpen (ins Scratchpad-Verzeichnis, nicht ins Projekt):
+
+```python
+import json, base64, pathlib, openpyxl
+data = json.loads(pathlib.Path(PERSISTED_RESULT).read_text(encoding="utf-8"))
+xlsx = pathlib.Path(SCRATCHPAD) / "export.xlsx"
+xlsx.write_bytes(base64.b64decode(data["content"]))
+wb = openpyxl.load_workbook(xlsx, data_only=True)
+for name in wb.sheetnames:
+    for row in wb[name].iter_rows(values_only=True):
+        ...
+```
+
+`data_only=True` liefert berechnete Werte statt Formeln. Verifiziert: ein 7-Tab-Sheet (17 KB nativ, 60 KB XLSX) kommt so vollständig und strukturiert in den Kontext.
 
 ## Fehlerfälle und autonome Läufe
 
