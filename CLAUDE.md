@@ -11,7 +11,7 @@ Zwei strikt getrennte Sprach-Domänen:
 
 ### Schreibstil für Nachrichtenentwürfe in Daniels Namen
 
-Sobald ein Text **in Daniels Namen** entworfen wird (Chat, Mail, Teams) — in jedem Projekt und jeder Session — gilt verbindlich `~/.claude/schreibstil.md`: maximal kurz, dialogisch, per Du, Konjunktiv für Vorschläge, kein Briefing-Ton.
+Sobald ein Text **in Daniels Namen** entworfen wird (Chat, Mail, Teams) — in jedem Projekt und jeder Session — gilt verbindlich der nachfolgend importierte Schreibstil (`schreibstil.md`, neben dieser CLAUDE.md im ai-toolbox-Repo): maximal kurz, dialogisch, per Du, Konjunktiv für Vorschläge, kein Briefing-Ton.
 
 @schreibstil.md
 
@@ -121,7 +121,7 @@ Wenn Upstream Pfade umgezogen hat, IMMER nachträglich prüfen:
 
 - Claude Code cached Dateien lokal — gecachte Versionen können veraltet sein. Falls Änderungen nicht berücksichtigt werden: explizit auf aktuelle Version hinweisen oder Neuladen anfordern.
 
-<!-- APP_VERSION: 0.4.7 -->
+<!-- APP_VERSION: 0.5.8 -->
 # graphify
 - **graphify** (`~/.claude/skills/graphify/SKILL.md`) - any input to knowledge graph. Trigger: `/graphify`
 When the user types `/graphify`, invoke the Skill tool with `skill: "graphify"` before doing anything else.

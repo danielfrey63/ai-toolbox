@@ -62,12 +62,6 @@
       "description": "Global Claude Code instructions (CLAUDE.md -> ~/.claude/)."
     },
     {
-      "name": "schreibstil",
-      "type": "config",
-      "path": "schreibstil.md",
-      "description": "Daniel's message writing style, imported by CLAUDE.md (schreibstil.md -> ~/.claude/)."
-    },
-    {
       "name": "cli",
       "type": "bin",
       "path": "toolbox.sh",
