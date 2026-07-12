@@ -1,6 +1,6 @@
 # PRD: Lokales Hybrid-RAG mit GraphRAG (`full-rag`)
 
-**Status:** Konsolidiert, Review eingearbeitet, bereit für M1 · **Stand:** 2026-07-12 13:04 CEST · **Owner:** Daniel Frey · **Referenz-Analyse:** [graphify-analyse.md](graphify-analyse.md)
+**Status:** Umgesetzt (M1–M4) in [danielfrey63/full-rag](https://github.com/danielfrey63/full-rag) · **Stand:** 2026-07-12 13:46 CEST · **Owner:** Daniel Frey · **Referenz-Analyse:** [graphify-analyse.md](graphify-analyse.md)
 
 ## 1. Problem
 
