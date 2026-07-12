@@ -50,6 +50,25 @@
       "description": "Offline single-file SPA archetype in three tiers (monolith, file-linked, sections+build)."
     },
     {
+      "name": "llm-provider",
+      "type": "repo",
+      "path": "../llm-provider",
+      "url": "git@github.com:danielfrey63/llm-provider.git",
+      "description": "Provider registry + HTTP call engine for LLM apps (dependency-free UMD, sibling checkout)."
+    },
+    {
+      "name": "full-rag",
+      "type": "repo",
+      "path": "../full-rag",
+      "url": "git@github.com:danielfrey63/full-rag.git",
+      "install": "npm ci",
+      "links": [
+        { "type": "skill", "path": "skill", "name": "full-rag" },
+        { "type": "bin", "path": "bin/full-rag.js", "command": "full-rag" }
+      ],
+      "description": "Local hybrid RAG with GraphRAG — index a corpus, ask with citations (skill + CLI)."
+    },
+    {
       "name": "versioning-hooks",
       "type": "hook",
       "path": "tools/githooks",

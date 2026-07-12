@@ -9,6 +9,11 @@
 #   config — symlink a global config file (CLAUDE.md) into ~/.claude/
 #   bin    — make a CLI available system-wide (PATH symlink, or sourced shell
 #            function via catalog "source: true" — needed for env-setting tools)
+#   repo   — clone/update an external tool repo as a SIBLING of this toolbox
+#            (catalog path "../<name>"), run its dependency install when the
+#            lockfile changed, then link its declared artifacts (skill/bin)
+#            via the standard link mechanics. remove unlinks the artifacts but
+#            never deletes the checkout.
 #
 # Usage:
 #   toolbox.sh <install|status|remove> --target <claude|codex|agents|kilo>
@@ -30,7 +35,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.39.242'
+APP_VERSION='0.40.254'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -288,7 +293,7 @@ run_validate() {
             fail=$((fail + 1)); continue
         fi
         case "$type" in
-            skill|hook|plugin|config|bin) ;;
+            skill|hook|plugin|config|bin|repo) ;;
             *) printf '  [!] %-18s unknown type: %s\n' "$name" "$type" >&2
                fail=$((fail + 1)); continue ;;
         esac
@@ -338,6 +343,31 @@ run_validate() {
                         fi
                         ;;
                 esac
+                ;;
+            repo)
+                # path is the checkout DESTINATION — its absence is fine (not
+                # cloned yet), but the entry needs a url and well-formed links.
+                if [ -z "$(printf '%s' "$tool" | jq -r '.url // empty')" ]; then
+                    printf '  [!] %-18s repo missing "url" field\n' "$name" >&2
+                    fail=$((fail + 1)); continue
+                fi
+                if [ "$(printf '%s' "$tool" | jq -r '(.links // []) | map(select(.type == null or .path == null or (.type == "skill" and .name == null) or (.type == "bin" and .command == null))) | length')" != 0 ]; then
+                    printf '  [!] %-18s repo links need type+path (+name for skill, +command for bin)\n' "$name" >&2
+                    fail=$((fail + 1)); continue
+                fi
+                if [ -d "$src" ]; then
+                    # checkout present: declared link sources must exist
+                    missing=$(printf '%s' "$tool" | jq -r '(.links // [])[].path' | while IFS= read -r lp; do
+                        [ -e "$src/$lp" ] || printf '%s ' "$lp"
+                    done)
+                    if [ -n "$missing" ]; then
+                        printf '  [!] %-18s link source(s) missing in checkout: %s\n' "$name" "$missing" >&2
+                        fail=$((fail + 1)); continue
+                    fi
+                else
+                    printf '  [i] %-18s not cloned yet (%s)\n' "$name" "$src"
+                    warn=$((warn + 1))
+                fi
                 ;;
         esac
         printf '  [ok] %-18s %s\n' "$name" "$path"
@@ -1308,6 +1338,138 @@ handle_plugin() {
     esac
 }
 
+# --- repo handler ---------------------------------------------------------------
+# Clones/updates an external tool repo as a sibling of this toolbox (catalog
+# path "../<name>"), brings its dependencies to the desired state, then links
+# the artifacts the catalog declares under "links" (skill/bin) through the
+# standard link mechanics. Desired-state throughout: clone only if missing,
+# ff-pull only when it applies cleanly, re-install deps only when the lockfile
+# content changed. `remove` unlinks the artifacts but NEVER deletes the
+# checkout — it may hold local work.
+
+# Bring a checkout's npm dependencies to the desired state. The stamp file
+# records the lockfile hash of the last successful install; matching stamp =
+# nothing to do. Uses `git hash-object` (git is guaranteed — we just cloned).
+_repo_deps() {  # name dest install_cmd
+    local name=$1 dest=$2 install=$3
+    [ -n "$install" ] || return 0
+    local lock stamp want have
+    lock="$dest/package-lock.json"
+    [ -f "$lock" ] || lock="$dest/package.json"
+    [ -f "$lock" ] || { printf '  [i] %-18s install cmd set but no package(-lock).json — skipped\n' "$name"; return 0; }
+    want=$(git hash-object "$lock" 2>/dev/null || cksum < "$lock")
+    stamp="$dest/node_modules/.ai-toolbox-deps"
+    have=$(cat "$stamp" 2>/dev/null || true)
+    if [ "$want" = "$have" ]; then
+        printf '  [=] %-18s deps up to date\n' "$name"
+        return 0
+    fi
+    if ( cd "$dest" && sh -c "$install" ) >/dev/null 2>&1; then
+        mkdir -p "$dest/node_modules" && printf '%s' "$want" > "$stamp"
+        printf '  [+] %-18s deps installed (%s)\n' "$name" "$install"
+    else
+        printf '  [!] %-18s dependency install failed — run manually: cd %s && %s\n' "$name" "$dest" "$install" >&2
+        return 1
+    fi
+}
+
+# Link one declared artifact of a repo checkout. Skill links honour --target
+# (incl. kilo); bin links go to ~/.local/bin like the bin handler's exec mode.
+_repo_link() {  # repo_name dest link_json
+    local dest=$2 link=$3 ltype lpath lname lcmd src
+    ltype=$(printf '%s' "$link" | jq -r '.type')
+    lpath=$(printf '%s' "$link" | jq -r '.path')
+    src="$dest/$lpath"
+    case "$ltype" in
+        skill)
+            lname=$(printf '%s' "$link" | jq -r '.name')
+            if [ -z "$TARGET" ]; then
+                printf '  [i] %-18s skill link needs --target — skipped\n' "$lname"
+                return
+            fi
+            if [ ! -d "$src" ]; then
+                printf '  [!] %-18s link source missing: %s\n' "$lname" "$src" >&2
+                return
+            fi
+            if [ "$TARGET" = kilo ]; then
+                handle_skill_kilo "$lname" "$src"
+            else
+                link_artifact "$lname" "$src" "$(skill_destdir)" "$lname"
+            fi
+            ;;
+        bin)
+            lcmd=$(printf '%s' "$link" | jq -r '.command')
+            if [ ! -f "$src" ]; then
+                printf '  [!] %-18s link source missing: %s\n' "$lcmd" "$src" >&2
+                return
+            fi
+            [ "$CMD" = install ] && chmod +x "$src" 2>/dev/null
+            link_artifact "$lcmd" "$src" "$HOME/.local/bin" "$lcmd"
+            ;;
+        *)
+            printf '  [!] %-18s unknown link type "%s"\n' "$1" "$ltype" >&2
+            ;;
+    esac
+}
+
+handle_repo() {  # name path url install links_json
+    local name=$1 path=$2 url=$3 install=$4 links=$5
+    local dest remote before after n i
+    dest=$(readlink -f -- "$REPO_ROOT/$path" 2>/dev/null || printf '%s' "$REPO_ROOT/$path")
+
+    case "$CMD" in
+        install)
+            if [ ! -d "$dest/.git" ]; then
+                if [ -e "$dest" ]; then
+                    printf '  [!] %-18s %s exists but is not a git checkout — skipped\n' "$name" "$dest" >&2
+                    return
+                fi
+                if git clone --quiet "$url" "$dest" 2>/dev/null; then
+                    printf '  [+] %-18s cloned -> %s\n' "$name" "$dest"
+                else
+                    printf '  [!] %-18s clone failed: %s\n' "$name" "$url" >&2
+                    return 1
+                fi
+            else
+                remote=$(git -C "$dest" remote get-url origin 2>/dev/null || true)
+                if [ "$remote" != "$url" ]; then
+                    printf '  [i] %-18s origin is %s (catalog: %s) — using checkout as-is\n' "$name" "$remote" "$url"
+                fi
+                before=$(git -C "$dest" rev-parse HEAD 2>/dev/null || true)
+                if git -C "$dest" pull --ff-only --quiet 2>/dev/null; then
+                    after=$(git -C "$dest" rev-parse HEAD 2>/dev/null || true)
+                    if [ "$before" != "$after" ]; then
+                        printf '  [+] %-18s updated (%.7s -> %.7s)\n' "$name" "$before" "$after"
+                    else
+                        printf '  [=] %-18s checkout up to date\n' "$name"
+                    fi
+                else
+                    printf '  [i] %-18s pull skipped (offline, diverged or dirty) — using existing checkout\n' "$name"
+                fi
+            fi
+            _repo_deps "$name" "$dest" "$install" || return 1
+            ;;
+        status)
+            if [ -d "$dest/.git" ]; then
+                printf '  [ok] %-18s checkout %s\n' "$name" "$dest"
+                STATE=ok
+            else
+                printf '  [ ] %-18s not cloned (%s)\n' "$name" "$dest"
+            fi
+            ;;
+        remove)
+            printf '  [i] %-18s checkout kept at %s (remove never deletes repos)\n' "$name" "$dest"
+            ;;
+    esac
+
+    n=$(printf '%s' "$links" | jq 'length' 2>/dev/null || printf 0)
+    i=0
+    while [ "$i" -lt "$n" ]; do
+        _repo_link "$name" "$dest" "$(printf '%s' "$links" | jq -c ".[$i]")"
+        i=$((i + 1))
+    done
+}
+
 # --- registry -----------------------------------------------------------------
 # Records every install so `status --all` / `remove --all` can find them across
 # all scopes, targets and projects. The registry is only a discovery index —
@@ -1335,6 +1497,8 @@ registry_add() {  # name type path scope target project
     # (target="" = bare git-hook, target="claude" = git-hook + claude patch).
     case "$2" in
         config|bin)  scope=global; target=''; project='' ;;
+        # repo checkouts are machine-global; only the skill-link target varies.
+        repo)        scope=global; project='' ;;
         # A hook entry without a project is meaningless (per-repo installs
         # only) — never record one, e.g. from a global-scope dispatch pass.
         hook)        [ -n "$project" ] || return 0 ;;
@@ -1365,6 +1529,7 @@ registry_remove() {  # name type scope target project
     local scope=$3 target=$4 project=$5
     case "$2" in
         config|bin)  scope=global; target=''; project='' ;;
+        repo)        scope=global; project='' ;;
     esac
     if [ -n "$project" ]; then
         project=${project//\\//}
@@ -1418,7 +1583,7 @@ _heal_hook_targets() {  # entries_json → healed_json
 # entries. remove: uninstall each, then empty the registry. Entries carry
 # only install parameters — the handlers re-verify against reality.
 registry_sweep() {
-    local entries n i e tool type path mkt plg cmdname bin_src kept='[]'
+    local entries n i e tool type path mkt plg cmdname bin_src url inst links kept='[]'
     # Heal five legacy registry pathologies in one pass:
     #   1. {value:[...], Count:n} hulls from PS 5.1 ConvertTo-Json on single-
     #      element arrays — flatten them into their inner entries.
@@ -1495,6 +1660,14 @@ registry_sweep() {
                 plg=$(jq -r --arg n "$tool" \
                     '.tools[] | select(.name==$n) | .plugin // empty' "$CATALOG")
                 handle_plugin "$tool" "$path" "$mkt" "$plg" ;;
+            repo)
+                url=$(jq -r --arg n "$tool" \
+                    '.tools[] | select(.name==$n) | .url // empty' "$CATALOG")
+                inst=$(jq -r --arg n "$tool" \
+                    '.tools[] | select(.name==$n) | .install // empty' "$CATALOG")
+                links=$(jq -c --arg n "$tool" \
+                    'first(.tools[] | select(.name==$n) | .links) // []' "$CATALOG")
+                handle_repo "$tool" "$path" "$url" "$inst" "$links" ;;
             *)  printf '  [!] %-18s unknown type "%s"\n' "$tool" "$type" >&2 ;;
         esac
 
@@ -1700,10 +1873,12 @@ if [ -z "$selected" ]; then
         '.tools[] | select($what == "all" or .name == $what or .type == $what)' "$CATALOG")
 fi
 
-# --target is required unless every selected tool ignores it (hook, config, bin).
+# --target is required unless every selected tool ignores it (hook, config,
+# bin — and repo, unless it declares a skill link, which is target-specific).
 if [ -z "$TARGET" ]; then
     needs_target=$(printf '%s\n' "$selected" \
-        | jq -r 'select(.type != "hook" and .type != "config" and .type != "bin") | .name' | head -1)
+        | jq -r 'select((.type != "hook" and .type != "config" and .type != "bin" and .type != "repo")
+                        or (.type == "repo" and (((.links // []) | map(select(.type == "skill")) | length) > 0))) | .name' | head -1)
     if [ -n "$needs_target" ]; then
         printf 'toolbox: --target is required (claude|codex|agents|kilo) — "%s" needs it\n' \
             "$needs_target" >&2
@@ -1716,7 +1891,7 @@ printf '%s\n' "$selected" | while IFS= read -r tool; do
     name=$(printf '%s' "$tool" | jq -r '.name')
     type=$(printf '%s' "$tool" | jq -r '.type')
     path=$(printf '%s' "$tool" | jq -r '.path')
-    if [ "$TARGET" = kilo ] && [ "$type" != skill ]; then
+    if [ "$TARGET" = kilo ] && [ "$type" != skill ] && [ "$type" != repo ]; then
         printf '  [.] %-18s --target kilo supports the skill type only — skipped (%s)\n' "$name" "$type"
         continue
     fi
@@ -1733,6 +1908,12 @@ printf '%s\n' "$selected" | while IFS= read -r tool; do
             mkt=$(printf '%s' "$tool" | jq -r '.marketplace // empty')
             plg=$(printf '%s' "$tool" | jq -r '.plugin // empty')
             handle_plugin "$name" "$path" "$mkt" "$plg"
+            ;;
+        repo)
+            url=$(printf '%s' "$tool" | jq -r '.url // empty')
+            inst=$(printf '%s' "$tool" | jq -r '.install // empty')
+            links=$(printf '%s' "$tool" | jq -c '.links // []')
+            handle_repo "$name" "$path" "$url" "$inst" "$links"
             ;;
         *)
             printf '  [!] %-18s unknown type "%s"\n' "$name" "$type" >&2

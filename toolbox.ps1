@@ -8,6 +8,9 @@
 #   config — symlink a global config file (CLAUDE.md) into ~/.claude/
 #   bin    — install a CLI as a function in the PowerShell $PROFILE — using
 #            `&` (exec) or `.` (sourced, catalog "source: true")
+#   repo   — clone/update an external tool repo as a sibling of this toolbox,
+#            run its dependency install on lockfile change, link its declared
+#            artifacts (skill/bin); remove unlinks but never deletes the checkout
 #
 # Usage:
 #   toolbox.ps1 <install|status|remove> --target <claude|codex|agents|kilo>
@@ -23,7 +26,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.39.229'
+$APP_VERSION = '0.40.238'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -237,7 +240,7 @@ function Invoke-Validate {
             [Console]::Error.WriteLine("  [!] $($name ?? '?')  missing required field(s) (name/type/path/description)")
             $fail++; continue
         }
-        if ($type -notin @('skill', 'hook', 'plugin', 'config', 'bin')) {
+        if ($type -notin @('skill', 'hook', 'plugin', 'config', 'bin', 'repo')) {
             [Console]::Error.WriteLine("  [!] $name  unknown type: $type")
             $fail++; continue
         }
@@ -290,6 +293,31 @@ function Invoke-Validate {
                         [Console]::Out.WriteLine("  [i] $name  no PowerShell sibling: $ps1")
                         $warn++
                     }
+                }
+            }
+            'repo' {
+                # path is the checkout DESTINATION — its absence is fine (not
+                # cloned yet), but the entry needs a url and well-formed links.
+                if (-not $t.url) {
+                    [Console]::Error.WriteLine("  [!] $name  repo missing `"url`" field"); $fail++; $failed = $true; break
+                }
+                $badLinks = @(@($t.links) | Where-Object {
+                    $_ -and (-not $_.type -or -not $_.path -or
+                             ($_.type -eq 'skill' -and -not $_.name) -or
+                             ($_.type -eq 'bin' -and -not $_.command))
+                })
+                if ($badLinks.Count -gt 0) {
+                    [Console]::Error.WriteLine("  [!] $name  repo links need type+path (+name for skill, +command for bin)"); $fail++; $failed = $true; break
+                }
+                if (Test-Path -LiteralPath $src -PathType Container) {
+                    $missing = @(@($t.links) | Where-Object { $_ } | ForEach-Object { $_.path } |
+                        Where-Object { -not (Test-Path -LiteralPath (Join-Path $src $_)) })
+                    if ($missing.Count -gt 0) {
+                        [Console]::Error.WriteLine("  [!] $name  link source(s) missing in checkout: $($missing -join ' ')"); $fail++; $failed = $true
+                    }
+                } else {
+                    [Console]::Out.WriteLine("  [i] $name  not cloned yet ($src)")
+                    $warn++
                 }
             }
         }
@@ -389,8 +417,9 @@ function Get-SkillDestDir {
 # Symlink one artifact (file or directory) into a destination directory.
 # Idempotent across install/status/remove; never clobbers a non-link.
 # Shared by the skill and config handlers.
-function Link-Artifact([string]$name, [string]$src, [string]$destdir) {
-    $link = Join-Path $destdir (Split-Path -Leaf $src)
+function Link-Artifact([string]$name, [string]$src, [string]$destdir, [string]$linkName = '') {
+    if (-not $linkName) { $linkName = Split-Path -Leaf $src }
+    $link = Join-Path $destdir $linkName
     if ($link -eq $src) {
         Write-Output "  [=] $name  source == target, skipped"; return
     }
@@ -1185,6 +1214,121 @@ function Handle-Plugin([string]$name, [string]$path, [string]$marketplace, [stri
     }
 }
 
+# --- repo handler ---------------------------------------------------------------
+# Clones/updates an external tool repo as a sibling of this toolbox (catalog
+# path "../<name>"), brings its dependencies to the desired state, then links
+# the artifacts the catalog declares under "links" (skill/bin) through the
+# standard link mechanics. Desired-state throughout: clone only if missing,
+# ff-pull only when it applies cleanly, re-install deps only when the lockfile
+# content changed. `remove` unlinks the artifacts but NEVER deletes the
+# checkout — it may hold local work. Mirrors handle_repo in the sh port.
+
+function Repo-Deps([string]$name, [string]$dest, [string]$install) {
+    if (-not $install) { return $true }
+    $lock = Join-Path $dest 'package-lock.json'
+    if (-not (Test-Path -LiteralPath $lock)) { $lock = Join-Path $dest 'package.json' }
+    if (-not (Test-Path -LiteralPath $lock)) {
+        Write-Output "  [i] $name  install cmd set but no package(-lock).json — skipped"
+        return $true
+    }
+    $want = (git hash-object $lock 2>$null | Out-String).Trim()
+    $stamp = Join-Path $dest 'node_modules/.ai-toolbox-deps'
+    $have = if (Test-Path -LiteralPath $stamp) { (Get-Content -LiteralPath $stamp -Raw).Trim() } else { '' }
+    if ($want -and $want -eq $have) {
+        Write-Output "  [=] $name  deps up to date"
+        return $true
+    }
+    Push-Location $dest
+    try { Invoke-Expression $install *> $null; $ok = ($LASTEXITCODE -eq 0 -or $null -eq $LASTEXITCODE) }
+    catch { $ok = $false }
+    finally { Pop-Location }
+    if ($ok) {
+        New-Item -ItemType Directory -Path (Join-Path $dest 'node_modules') -Force | Out-Null
+        Set-Content -LiteralPath $stamp -Value $want
+        Write-Output "  [+] $name  deps installed ($install)"
+        return $true
+    }
+    [Console]::Error.WriteLine("  [!] $name  dependency install failed — run manually: cd $dest; $install")
+    return $false
+}
+
+function Repo-Link([string]$repoName, [string]$dest, $link) {
+    $src = Join-Path $dest $link.path
+    switch ($link.type) {
+        'skill' {
+            if (-not $Target) {
+                Write-Output "  [i] $($link.name)  skill link needs --target — skipped"
+                return
+            }
+            if (-not (Test-Path -LiteralPath $src -PathType Container)) {
+                [Console]::Error.WriteLine("  [!] $($link.name)  link source missing: $src")
+                return
+            }
+            if ($Target -eq 'kilo') { Handle-SkillKilo $link.name $src }
+            else { Link-Artifact $link.name $src (Get-SkillDestDir) $link.name }
+        }
+        'bin' {
+            if (-not (Test-Path -LiteralPath $src -PathType Leaf)) {
+                [Console]::Error.WriteLine("  [!] $($link.command)  link source missing: $src")
+                return
+            }
+            Link-Artifact $link.command $src (Join-Path $HOME '.local/bin') $link.command
+        }
+        default {
+            [Console]::Error.WriteLine("  [!] $repoName  unknown link type `"$($link.type)`"")
+        }
+    }
+}
+
+function Handle-Repo([string]$name, [string]$path, [string]$url, [string]$install, $links) {
+    $dest = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot $path))
+    switch ($Cmd) {
+        'install' {
+            if (-not (Test-Path -LiteralPath (Join-Path $dest '.git'))) {
+                if (Test-Path -LiteralPath $dest) {
+                    [Console]::Error.WriteLine("  [!] $name  $dest exists but is not a git checkout — skipped")
+                    return
+                }
+                git clone --quiet $url $dest 2>$null
+                if ($LASTEXITCODE -ne 0) {
+                    [Console]::Error.WriteLine("  [!] $name  clone failed: $url")
+                    return
+                }
+                Write-Output "  [+] $name  cloned -> $dest"
+            } else {
+                $remote = (git -C $dest remote get-url origin 2>$null | Out-String).Trim()
+                if ($remote -ne $url) {
+                    Write-Output "  [i] $name  origin is $remote (catalog: $url) — using checkout as-is"
+                }
+                $before = (git -C $dest rev-parse HEAD 2>$null | Out-String).Trim()
+                git -C $dest pull --ff-only --quiet 2>$null
+                if ($LASTEXITCODE -eq 0) {
+                    $after = (git -C $dest rev-parse HEAD 2>$null | Out-String).Trim()
+                    if ($before -ne $after) { Write-Output "  [+] $name  updated ($($before.Substring(0,7)) -> $($after.Substring(0,7)))" }
+                    else { Write-Output "  [=] $name  checkout up to date" }
+                } else {
+                    Write-Output "  [i] $name  pull skipped (offline, diverged or dirty) — using existing checkout"
+                }
+            }
+            if (-not (Repo-Deps $name $dest $install)) { return }
+        }
+        'status' {
+            if (Test-Path -LiteralPath (Join-Path $dest '.git')) {
+                Write-Output "  [ok] $name  checkout $dest"
+                $script:State = 'ok'
+            } else {
+                Write-Output "  [ ] $name  not cloned ($dest)"
+            }
+        }
+        'remove' {
+            Write-Output "  [i] $name  checkout kept at $dest (remove never deletes repos)"
+        }
+    }
+    foreach ($l in @($links)) {
+        if ($l) { Repo-Link $name $dest $l }
+    }
+}
+
 # --- registry -----------------------------------------------------------------
 # Records every install so `status --all` / `remove --all` can find them across
 # all scopes, targets and projects. The registry is only a discovery index —
@@ -1256,6 +1400,8 @@ function _Registry-Normalize([string]$type, [ref]$scope, [ref]$target, [ref]$pro
     switch ($type) {
         'config' { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
         'bin'    { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
+        # repo checkouts are machine-global; only the skill-link target varies.
+        'repo'   { $scope.Value = 'global'; $project.Value = '' }
     }
     # Path keys: '/' separators + no trailing slash. Resolve-Path on Windows
     # gives backslashes, `git rev-parse --show-toplevel` gives forward slashes,
@@ -1375,6 +1521,11 @@ function Registry-Sweep {
                 $cat = (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools |
                     Where-Object { $_.name -eq $e.tool } | Select-Object -First 1
                 Handle-Plugin $e.tool $e.path $cat.marketplace $cat.plugin
+            }
+            'repo' {
+                $cat = (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools |
+                    Where-Object { $_.name -eq $e.tool } | Select-Object -First 1
+                Handle-Repo $e.tool $e.path $cat.url $cat.install $cat.links
             }
             default {
                 [Console]::Error.WriteLine("  [!] $($e.tool)  unknown type `"$($e.type)`"")
@@ -1561,9 +1712,13 @@ if (-not $selected) {
     }
 }
 
-# --target is required unless every selected tool ignores it (hook, config, bin).
+# --target is required unless every selected tool ignores it (hook, config,
+# bin — and repo, unless it declares a skill link, which is target-specific).
 if (-not $Target) {
-    $needsTarget = $selected | Where-Object { $_.type -ne 'hook' -and $_.type -ne 'config' -and $_.type -ne 'bin' } | Select-Object -First 1
+    $needsTarget = $selected | Where-Object {
+        ($_.type -notin @('hook', 'config', 'bin', 'repo')) -or
+        ($_.type -eq 'repo' -and @(@($_.links) | Where-Object { $_ -and $_.type -eq 'skill' }).Count -gt 0)
+    } | Select-Object -First 1
     if ($needsTarget) {
         [Console]::Error.WriteLine("toolbox: --target is required (claude|codex|agents|kilo) — `"$($needsTarget.name)`" needs it")
         exit 2
@@ -1571,7 +1726,7 @@ if (-not $Target) {
 }
 
 foreach ($tool in $selected) {
-    if ($Target -eq 'kilo' -and $tool.type -ne 'skill') {
+    if ($Target -eq 'kilo' -and $tool.type -notin @('skill', 'repo')) {
         Write-Output "  [.] $($tool.name)  --target kilo supports the skill type only — skipped ($($tool.type))"
         continue
     }
@@ -1581,11 +1736,12 @@ foreach ($tool in $selected) {
         'config' { Handle-Config $tool.name $tool.path }
         'bin'    { Handle-Bin $tool.name $tool.path $tool.command ([bool]$tool.source) }
         'plugin' { Handle-Plugin $tool.name $tool.path $tool.marketplace $tool.plugin }
+        'repo'   { Handle-Repo $tool.name $tool.path $tool.url $tool.install $tool.links }
         default {
             [Console]::Error.WriteLine("  [!] $($tool.name)  unknown type `"$($tool.type)`"")
         }
     }
-    if ($tool.type -in @('skill', 'hook', 'config', 'bin', 'plugin')) {
+    if ($tool.type -in @('skill', 'hook', 'config', 'bin', 'plugin', 'repo')) {
         if ($Cmd -eq 'install') {
             Registry-Add $tool.name $tool.type $tool.path $Scope $Target $Project
         } elseif ($Cmd -eq 'remove') {
