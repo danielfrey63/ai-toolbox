@@ -38,6 +38,8 @@ Chunking (strukturbewusst: Überschriften/Funktionen, Overlap)
 
 Retrieval-Strategie pro Frage: Faktenfrage → Hybrid (Vektor+BM25); Beziehungsfrage → Graph-Nachbarschaft der erkannten Entitäten + zugehörige Chunks; Überblicksfrage → Community-/Themen-Summaries. Ein leichter Router (Heuristik oder LLM-Call) wählt die Strategie; im Zweifel alle drei, RRF entscheidet.
 
+**Query-Trigger & Bypass:** Die Pipeline ist ein Werkzeug, kein Always-on-Layer — getriggert wird sie vom Aufrufer: explizit per CLI (`ask`), oder durch einen Agenten (Skill-/MCP-Tool mit klarer «when to use»-Beschreibung: Fragen über den indexierten Korpus). Vor jedem Retrieval läuft ein deterministischer Pre-Router (Skript, kein LLM), der Trivialfälle aussortiert: (1) Mitgeliefertes Dokument passt in den Kontext (Token-Schwelle) → **Bypass**, Dokument direkt in den Prompt, kein Retrieval. (2) Mitgeliefertes Dokument zu gross → Retrieval nur über dieses Dokument (Source-Filter), kein Korpus-Zugriff. (3) Kein Dokument, Frage betrifft den Korpus → volles Hybrid-/Graph-Retrieval mit Strategie-Router. Erst wenn die Heuristik uneindeutig ist, entscheidet ein billiger LLM-Call (Automatisierungs-Priorität Skript → LLM).
+
 ## 5. Tech-Stack: Diskussion
 
 ### Sprache / Runtime
