@@ -1,6 +1,6 @@
 # PRD: Lokales Hybrid-RAG mit GraphRAG (`full-rag`)
 
-**Status:** Konsolidiert, bereit für M1 · **Stand:** 2026-07-12 10:32 CEST · **Owner:** Daniel Frey · **Referenz-Analyse:** [graphify-analyse.md](graphify-analyse.md)
+**Status:** Konsolidiert, bereit für M1 · **Stand:** 2026-07-12 11:17 CEST · **Owner:** Daniel Frey · **Referenz-Analyse:** [graphify-analyse.md](graphify-analyse.md)
 
 ## 1. Problem
 
@@ -8,7 +8,7 @@ Klassisches Vektor-RAG findet semantisch ähnliche Textstellen, scheitert aber a
 
 ## 2. Lösung in einem Satz
 
-`full-rag` (eigenes Repo) ist eine generische, quellenunabhängige Ingestion-und-Retrieval-Pipeline, die pro Dokument gleichzeitig einen Vektor-Index, einen Keyword-Index (BM25) und einen Entitäten-/Relations-Graph aufbaut und beim Retrieval die drei Signale fusioniert; alle Daten und Indizes bleiben lokal, LLM-Calls laufen provider-agnostisch über [`llm-provider`](https://github.com/danielfrey63/llm-provider) (primär Claude).
+`full-rag` (eigenes Repo) ist eine generische, quellenunabhängige Ingestion-und-Retrieval-Pipeline, die pro Dokument gleichzeitig einen Vektor-Index, einen Keyword-Index (BM25) und einen Entitäten-/Relations-Graph aufbaut und beim Retrieval die drei Signale fusioniert; alle Daten und Indizes bleiben lokal, LLM-Calls laufen provider-agnostisch über [`llm-provider`](https://github.com/danielfrey63/llm-provider).
 
 ## 3. Ziele
 
@@ -40,16 +40,14 @@ Chunking (strukturbewusst: Überschriften/Funktionen, Overlap)
 
 **Strategie-Router:** Kein hartes Verzweigen, sondern Gewichte pro Quelle — alle Strategien liefern Ranked Lists ins selbe RRF (Faktenfrage → Vektor+BM25; Beziehungsfrage → Graph-Nachbarschaft der erkannten Entitäten; Überblicksfrage → Community-/Themen-Summaries). Diskriminiert wird deterministisch, LLM nur als Fallback: (1) **Entity-Lexikon-Match** — Frage-Terme gegen Entitäten/Aliase des Graphen; ≥2 Treffer → Graph-Gewicht hoch (Pfad/Nachbarschaft zwischen den Treffern), 1 Treffer → Hybrid plus 1-Hop-Nachbarschaft, 0 Treffer → Fakten oder Überblick. (2) **IDF-Statistik** — seltene Terme/Identifier (hohe IDF im BM25-Index, Quoted Strings, CamelCase, IDs) → BM25-Gewicht hoch; nur breite Terme → Vektor-Gewicht hoch. (3) **Frage-Muster** — Signalphrasen («Überblick», «alle …», «wie hängt … zusammen») → Summaries bzw. Graph. Bei widersprüchlichen Signalen klassiert ein billiger LLM-Call (kleines Modell, JSON: Strategie + Entitäten); im Zweifel laufen alle drei Strategien — Retrieval ist lokal und billig, teuer ist nur der finale Generierungs-Call, und der läuft genau einmal.
 
-## 5. Tech-Stack (entschieden 2026-07-12)
+## 5. Tech-Stack
 
-| Komponente | Entscheid | Begründung / verworfene Alternativen |
-|---|---|---|
-| Sprache/Runtime | **Vanilla JS auf Node** — kein TypeScript, kein Build-Step, UMD-Stil wie `llm-provider` | Nahtlose `llm-provider`-Integration wiegt schwerer als das dünnere RAG-Ökosystem; Chunking/RRF sind wenig Code. Verworfen: Python (JS-Bridge bricht Ziel 7). |
-| Store | **Ein SQLite-File**: `sqlite-vec` (Vektoren) + FTS5 (BM25) + Graph-Tabellen (`entities`, `relations`, `mentions`, `summaries`) | Null Betrieb, transaktional, Backup = Datei kopieren. Verworfen: Qdrant/Neo4j (laufender Dienst), LanceDB/Kùzu (zweite Abhängigkeit); Kùzu bleibt Migrationspfad für tiefe Traversals — praktisch reichen 1-2 Hops in SQL. |
-| Graph-Modell | **Nach graphify-Vorbild:** Kanten-Provenance (`EXTRACTED`/`INFERRED`/`AMBIGUOUS` + diskrete Scores), kanonische IDs aus Pfad+Symbol, deterministische Extraktion (Code via `web-tree-sitter`) vor jedem LLM-Einsatz, Communities via Leiden/Louvain (`graphology`) | Details und Übernahme-Liste: [graphify-analyse.md](graphify-analyse.md) §8. Verworfen als Basis: Microsoft GraphRAG (schwergewichtig, teuer), LightRAG/nano-graphrag (Python, eigene LLM-Anbindung) — LightRAG bleibt konzeptionelle Leitlinie (Dual-Level statt Community-Hierarchien). |
-| Embeddings | **Ollama lokal** (z.B. `nomic-embed-text`) via `llm-provider.embed()` (seit v0.4.0, Typ `openai-compatible`) | Embedding-Input ist der volle Dokumenttext — lokal ist Pflicht für Ziel 4. API-Embeddings (Voyage) bleiben Konfigurations-Option über denselben Call. |
-| Loader | **JS-nativ hinter schmalem Loader-Interface** (M1: Markdown; M3: PDF via `pdfjs-dist` mit seitengenauer Quellenangabe, Code via tree-sitter) | graphifys Loader sind Python und werden nicht eingebunden; optional dient `graphify.ingest` als externer URL-Fetcher (YouTube/arXiv/Webseite → Datei), dessen Output unsere Loader normal einlesen. |
-| LLM-Anbindung | **`llm-provider`** für alles: Generierung, Graph-Extraktion, Router-Fallback, Embeddings | Provider-agnostisch, primär Claude; Modellwechsel ist Konfiguration. |
+- **Sprache/Runtime:** Vanilla JS auf Node — kein TypeScript, kein Build-Step, UMD-Stil wie `llm-provider`.
+- **Store:** Ein SQLite-File: `sqlite-vec` (Vektoren) + FTS5 (BM25) + Graph-Tabellen (`entities`, `relations`, `mentions`, `summaries`).
+- **Graph-Modell:** Nach graphify-Vorbild ([graphify-analyse.md](graphify-analyse.md) §8): Kanten-Provenance (`EXTRACTED`/`INFERRED`/`AMBIGUOUS` mit diskreten Scores), kanonische IDs aus Pfad+Symbol, deterministische Extraktion vor jedem LLM-Einsatz (Code via `web-tree-sitter`), Communities via Leiden/Louvain (`graphology`).
+- **Embeddings:** Ollama lokal (`nomic-embed-text`) via `llm-provider.embed()`, Provider-Typ `openai-compatible`.
+- **Loader:** JS-nativ hinter schmalem Loader-Interface — M1: Markdown; M3: PDF via `pdfjs-dist` (seitengenaue Quellenangabe), Code via tree-sitter. Optional `graphify.ingest` als externer URL-Fetcher (YouTube/arXiv/Webseite → Datei).
+- **LLM-Anbindung:** `llm-provider` für Generierung, Graph-Extraktion, Router-Fallback und Embeddings.
 
 ## 6. Meilensteine
 
