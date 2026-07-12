@@ -1,6 +1,6 @@
 # PRD: Lokales Hybrid-RAG mit GraphRAG
 
-**Status:** Entwurf · **Stand:** 2026-07-12 09:49 CEST · **Owner:** Daniel Frey
+**Status:** Entwurf · **Stand:** 2026-07-12 09:51 CEST · **Owner:** Daniel Frey
 
 ## 1. Problem
 
@@ -36,7 +36,9 @@ Chunking (strukturbewusst: Überschriften/Funktionen, Overlap)
                                               Kontext-Assembly ──► LLM-Antwort (llm-provider)
 ```
 
-Retrieval-Strategie pro Frage: Faktenfrage → Hybrid (Vektor+BM25); Beziehungsfrage → Graph-Nachbarschaft der erkannten Entitäten + zugehörige Chunks; Überblicksfrage → Community-/Themen-Summaries. Ein leichter Router (Heuristik oder LLM-Call) wählt die Strategie; im Zweifel alle drei, RRF entscheidet.
+Retrieval-Strategie pro Frage: Faktenfrage → Hybrid (Vektor+BM25); Beziehungsfrage → Graph-Nachbarschaft der erkannten Entitäten + zugehörige Chunks; Überblicksfrage → Community-/Themen-Summaries. Der Router setzt dabei keine harte Weiche, sondern Gewichte pro Quelle — alle Strategien liefern Ranked Lists ins selbe RRF.
+
+**Strategie-Router: Diskriminierung** (deterministische Signale zuerst, LLM nur als Fallback): (1) **Entity-Lexikon-Match** — Frage-Terme gegen die Entitäten/Aliase des Graphen matchen; ≥2 Treffer → Beziehungsfrage (Graph-Gewicht hoch, Pfad/Nachbarschaft zwischen den Treffern), genau 1 Treffer → Hybrid plus 1-Hop-Nachbarschaft, 0 Treffer → Fakten oder Überblick. (2) **IDF-Statistik** — seltene Terme/Identifier (hohe IDF im vorhandenen BM25-Index, Quoted Strings, CamelCase, IDs) → BM25-Gewicht hoch; nur breite, häufige Terme → Vektor-Gewicht hoch. (3) **Frage-Muster** — Signalphrasen («Überblick», «Zusammenfassung», «alle …», «wie hängt … zusammen», «Unterschied zwischen») → Summaries bzw. Graph. Widersprechen sich die Signale, klassiert ein billiger LLM-Call (kleines Modell via `llm-provider`, JSON: Strategie + erkannte Entitäten). Im Zweifel laufen alle drei Strategien — Retrieval ist lokal und billig, RRF sortiert; teuer ist nur der finale Generierungs-Call, und der läuft ohnehin genau einmal.
 
 **Query-Trigger & Bypass:** Die Pipeline ist ein Werkzeug, kein Always-on-Layer — getriggert wird sie vom Aufrufer: explizit per CLI (`ask`), oder durch einen Agenten (Skill-/MCP-Tool mit klarer «when to use»-Beschreibung: Fragen über den indexierten Korpus). Vor jedem Retrieval läuft ein deterministischer Pre-Router (Skript, kein LLM), der Trivialfälle aussortiert: (1) Mitgeliefertes Dokument passt in den Kontext (Token-Schwelle) → **Bypass**, Dokument direkt in den Prompt, kein Retrieval. (2) Mitgeliefertes Dokument zu gross → Retrieval nur über dieses Dokument (Source-Filter), kein Korpus-Zugriff. (3) Kein Dokument, Frage betrifft den Korpus → volles Hybrid-/Graph-Retrieval mit Strategie-Router. Erst wenn die Heuristik uneindeutig ist, entscheidet ein billiger LLM-Call (Automatisierungs-Priorität Skript → LLM).
 
