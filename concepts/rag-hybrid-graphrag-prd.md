@@ -19,7 +19,7 @@ Eine generische, quellenunabhängige Ingestion-und-Retrieval-Pipeline, die pro D
 5. **Inkrementell & idempotent:** Re-Runs indexieren nur Geändertes (Hash-basiert); Abbruch und Wiederholung schaden nie.
 6. **Provider-agnostisch:** Alle LLM-Calls über `llm-provider`; Modellwechsel ist Konfiguration, kein Code.
 
-**Nicht-Ziele:** Kein Multi-User-Betrieb, keine Web-UI (CLI/API zuerst), kein Realtime-Sync von Quellen, kein eigenes Frontend für Graph-Visualisierung (Export für bestehende Tools genügt).
+**Nicht-Ziele:** Kein Multi-User-Betrieb, keine Web-UI (CLI/API zuerst), kein Realtime-Sync von Quellen (kein Daemon mit File-Watchern/Webhooks — Aktualität entsteht durch den schnellen inkrementellen Lauf aus Ziel 5, on demand oder per Cron), kein eigenes Frontend für Graph-Visualisierung (Export für bestehende Tools genügt).
 
 ## 4. Architektur (Skizze)
 
@@ -84,9 +84,10 @@ Retrieval-Strategie pro Frage: Faktenfrage → Hybrid (Vektor+BM25); Beziehungsf
 |---|---|---|
 | **Microsoft GraphRAG** | Ausgereiftes Community-Detection-Konzept | Python, schwergewichtig, teure Voll-Indexierung |
 | **LightRAG / nano-graphrag** | Genau das Ziel-Konzept (dual-level Retrieval) | Python; eigene LLM-Anbindung statt `llm-provider` |
+| **graphify (Graphify-Labs)** | Graph-Aufbau für Code deterministisch per tree-sitter (0 LLM-Credits), Kanten-Provenance (EXTRACTED/INFERRED), Leiden-Communities | Bewusst kein Vektor-Index — deckt nur den Graph-Teil ab; Python-CLI mit eigenem Datenmodell |
 | **Eigenbau (schlank)** | Passt exakt auf Stack und `llm-provider`; Konzepte sind gut dokumentiert und klein nachbaubar | Extraktions-Prompts und Fusion selbst pflegen |
 
-**Empfehlung:** Eigenbau, konzeptionell entlang LightRAG (Entitäten + Relationen + Keyword-Duallevel statt teurer Community-Hierarchien). Die Frameworks dienen als Referenz für Prompts und Datenmodell.
+**Entscheid (2026-07-12):** Eigenbau, konzeptionell entlang LightRAG (Entitäten + Relationen + Keyword-Duallevel statt teurer Community-Hierarchien). graphify dient als primäre Referenz für Datenmodell und Extraktions-Ansatz — insbesondere Kanten-Provenance (EXTRACTED vs. INFERRED) und deterministische Extraktion vor LLM-Einsatz, wo möglich (Automatisierungs-Priorität Skript → LLM).
 
 ## 6. Scope & Meilensteine
 
