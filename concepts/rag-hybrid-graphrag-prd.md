@@ -1,6 +1,6 @@
 # PRD: Lokales Hybrid-RAG mit GraphRAG
 
-**Status:** Entwurf · **Stand:** 2026-07-12 09:51 CEST · **Owner:** Daniel Frey
+**Status:** Entwurf · **Stand:** 2026-07-12 09:58 CEST · **Owner:** Daniel Frey
 
 ## 1. Problem
 
@@ -51,7 +51,7 @@ Retrieval-Strategie pro Frage: Faktenfrage → Hybrid (Vektor+BM25); Beziehungsf
 | **Node.js/TypeScript** | `llm-provider` direkt nutzbar; ein Ökosystem für alles | RAG-Ökosystem dünner (Chunking, Embeddings, Evaluation) |
 | **Python** | Reifstes RAG-Ökosystem (Loader, Splitter, Eval) | `llm-provider` (JS) nur via Subprozess/Port nutzbar — bricht Ziel 6 |
 
-**Empfehlung:** Node.js/TypeScript. Der Verlust an Ökosystem ist verkraftbar (Chunking und RRF sind wenig Code), die nahtlose `llm-provider`-Integration wiegt schwerer.
+**Entscheid (2026-07-12):** Vanilla JS auf Node — kein TypeScript, kein Build-Step, UMD-Stil wie `llm-provider`. Der Verlust an Ökosystem ist verkraftbar (Chunking und RRF sind wenig Code), die nahtlose `llm-provider`-Integration wiegt schwerer.
 
 ### Vektor- & Keyword-Store
 
@@ -61,7 +61,7 @@ Retrieval-Strategie pro Frage: Faktenfrage → Hybrid (Vektor+BM25); Beziehungsf
 | **LanceDB** | Embedded, schnell, natives Node-SDK, Hybrid-Suche eingebaut | Zusätzliche Abhängigkeit; FTS weniger ausgereift als FTS5 |
 | **Qdrant (Docker)** | Sehr schnell, produktionsreif | Laufender Dienst — widerspricht «null Betrieb» für ein lokales Tool |
 
-**Empfehlung:** SQLite mit `sqlite-vec` + FTS5. Ein Store für Chunks, Vektoren und Keyword-Index; Backup = Datei kopieren. Qdrant erst, wenn Messungen es nötig machen.
+**Entscheid (2026-07-12):** SQLite mit `sqlite-vec` + FTS5. Ein Store für Chunks, Vektoren und Keyword-Index; Backup = Datei kopieren. Qdrant erst, wenn Messungen es nötig machen.
 
 ### Graph-Store
 
@@ -71,7 +71,7 @@ Retrieval-Strategie pro Frage: Faktenfrage → Hybrid (Vektor+BM25); Beziehungsf
 | **Kùzu** | Embedded, Cypher, schnell | Junges Projekt; zweiter Store neben SQLite |
 | **Neo4j** | Standard, Tooling, Visualisierung | Server-Betrieb, Java — überdimensioniert für lokal |
 
-**Empfehlung:** Start mit SQLite-Tabellen (`entities`, `relations`, `mentions`, `summaries`) im selben File wie die Indizes. GraphRAG-Retrieval braucht in der Praxis fast nur 1-2 Hops — dafür reicht SQL. Kùzu als definierter Migrationspfad, falls tiefe Traversals nötig werden.
+**Entscheid (2026-07-12):** SQLite-Tabellen (`entities`, `relations`, `mentions`, `summaries`) im selben File wie die Indizes; das Graph-*Modell* folgt graphify: Kanten-Provenance (`EXTRACTED`/`INFERRED`), deterministische Extraktion für Code (tree-sitter via `web-tree-sitter`) vor jedem LLM-Einsatz, Community-Detection (Leiden/Louvain, z.B. via `graphology`). GraphRAG-Retrieval braucht in der Praxis fast nur 1-2 Hops — dafür reicht SQL. Kùzu als definierter Migrationspfad, falls tiefe Traversals nötig werden.
 
 ### Embeddings
 
@@ -81,7 +81,7 @@ Retrieval-Strategie pro Frage: Faktenfrage → Hybrid (Vektor+BM25); Beziehungsf
 | **Lokal: transformers.js/fastembed im Prozess** | Kein Zusatzdienst | Kaltstart, Modell-Download, RAM |
 | **API (Voyage/OpenAI)** | Beste Qualität, kein lokaler Aufwand | Dokumenteninhalte verlassen die Maschine — verletzt Ziel 4 |
 
-**Empfehlung:** Ollama als Default (konsequent zu «Daten lokal» — Embedding-Input ist der volle Dokumenttext, nicht nur die Frage). Embedding-Aufruf hinter einem eigenen Interface, damit API-Embeddings als bewusste Option bleiben. *Lücke:* `llm-provider` hat keinen Embedding-Call; sinnvolle Erweiterung wäre ein `callEmbedding(task, texts)` dort.
+**Entscheid (2026-07-12):** Ollama als Default (konsequent zu «Daten lokal» — Embedding-Input ist der volle Dokumenttext, nicht nur die Frage), angebunden über `llm-provider.embed()` (seit v0.4.0) mit Provider-Typ `openai-compatible`. API-Embeddings (z.B. Voyage) bleiben als bewusste Konfigurations-Option über denselben Call.
 
 ### Framework vs. Eigenbau
 
@@ -96,7 +96,7 @@ Retrieval-Strategie pro Frage: Faktenfrage → Hybrid (Vektor+BM25); Beziehungsf
 
 ## 6. Scope & Meilensteine
 
-1. **M1 — Hybrid-RAG:** Loader (Markdown), Chunking, SQLite mit `sqlite-vec`+FTS5, Ollama-Embeddings, RRF, Antwort via `llm-provider`, CLI (`index`, `ask`).
+1. **M1 — Hybrid-RAG:** Repo `full-rag`, Loader (Markdown), Chunking, SQLite mit `sqlite-vec`+FTS5, Ollama-Embeddings via `llm-provider.embed()`, RRF, Antwort via `llm-provider`, CLI (`index`, `ask`); Referenz-Korpus: `ai-toolbox`.
 2. **M2 — GraphRAG:** LLM-Extraktion (Entitäten/Relationen) beim Indexieren, Graph-Tabellen, Entity-basiertes Retrieval, Router.
 3. **M3 — Härtung:** Inkrementelle Re-Indexierung, Trigger-Schicht (post-commit-Hook, opt-in Watcher), Summaries für Überblicksfragen, kleine Eval-Suite (Fragenkatalog mit erwarteten Quellen), weitere Loader (PDF, Code).
 
@@ -107,8 +107,10 @@ Retrieval-Strategie pro Frage: Faktenfrage → Hybrid (Vektor+BM25); Beziehungsf
 - Voll-Indexierung eines 1000-Dokumente-Korpus < 30 Min; inkrementeller Lauf ohne Änderungen < 10 Sek.
 - Kein Dokumentinhalt verlässt die Maschine ausser als Prompt-Kontext an die konfigurierte LLM-API.
 
-## 8. Offene Fragen
+## 8. Entscheide (2026-07-12)
 
-1. Erweiterung von `llm-provider` um `callEmbedding` — dort oder als separates Modul im Pipeline-Repo?
-2. Eigenes Repo (z.B. `local-rag`) oder Start unter `ai-toolbox/tools/`?
-3. Erste konkrete Datenquelle für M1 als Referenz-Korpus (z.B. `ai-toolbox` selbst)?
+1. **Embeddings:** `llm-provider.embed()` (seit v0.4.0), lokal via Ollama (`openai-compatible`).
+2. **Repo:** eigenes Repo `full-rag`.
+3. **Referenz-Korpus M1:** `ai-toolbox`.
+4. **Stack:** Vanilla JS (Node, kein Build-Step) · SQLite als einziger Store · Graph-Modell nach graphify-Vorbild (Provenance, deterministisch vor LLM, Communities).
+5. **Loader:** JS-nativ hinter einem schmalen Loader-Interface (M1: Markdown; M3: PDF via `pdfjs-dist`, Code via tree-sitter). graphifys Loader sind Python und werden nicht eingebunden; optional dient `graphify.ingest` als externer URL-Fetcher (YouTube/arXiv/Webseite → Datei), dessen Output unsere Loader dann normal einlesen.
