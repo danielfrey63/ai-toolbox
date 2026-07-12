@@ -1,6 +1,6 @@
 # PRD: Lokales Hybrid-RAG mit GraphRAG
 
-**Status:** Entwurf · **Datum:** 2026-07-12 · **Owner:** Daniel Frey
+**Status:** Entwurf · **Stand:** 2026-07-12 09:49 CEST · **Owner:** Daniel Frey
 
 ## 1. Problem
 
