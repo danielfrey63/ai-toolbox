@@ -30,7 +30,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.38.238'
+APP_VERSION='0.39.242'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -147,6 +147,9 @@ _help_what() {
   Names are listed by `toolbox list`. Types are:
     skill   Skill directory, linked into a CLI's skills/.
     hook    Git hooks installed as a managed line in a repo's pre/post-commit.
+            Installing a hook WITHOUT --scope project re-installs every
+            registered repo (recorded target kept) — one command to refresh
+            or migrate all repos after a toolbox update.
     plugin  Real `claude plugin` install (target=claude) or skill-link.
     config  Global config file (e.g. CLAUDE.md) into ~/.claude/.
     bin     Make a CLI available system-wide (exec or sourced shell function).
@@ -1083,10 +1086,49 @@ _hook_block_present() {  # prepo → 0/1
     [ -f "$dir/pre-commit" ] && grep -qF "$_HOOK_MARK" "$dir/pre-commit"
 }
 
+# Default install path for a hook when no repo is selected (--scope global):
+# re-install every registered repo of this hook, each with its recorded
+# target — one command refreshes/migrates all repos after a toolbox update.
+# Tagstyle stays per-repo unless --tagstyle was passed explicitly.
+_hook_registry_reinstall() {
+    local name=$1 path=$2 entries entry proj tgt n=0
+    entries=$(registry_read | jq -c --arg tool "$name" \
+        '.[] | select(.tool == $tool and .type == "hook" and .project != "")' 2>/dev/null)
+    if [ -z "$entries" ]; then
+        printf '  [.] %-18s no registered repos yet — install into one with --scope project\n' "$name"
+        return
+    fi
+    local oscope=$SCOPE oproject=$PROJECT otarget=$TARGET
+    SCOPE=project
+    while IFS= read -r entry; do
+        [ -n "$entry" ] || continue
+        proj=$(printf '%s' "$entry" | jq -r '.project')
+        tgt=$(printf '%s' "$entry" | jq -r '.target')
+        if [ ! -d "$proj" ]; then
+            printf '  [!] %-18s registered repo missing on disk: %s\n' "$name" "$proj" >&2
+            continue
+        fi
+        printf '  --- %s%s\n' "$proj" "${tgt:+ (target=$tgt)}"
+        PROJECT=$proj
+        TARGET=$tgt
+        handle_hook "$name" "$path"
+        registry_add "$name" hook "$path" project "$tgt" "$proj"
+        n=$((n+1))
+    done <<EOF
+$entries
+EOF
+    SCOPE=$oscope PROJECT=$oproject TARGET=$otarget
+    printf '  [i] %-18s %d registered repo(s) re-installed\n' "$name" "$n"
+}
+
 handle_hook() {
     local name=$1 path=$2
     if [ "$SCOPE" != project ]; then
-        printf '  [.] %-18s hooks are per-repo — pass --scope project\n' "$name"
+        if [ "$CMD" = install ]; then
+            _hook_registry_reinstall "$name" "$path"
+        else
+            printf '  [.] %-18s hooks are per-repo — pass --scope project\n' "$name"
+        fi
         return
     fi
     local prepo curts fresh='' hd vpre vpost
@@ -1293,6 +1335,9 @@ registry_add() {  # name type path scope target project
     # (target="" = bare git-hook, target="claude" = git-hook + claude patch).
     case "$2" in
         config|bin)  scope=global; target=''; project='' ;;
+        # A hook entry without a project is meaningless (per-repo installs
+        # only) — never record one, e.g. from a global-scope dispatch pass.
+        hook)        [ -n "$project" ] || return 0 ;;
     esac
     # Path keys: '/' separators + no trailing slash — Windows can pass either
     # form (Resolve-Path gives '\', git rev-parse gives '/') and raw input may

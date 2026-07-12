@@ -23,7 +23,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.38.226'
+$APP_VERSION = '0.39.229'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -971,9 +971,42 @@ function Test-HookBlockPresent([string]$prepo) {
     return [bool](@(Get-HookLines $file) | Where-Object { $_.Contains($script:HookMark) })
 }
 
+# Default install path for a hook when no repo is selected (--scope global):
+# re-install every registered repo of this hook, each with its recorded
+# target — one command refreshes/migrates all repos after a toolbox update.
+# Tagstyle stays per-repo unless --tagstyle was passed explicitly.
+function Invoke-HookRegistryReinstall([string]$name, [string]$path) {
+    $entries = @(Registry-Read | Where-Object {
+        $_.tool -eq $name -and $_.type -eq 'hook' -and $_.project
+    })
+    if ($entries.Count -eq 0) {
+        Write-Output "  [.] $name  no registered repos yet — install into one with --scope project"
+        return
+    }
+    $oscope = $script:Scope; $oproject = $script:Project; $otarget = $script:Target
+    $script:Scope = 'project'
+    $n = 0
+    foreach ($e in $entries) {
+        if (-not (Test-Path -LiteralPath $e.project)) {
+            [Console]::Error.WriteLine("  [!] $name  registered repo missing on disk: $($e.project)")
+            continue
+        }
+        $suffix = if ($e.target) { " (target=$($e.target))" } else { '' }
+        Write-Output "  --- $($e.project)$suffix"
+        $script:Project = $e.project
+        $script:Target = [string]$e.target
+        Handle-Hook $name $path
+        Registry-Add $name 'hook' $path 'project' $e.target $e.project
+        $n++
+    }
+    $script:Scope = $oscope; $script:Project = $oproject; $script:Target = $otarget
+    Write-Output "  [i] $name  $n registered repo(s) re-installed"
+}
+
 function Handle-Hook([string]$name, [string]$path) {
     if ($Scope -ne 'project') {
-        Write-Output "  [.] $name  hooks are per-repo — pass --scope project"
+        if ($Cmd -eq 'install') { Invoke-HookRegistryReinstall $name $path }
+        else { Write-Output "  [.] $name  hooks are per-repo — pass --scope project" }
         return
     }
     $prepo = (git -C $Project rev-parse --show-toplevel 2>$null)
@@ -1236,6 +1269,9 @@ function _Registry-Normalize([string]$type, [ref]$scope, [ref]$target, [ref]$pro
 # Upsert an entry, keyed by tool + scope + target + project.
 function Registry-Add([string]$tool, [string]$type, [string]$path,
                       [string]$scope, [string]$target, [string]$project) {
+    # A hook entry without a project is meaningless (per-repo installs only)
+    # — never record one, e.g. from a global-scope dispatch pass.
+    if ($type -eq 'hook' -and -not $project) { return }
     _Registry-Normalize $type ([ref]$scope) ([ref]$target) ([ref]$project)
     $kept = @(Registry-Read | Where-Object {
         -not ($_.tool -eq $tool -and $_.scope -eq $scope -and

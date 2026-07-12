@@ -43,6 +43,24 @@ Typ, der den Install-Handler bestimmt:
 | `config` | globale Konfig-Datei (`CLAUDE.md`) nach `~/.claude/` verlinken |
 | `bin`    | einen CLI-Befehl systemweit verfügbar machen — exec (Symlink in `~/.local/bin` / `&` in `$PROFILE`) oder sourced (Funktion in `~/.bashrc` / `.` in `$PROFILE`, Katalog `source: true` — z.B. für env-setzende Tools wie `cc-profil`) |
 
+### Unterstützung `--what` (Typ) × `--target`
+
+| Typ | `claude` | `codex` | `agents` | `kilo` | ohne `--target` |
+|---|---|---|---|---|---|
+| `skill`  | Link in `.claude/skills/` | Link in `.codex/skills/` | Link in `.agents/skills/` | Eintrag in `kilo.jsonc` (nur global) | Fehler — `--target` nötig |
+| `hook`   | Git-Hooks + Claude-PostToolUse-Edit-Bump | Git-Hooks (Edit-Bump noch nicht unterstützt) | Git-Hooks (Edit-Bump noch nicht unterstützt) | übersprungen | Git-Hooks pur |
+| `plugin` | echtes `claude plugin`-Install | Skill-Link-Fallback | Skill-Link-Fallback | übersprungen | Fehler — `--target` nötig |
+| `config` | ignoriert `--target` | ignoriert | ignoriert | übersprungen | ok |
+| `bin`    | ignoriert `--target` | ignoriert | ignoriert | übersprungen | ok |
+
+Defaults der Switches:
+
+- `--what all` — alle Katalog-Einträge; Präfixe werden aufgelöst, wenn eindeutig (`--what vers` → `versioning-hooks`).
+- `--scope global` — `hook` ist per-Repo und braucht `--scope project`. **Ausnahme `install`:** ein Hook-Install ohne `--scope project` reinstalliert alle in der Registry erfassten Repos, jedes mit seinem aufgezeichneten Target (ein Befehl für Refresh/Migration nach einem Toolbox-Update).
+- `--project <cwd>` — Projekt-Root für `--scope project`; Default ist das aktuelle Verzeichnis.
+- `--target` — nötig, ausser die Auswahl besteht nur aus `hook`/`config`/`bin`.
+- `--tagstyle` — nur Hook-Installs; ungesetzt gilt `namespaced`, ein bestehender Repo-Wert bleibt beim Re-Install erhalten.
+
 `reconcile` durchsucht die globalen Link-Ziele (Skills-Verzeichnisse je Target,
 `~/.claude`, `~/.local/bin`) nach Symlinks, die in dieses Repo zeigen, und trägt
 fehlende in die Registry nach — so werden auch von Hand (ausserhalb von
@@ -96,17 +114,14 @@ alle Repos automatisch.
 Frühere Versionen schrieben entweder `core.hooksPath` aufs Toolbox-Verzeichnis
 oder eine Shim-Zeile mit hartem Pfad. Nach einem `git pull` der Toolbox:
 
-1. `toolbox status` markiert betroffene Repos mit `[! ] … (old shim path …)` bzw.
-   `(legacy core.hooksPath …)` — „re-install to migrate".
-2. Pro markiertem Repo neu installieren (idempotent; legt die Launcher an und
-   ersetzt nur die markierte Zeile):
+1. `toolbox status` markiert betroffene Repos mit `[! ] … (old shim path …)` bzw. `(legacy core.hooksPath …)` — „re-install to migrate".
+2. Ein Befehl reinstalliert alle registrierten Repos (idempotent; legt die Launcher an, ersetzt nur die markierte Zeile; Target und Tagstyle bleiben pro Repo erhalten):
 
    ```bash
-   toolbox install --what versioning-hooks --scope project --project <repo>
+   toolbox install --what versioning-hooks
    ```
 
-Hängt das Repo an `--target claude`, dieselbe Flag mitgeben. `~/.local/bin` muss
-auf dem `sh`-PATH liegen (sonst weist der Install darauf hin).
+Ein einzelnes (oder neues) Repo gezielt: `toolbox install --what versioning-hooks --scope project --project <repo>` — hängt es an Claude, `--target claude` mitgeben. `~/.local/bin` muss auf dem `sh`-PATH liegen (sonst weist der Install darauf hin).
 
 ## Registry
 
