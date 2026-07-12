@@ -1,6 +1,6 @@
 # PRD: Lokales Hybrid-RAG mit GraphRAG
 
-**Status:** Entwurf · **Stand:** 2026-07-12 09:58 CEST · **Owner:** Daniel Frey
+**Status:** Entwurf · **Stand:** 2026-07-12 10:17 CEST · **Owner:** Daniel Frey
 
 ## 1. Problem
 
@@ -92,7 +92,7 @@ Retrieval-Strategie pro Frage: Faktenfrage → Hybrid (Vektor+BM25); Beziehungsf
 | **graphify (Graphify-Labs)** | Graph-Aufbau für Code deterministisch per tree-sitter (0 LLM-Credits), Kanten-Provenance (EXTRACTED/INFERRED), Leiden-Communities | Bewusst kein Vektor-Index — deckt nur den Graph-Teil ab; Python-CLI mit eigenem Datenmodell |
 | **Eigenbau (schlank)** | Passt exakt auf Stack und `llm-provider`; Konzepte sind gut dokumentiert und klein nachbaubar | Extraktions-Prompts und Fusion selbst pflegen |
 
-**Entscheid (2026-07-12):** Eigenbau, konzeptionell entlang LightRAG (Entitäten + Relationen + Keyword-Duallevel statt teurer Community-Hierarchien). graphify dient als primäre Referenz für Datenmodell und Extraktions-Ansatz — insbesondere Kanten-Provenance (EXTRACTED vs. INFERRED) und deterministische Extraktion vor LLM-Einsatz, wo möglich (Automatisierungs-Priorität Skript → LLM).
+**Entscheid (2026-07-12):** Eigenbau, konzeptionell entlang LightRAG (Entitäten + Relationen + Keyword-Duallevel statt teurer Community-Hierarchien). graphify dient als primäre Referenz für Datenmodell und Extraktions-Ansatz — insbesondere Kanten-Provenance (EXTRACTED vs. INFERRED) und deterministische Extraktion vor LLM-Einsatz, wo möglich (Automatisierungs-Priorität Skript → LLM). Detaillierte Code-Analyse mit Übernahme-Liste: [graphify-analyse.md](graphify-analyse.md).
 
 ## 6. Scope & Meilensteine
 
