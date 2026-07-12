@@ -1,6 +1,6 @@
 # PRD: Lokales Hybrid-RAG mit GraphRAG (`full-rag`)
 
-**Status:** Umgesetzt (M1–M4) in [danielfrey63/full-rag](https://github.com/danielfrey63/full-rag) · **Stand:** 2026-07-12 13:46 CEST · **Owner:** Daniel Frey · **Referenz-Analyse:** [graphify-analyse.md](graphify-analyse.md)
+**Status:** Umgesetzt (M1–M4) in [danielfrey63/full-rag](https://github.com/danielfrey63/full-rag) · **Stand:** 2026-07-12 18:30 CEST · **Owner:** Daniel Frey · **Referenz-Analyse:** [graphify-analyse.md](graphify-analyse.md)
 
 ## 1. Problem
 
@@ -18,7 +18,7 @@ Klassisches Vektor-RAG findet semantisch ähnliche Textstellen, scheitert aber a
 4. **Lokale Daten:** Dokumente, Chunks, Embeddings, Graph und Indizes liegen ausschliesslich auf eigener Hardware; die Maschine verlassen Inhalte nur als Calls an die konfigurierten Provider (Generierung, Extraktion, Embeddings) — mit lokalen Providern gar nicht.
 5. **Inkrementell & idempotent (ab M1):** Re-Runs indexieren nur Geändertes (Content-Hash). Commit-Grenze ist das Dokument: alle Stufen eines Dokuments laufen in einer SQLite-Transaktion, Re-Indexierung ersetzt alle Artefakte des Dokuments (Replace-per-Document) — Abbruch und Wiederholung schaden nie, Leser sehen nur vollständige Stände. Gelöschte Dateien (Manifest minus aktueller Scan) werden mitsamt abhängigen Artefakten entfernt; Renames sind Delete+Add — der Content-Hash macht die Re-Verarbeitung billig bis gratis.
 6. **Trigger-Schicht nach graphify-Vorbild:** Der Index-Lauf selbst ist trigger-agnostisch; darüber liegen drei dünne Auslöser: (A) manueller CLI-Aufruf, (B) git post-commit-Hook (indexiert nur die im Commit geänderten Dateien), (C) optionaler File-Watcher mit Debounce, der automatisch nur Stufen ohne externe Calls ausführt (Chunking, BM25; Embeddings nur bei lokalem Provider oder explizitem Opt-in) und alles Übrige (Graph-Extraktion, Cloud-Embeddings) als `needs_update`-Flag für den nächsten expliziten Lauf vormerkt. Alle Trigger serialisieren auf genau einen Writer (SQLite WAL, Lock plus durable Queue nach graphify-Muster); konkurrierende Trigger werden zusammengeführt, nie parallel ausgeführt.
-7. **Provider-agnostisch:** Alle LLM-Calls über `llm-provider`; Modellwechsel ist Konfiguration, kein Code.
+7. **Provider-agnostisch:** Alle LLM-Calls über `llm-provider`; Modellwechsel ist Konfiguration, kein Code. Die Konfiguration wird pro Aufruf aufgelöst: `$FULL_RAG_CONFIG` (expliziter Override) > `<root>/full-rag-out/config.json` (lokale Config pro Korpus/Store, falls vorhanden) > `~/.config/full-rag/config.json` (global). Eine lokale Config ersetzt die globale vollständig (kein Merge); angelegt wird sie explizit (`config … --local`, startet als Kopie der aufgelösten Config). Damit kann jedes Repo eigene Provider/Modelle fahren, ohne die globale Konfiguration zu berühren.
 8. **Wiki-Schicht:** Generierte Markdown-Verdichtung über dem Graph (pro Community ein Artikel), menschlich kuratierbar — reine Ausgabe-Schicht, wird nie re-indexiert (weder Vektor/BM25 noch Graph).
 
 **Nicht-Ziele:** Kein Multi-User-Betrieb, keine Web-UI (CLI und programmatische JS-API zuerst; MCP/Skill als dünne Read-Schicht in M3), kein permanenter Sync-Daemon als Kernbestandteil (der Watcher aus Ziel 6 ist opt-in und macht nie externe Provider-Calls ohne Opt-in), kein eigenes Frontend für Graph-Visualisierung (Graph-Export in M2 genügt).
