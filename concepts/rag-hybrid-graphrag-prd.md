@@ -17,9 +17,10 @@ Eine generische, quellenunabhängige Ingestion-und-Retrieval-Pipeline, die pro D
 3. **GraphRAG:** LLM-extrahierte Entitäten und Relationen als Graph; Graph-Retrieval für Beziehungs- und Überblicksfragen (lokale Nachbarschaft + verdichtete Zusammenfassungen).
 4. **Lokale Daten:** Dokumente, Chunks, Embeddings, Graph und Indizes liegen ausschliesslich auf eigener Hardware; nur Prompt-Inhalte gehen an die LLM-API.
 5. **Inkrementell & idempotent:** Re-Runs indexieren nur Geändertes (Hash-basiert); Abbruch und Wiederholung schaden nie.
-6. **Provider-agnostisch:** Alle LLM-Calls über `llm-provider`; Modellwechsel ist Konfiguration, kein Code.
+6. **Trigger-Schicht nach graphify-Vorbild:** Der Index-Lauf selbst ist trigger-agnostisch; darüber liegen drei dünne Auslöser: (A) manueller CLI-Aufruf, (B) git post-commit-Hook (indexiert nur die im Commit geänderten Dateien), (C) optionaler File-Watcher mit Debounce, der nur die billigen deterministischen Stufen (Chunking, BM25, lokale Embeddings) sofort ausführt und teure LLM-Stufen (Graph-Extraktion) lediglich als `needs_update`-Flag für den nächsten expliziten Lauf vormerkt.
+7. **Provider-agnostisch:** Alle LLM-Calls über `llm-provider`; Modellwechsel ist Konfiguration, kein Code.
 
-**Nicht-Ziele:** Kein Multi-User-Betrieb, keine Web-UI (CLI/API zuerst), kein Realtime-Sync von Quellen (kein Daemon mit File-Watchern/Webhooks — Aktualität entsteht durch den schnellen inkrementellen Lauf aus Ziel 5, on demand oder per Cron), kein eigenes Frontend für Graph-Visualisierung (Export für bestehende Tools genügt).
+**Nicht-Ziele:** Kein Multi-User-Betrieb, keine Web-UI (CLI/API zuerst), kein permanenter Sync-Daemon als Kernbestandteil (der Watcher aus Ziel 6 ist opt-in und macht nie LLM-Calls von selbst), kein eigenes Frontend für Graph-Visualisierung (Export für bestehende Tools genügt).
 
 ## 4. Architektur (Skizze)
 
@@ -93,7 +94,7 @@ Retrieval-Strategie pro Frage: Faktenfrage → Hybrid (Vektor+BM25); Beziehungsf
 
 1. **M1 — Hybrid-RAG:** Loader (Markdown), Chunking, SQLite mit `sqlite-vec`+FTS5, Ollama-Embeddings, RRF, Antwort via `llm-provider`, CLI (`index`, `ask`).
 2. **M2 — GraphRAG:** LLM-Extraktion (Entitäten/Relationen) beim Indexieren, Graph-Tabellen, Entity-basiertes Retrieval, Router.
-3. **M3 — Härtung:** Inkrementelle Re-Indexierung, Summaries für Überblicksfragen, kleine Eval-Suite (Fragenkatalog mit erwarteten Quellen), weitere Loader (PDF, Code).
+3. **M3 — Härtung:** Inkrementelle Re-Indexierung, Trigger-Schicht (post-commit-Hook, opt-in Watcher), Summaries für Überblicksfragen, kleine Eval-Suite (Fragenkatalog mit erwarteten Quellen), weitere Loader (PDF, Code).
 
 ## 7. Erfolgskriterien
 
