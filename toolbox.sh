@@ -9,6 +9,8 @@
 #   config — symlink a global config file (CLAUDE.md) into ~/.claude/
 #   bin    — make a CLI available system-wide (PATH symlink, or sourced shell
 #            function via catalog "source: true" — needed for env-setting tools)
+#   mcp    — merge an MCP server definition into ~/.claude.json (mcpServers);
+#            secrets via ${SECRET:NAME} from ~/.config/ai-toolbox/secrets.env
 #   repo   — clone/update an external tool repo (existing SIBLING checkout of
 #            this toolbox wins, else ~/.local/share/ai-toolbox/repos/<name>),
 #            run its dependency install when the lockfile changed, then link
@@ -36,7 +38,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.42.264'
+APP_VERSION='0.43.274'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -307,14 +309,15 @@ run_validate() {
         type=$(printf '%s' "$tool" | jq -r '.type // empty')
         path=$(printf '%s' "$tool" | jq -r '.path // empty')
         desc=$(printf '%s' "$tool" | jq -r '.description // empty')
-        # repo entries need no path — their checkout location is resolved
-        # from the name (sibling, else XDG data dir).
-        if [ -z "$name" ] || [ -z "$type" ] || { [ "$type" != repo ] && [ -z "$path" ]; } || [ -z "$desc" ]; then
+        # repo entries need no path (checkout location is resolved from the
+        # name: sibling, else XDG data dir); mcp entries carry a server object
+        # instead of a path.
+        if [ -z "$name" ] || [ -z "$type" ] || { [ "$type" != repo ] && [ "$type" != mcp ] && [ -z "$path" ]; } || [ -z "$desc" ]; then
             printf '  [!] %-18s missing required field(s) (name/type/path/description)\n' "${name:-?}" >&2
             fail=$((fail + 1)); continue
         fi
         case "$type" in
-            skill|hook|plugin|config|bin|repo) ;;
+            skill|hook|plugin|config|bin|repo|mcp) ;;
             *) printf '  [!] %-18s unknown type: %s\n' "$name" "$type" >&2
                fail=$((fail + 1)); continue ;;
         esac
@@ -364,6 +367,14 @@ run_validate() {
                         fi
                         ;;
                 esac
+                ;;
+            mcp)
+                # no path — the entry carries the server definition itself.
+                path="mcpServers.$name"
+                if ! printf '%s' "$tool" | jq -e '.server | (type == "object") and ((.command // .url) != null)' >/dev/null 2>&1; then
+                    printf '  [!] %-18s mcp needs a "server" object with "command" or "url"\n' "$name" >&2
+                    fail=$((fail + 1)); continue
+                fi
                 ;;
             repo)
                 # the checkout location is resolved from the name — its absence
@@ -1495,6 +1506,71 @@ handle_repo() {  # name path url install links_json
     done
 }
 
+# --- mcp handler ---------------------------------------------------------------
+# Merges an MCP server definition into ~/.claude.json (mcpServers.<name>),
+# desired-state: write only when the resolved definition differs from what is
+# configured. Secrets and machine-local values stay out of the catalog via
+# ${SECRET:NAME} placeholders, resolved at install/status time from
+# ~/.config/ai-toolbox/secrets.env (NAME=value lines, never committed).
+MCP_CONFIG="$HOME/.claude.json"
+MCP_SECRETS="${XDG_CONFIG_HOME:-$HOME/.config}/ai-toolbox/secrets.env"
+
+_mcp_resolve() {  # server_json → resolved json on stdout; rc 1 + message on stdout
+    local json=$1 names name val missing=''
+    names=$(printf '%s' "$json" | grep -o '\${SECRET:[A-Za-z0-9_]*}' | sed 's/^\${SECRET://; s/}$//' | sort -u)
+    [ -n "$names" ] || { printf '%s' "$json"; return 0; }
+    for name in $names; do
+        val=$(sed -n "s/^$name=//p" "$MCP_SECRETS" 2>/dev/null | tr -d '\r' | head -1)
+        if [ -z "$val" ]; then missing="$missing $name"; continue; fi
+        json=${json//"\${SECRET:$name}"/$val}
+    done
+    if [ -n "$missing" ]; then
+        printf 'missing secret(s):%s — add NAME=value line(s) to %s' "$missing" "$MCP_SECRETS"
+        return 1
+    fi
+    printf '%s' "$json"
+}
+
+handle_mcp() {  # name server_json
+    local name=$1 server=$2 resolved current tmp
+    resolved=$(_mcp_resolve "$server") || {
+        printf '  [!] %-18s %s\n' "$name" "$resolved" >&2
+        return 1
+    }
+    current=$(jq -c --arg n "$name" '.mcpServers[$n] // empty' "$MCP_CONFIG" 2>/dev/null)
+    case "$CMD" in
+        install)
+            if [ -n "$current" ] && jq -e -n --argjson a "$current" --argjson b "$resolved" '$a == $b' >/dev/null 2>&1; then
+                printf '  [=] %-18s already configured (mcpServers.%s)\n' "$name" "$name"
+            else
+                tmp="$MCP_CONFIG.tmp.$$"
+                jq --arg n "$name" --argjson s "$resolved" '.mcpServers[$n] = $s' "$MCP_CONFIG" > "$tmp" && mv "$tmp" "$MCP_CONFIG"
+                printf '  [+] %-18s mcp server %s in %s\n' "$name" "$([ -n "$current" ] && printf updated || printf added)" "$MCP_CONFIG"
+            fi
+            ;;
+        status)
+            if [ -z "$current" ]; then
+                printf '  [ ] %-18s not configured in %s\n' "$name" "$MCP_CONFIG"
+            elif jq -e -n --argjson a "$current" --argjson b "$resolved" '$a == $b' >/dev/null 2>&1; then
+                printf '  [ok] %-18s mcpServers.%s\n' "$name" "$name"
+                STATE=ok
+            else
+                printf '  [! ] %-18s configured but differs from catalog — re-run install\n' "$name"
+                STATE=partial
+            fi
+            ;;
+        remove)
+            if [ -z "$current" ]; then
+                printf '  [.] %-18s not configured — nothing to remove\n' "$name"
+            else
+                tmp="$MCP_CONFIG.tmp.$$"
+                jq --arg n "$name" 'del(.mcpServers[$n])' "$MCP_CONFIG" > "$tmp" && mv "$tmp" "$MCP_CONFIG"
+                printf '  [-] %-18s removed from %s\n' "$name" "$MCP_CONFIG"
+            fi
+            ;;
+    esac
+}
+
 # --- registry -----------------------------------------------------------------
 # Records every install so `status --all` / `remove --all` can find them across
 # all scopes, targets and projects. The registry is only a discovery index —
@@ -1521,7 +1597,7 @@ registry_add() {  # name type path scope target project
     # repo-wide, so the same repo can legitimately have multiple hook entries
     # (target="" = bare git-hook, target="claude" = git-hook + claude patch).
     case "$2" in
-        config|bin)  scope=global; target=''; project='' ;;
+        config|bin|mcp)  scope=global; target=''; project='' ;;
         # repo checkouts are machine-global; only the skill-link target varies.
         repo)        scope=global; project='' ;;
         # A hook entry without a project is meaningless (per-repo installs
@@ -1553,7 +1629,7 @@ registry_remove() {  # name type scope target project
     [ -f "$REGISTRY" ] || return 0
     local scope=$3 target=$4 project=$5
     case "$2" in
-        config|bin)  scope=global; target=''; project='' ;;
+        config|bin|mcp)  scope=global; target=''; project='' ;;
         repo)        scope=global; project='' ;;
     esac
     if [ -n "$project" ]; then
@@ -1693,6 +1769,10 @@ registry_sweep() {
                 links=$(jq -c --arg n "$tool" \
                     'first(.tools[] | select(.name==$n) | .links) // []' "$CATALOG")
                 handle_repo "$tool" "$path" "$url" "$inst" "$links" ;;
+            mcp)
+                server=$(jq -c --arg n "$tool" \
+                    'first(.tools[] | select(.name==$n) | .server) // empty' "$CATALOG")
+                handle_mcp "$tool" "$server" ;;
             *)  printf '  [!] %-18s unknown type "%s"\n' "$tool" "$type" >&2 ;;
         esac
 
@@ -1902,7 +1982,7 @@ fi
 # bin — and repo, unless it declares a skill link, which is target-specific).
 if [ -z "$TARGET" ]; then
     needs_target=$(printf '%s\n' "$selected" \
-        | jq -r 'select((.type != "hook" and .type != "config" and .type != "bin" and .type != "repo")
+        | jq -r 'select((.type != "hook" and .type != "config" and .type != "bin" and .type != "repo" and .type != "mcp")
                         or (.type == "repo" and (((.links // []) | map(select(.type == "skill")) | length) > 0))) | .name' | head -1)
     if [ -n "$needs_target" ]; then
         printf 'toolbox: --target is required (claude|codex|agents|kilo) — "%s" needs it\n' \
@@ -1939,6 +2019,10 @@ printf '%s\n' "$selected" | while IFS= read -r tool; do
             inst=$(printf '%s' "$tool" | jq -r '.install // empty')
             links=$(printf '%s' "$tool" | jq -c '.links // []')
             handle_repo "$name" "$path" "$url" "$inst" "$links"
+            ;;
+        mcp)
+            server=$(printf '%s' "$tool" | jq -c '.server // empty')
+            handle_mcp "$name" "$server"
             ;;
         *)
             printf '  [!] %-18s unknown type "%s"\n' "$name" "$type" >&2

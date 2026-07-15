@@ -8,6 +8,8 @@
 #   config — symlink a global config file (CLAUDE.md) into ~/.claude/
 #   bin    — install a CLI as a function in the PowerShell $PROFILE — using
 #            `&` (exec) or `.` (sourced, catalog "source: true")
+#   mcp    — merge an MCP server definition into ~/.claude.json (mcpServers);
+#            secrets via ${SECRET:NAME} from ~/.config/ai-toolbox/secrets.env
 #   repo   — clone/update an external tool repo (existing sibling checkout of
 #            this toolbox wins, else ~/.local/share/ai-toolbox/repos/<name>),
 #            run its dependency install on lockfile change, link its declared
@@ -27,7 +29,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.41.244'
+$APP_VERSION = '0.42.255'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -254,13 +256,14 @@ function Invoke-Validate {
     $tools = @((Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools)
     foreach ($t in $tools) {
         $name = $t.name; $type = $t.type; $path = $t.path; $desc = $t.description
-        # repo entries need no path — their checkout location is resolved
-        # from the name (sibling, else XDG data dir).
-        if (-not $name -or -not $type -or (-not $path -and $type -ne 'repo') -or -not $desc) {
+        # repo entries need no path (checkout location is resolved from the
+        # name: sibling, else XDG data dir); mcp entries carry a server object
+        # instead of a path.
+        if (-not $name -or -not $type -or (-not $path -and $type -notin @('repo', 'mcp')) -or -not $desc) {
             [Console]::Error.WriteLine("  [!] $($name ?? '?')  missing required field(s) (name/type/path/description)")
             $fail++; continue
         }
-        if ($type -notin @('skill', 'hook', 'plugin', 'config', 'bin', 'repo')) {
+        if ($type -notin @('skill', 'hook', 'plugin', 'config', 'bin', 'repo', 'mcp')) {
             [Console]::Error.WriteLine("  [!] $name  unknown type: $type")
             $fail++; continue
         }
@@ -313,6 +316,13 @@ function Invoke-Validate {
                         [Console]::Out.WriteLine("  [i] $name  no PowerShell sibling: $ps1")
                         $warn++
                     }
+                }
+            }
+            'mcp' {
+                # no path — the entry carries the server definition itself.
+                $path = "mcpServers.$name"
+                if (-not $t.server -or ($t.server -isnot [pscustomobject]) -or (-not $t.server.command -and -not $t.server.url)) {
+                    [Console]::Error.WriteLine("  [!] $name  mcp needs a `"server`" object with `"command`" or `"url`""); $fail++; $failed = $true
                 }
             }
             'repo' {
@@ -1353,6 +1363,83 @@ function Handle-Repo([string]$name, [string]$path, [string]$url, [string]$instal
     }
 }
 
+# --- mcp handler --------------------------------------------------------------
+# Merges an MCP server definition into ~/.claude.json (mcpServers.<name>),
+# desired-state: write only when the resolved definition differs. Secrets and
+# machine-local values stay out of the catalog via ${SECRET:NAME} placeholders,
+# resolved from ~/.config/ai-toolbox/secrets.env (NAME=value, never committed).
+# JSON surgery goes through jq (like the bash port) — round-tripping the whole
+# ~/.claude.json through ConvertTo-Json would truncate deep nesting.
+$script:McpConfig = Join-Path $HOME '.claude.json'
+$script:McpSecrets = Join-Path $(if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $HOME '.config' }) 'ai-toolbox/secrets.env'
+
+function Resolve-McpSecrets([string]$json) {
+    $names = @([regex]::Matches($json, '\$\{SECRET:([A-Za-z0-9_]+)\}') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+    if ($names.Count -eq 0) { return $json }
+    $secrets = @{}
+    if (Test-Path -LiteralPath $McpSecrets) {
+        foreach ($line in Get-Content -LiteralPath $McpSecrets) {
+            if ($line -match '^([A-Za-z0-9_]+)=(.*)$') { $secrets[$Matches[1]] = $Matches[2].TrimEnd("`r") }
+        }
+    }
+    $missing = @($names | Where-Object { -not $secrets[$_] })
+    if ($missing.Count -gt 0) { throw "missing secret(s): $($missing -join ' ') — add NAME=value line(s) to $McpSecrets" }
+    foreach ($n in $names) { $json = $json.Replace("`${SECRET:$n}", $secrets[$n]) }
+    return $json
+}
+
+function Handle-Mcp([string]$name, $server) {
+    if (-not (Get-Command jq -ErrorAction SilentlyContinue)) {
+        [Console]::Error.WriteLine("  [!] $name  jq is required for mcp entries — install it (e.g. scoop install jq)")
+        return
+    }
+    try { $resolved = Resolve-McpSecrets ($server | ConvertTo-Json -Depth 20 -Compress) }
+    catch { [Console]::Error.WriteLine("  [!] $name  $($_.Exception.Message)"); return }
+    $tmpServer = New-TemporaryFile
+    try {
+        Set-Content -LiteralPath $tmpServer -Value $resolved -NoNewline
+        $current = (jq -c --arg n $name '.mcpServers[$n] // empty' $McpConfig 2>$null | Out-String).Trim()
+        $same = $false
+        if ($current) {
+            jq -e --arg n $name --slurpfile s $tmpServer.FullName '.mcpServers[$n] == $s[0]' $McpConfig *> $null
+            $same = ($LASTEXITCODE -eq 0)
+        }
+        switch ($Cmd) {
+            'install' {
+                if ($same) { Write-Output "  [=] $name  already configured (mcpServers.$name)"; break }
+                $tmpCfg = "$McpConfig.tmp.$PID"
+                jq --arg n $name --slurpfile s $tmpServer.FullName '.mcpServers[$n] = $s[0]' $McpConfig | Set-Content -LiteralPath $tmpCfg -NoNewline
+                if ($LASTEXITCODE -eq 0) {
+                    Move-Item -LiteralPath $tmpCfg -Destination $McpConfig -Force
+                    Write-Output "  [+] $name  mcp server $(if ($current) { 'updated' } else { 'added' }) in $McpConfig"
+                } else {
+                    Remove-Item -LiteralPath $tmpCfg -Force -ErrorAction SilentlyContinue
+                    [Console]::Error.WriteLine("  [!] $name  failed to update $McpConfig")
+                }
+            }
+            'status' {
+                if (-not $current) { Write-Output "  [ ] $name  not configured in $McpConfig" }
+                elseif ($same) { Write-Output "  [ok] $name  mcpServers.$name"; $script:State = 'ok' }
+                else { Write-Output "  [! ] $name  configured but differs from catalog — re-run install"; $script:State = 'partial' }
+            }
+            'remove' {
+                if (-not $current) { Write-Output "  [.] $name  not configured — nothing to remove"; break }
+                $tmpCfg = "$McpConfig.tmp.$PID"
+                jq --arg n $name 'del(.mcpServers[$n])' $McpConfig | Set-Content -LiteralPath $tmpCfg -NoNewline
+                if ($LASTEXITCODE -eq 0) {
+                    Move-Item -LiteralPath $tmpCfg -Destination $McpConfig -Force
+                    Write-Output "  [-] $name  removed from $McpConfig"
+                } else {
+                    Remove-Item -LiteralPath $tmpCfg -Force -ErrorAction SilentlyContinue
+                    [Console]::Error.WriteLine("  [!] $name  failed to update $McpConfig")
+                }
+            }
+        }
+    } finally {
+        Remove-Item -LiteralPath $tmpServer -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # --- registry -----------------------------------------------------------------
 # Records every install so `status --all` / `remove --all` can find them across
 # all scopes, targets and projects. The registry is only a discovery index —
@@ -1424,6 +1511,7 @@ function _Registry-Normalize([string]$type, [ref]$scope, [ref]$target, [ref]$pro
     switch ($type) {
         'config' { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
         'bin'    { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
+        'mcp'    { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
         # repo checkouts are machine-global; only the skill-link target varies.
         'repo'   { $scope.Value = 'global'; $project.Value = '' }
     }
@@ -1550,6 +1638,11 @@ function Registry-Sweep {
                 $cat = (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools |
                     Where-Object { $_.name -eq $e.tool } | Select-Object -First 1
                 Handle-Repo $e.tool $e.path $cat.url $cat.install $cat.links
+            }
+            'mcp' {
+                $cat = (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools |
+                    Where-Object { $_.name -eq $e.tool } | Select-Object -First 1
+                Handle-Mcp $e.tool $cat.server
             }
             default {
                 [Console]::Error.WriteLine("  [!] $($e.tool)  unknown type `"$($e.type)`"")
@@ -1740,7 +1833,7 @@ if (-not $selected) {
 # bin — and repo, unless it declares a skill link, which is target-specific).
 if (-not $Target) {
     $needsTarget = $selected | Where-Object {
-        ($_.type -notin @('hook', 'config', 'bin', 'repo')) -or
+        ($_.type -notin @('hook', 'config', 'bin', 'repo', 'mcp')) -or
         ($_.type -eq 'repo' -and @(@($_.links) | Where-Object { $_ -and $_.type -eq 'skill' }).Count -gt 0)
     } | Select-Object -First 1
     if ($needsTarget) {
@@ -1761,11 +1854,12 @@ foreach ($tool in $selected) {
         'bin'    { Handle-Bin $tool.name $tool.path $tool.command ([bool]$tool.source) }
         'plugin' { Handle-Plugin $tool.name $tool.path $tool.marketplace $tool.plugin }
         'repo'   { Handle-Repo $tool.name $tool.path $tool.url $tool.install $tool.links }
+        'mcp'    { Handle-Mcp $tool.name $tool.server }
         default {
             [Console]::Error.WriteLine("  [!] $($tool.name)  unknown type `"$($tool.type)`"")
         }
     }
-    if ($tool.type -in @('skill', 'hook', 'config', 'bin', 'plugin', 'repo')) {
+    if ($tool.type -in @('skill', 'hook', 'config', 'bin', 'plugin', 'repo', 'mcp')) {
         if ($Cmd -eq 'install') {
             Registry-Add $tool.name $tool.type $tool.path $Scope $Target $Project
         } elseif ($Cmd -eq 'remove') {

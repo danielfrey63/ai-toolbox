@@ -131,6 +131,34 @@
       "description": "SBB cc-plugins repo (customer-separated) — Atlassian, generator and SBB infra skills linked via toolbox."
     },
     {
+      "name": "google-sheets",
+      "type": "mcp",
+      "server": {
+        "type": "stdio",
+        "command": "uvx",
+        "args": ["mcp-google-sheets@latest"],
+        "env": {
+          "SERVICE_ACCOUNT_PATH": "${SECRET:GSHEETS_SA_PATH}",
+          "DRIVE_FOLDER_ID": "1dPdqRKMPy0RQDsUu18f4B-y1EU6uZwxC"
+        }
+      },
+      "description": "Google Sheets MCP server (uvx mcp-google-sheets; service-account JSON path from secrets.env)."
+    },
+    {
+      "name": "workflowy",
+      "type": "mcp",
+      "server": {
+        "type": "stdio",
+        "command": "npx",
+        "args": ["-y", "mcp-workflowy@latest", "server", "start"],
+        "env": {
+          "WORKFLOWY_USERNAME": "${SECRET:WORKFLOWY_USERNAME}",
+          "WORKFLOWY_PASSWORD": "${SECRET:WORKFLOWY_PASSWORD}"
+        }
+      },
+      "description": "Workflowy MCP server (npx mcp-workflowy; credentials from secrets.env)."
+    },
+    {
       "name": "versioning-hooks",
       "type": "hook",
       "path": "tools/githooks",
