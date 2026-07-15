@@ -89,7 +89,7 @@
     {
       "name": "cc-plugins",
       "type": "repo",
-      "path": "../../../../Akros/Kunden/SBB/Develop/cc-plugins",
+      "path": "../cc-plugins",
       "url": "ssh://git@codessh.sbb.ch:7999/ai-tools-exploration/cc-plugins.git",
       "links": [
         { "type": "skill", "path": "plugins/sbb-atlassian/skills/atlassian-connect", "name": "sbb-atlassian--atlassian-connect" },
