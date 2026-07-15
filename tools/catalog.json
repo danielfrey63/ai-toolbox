@@ -159,6 +159,39 @@
       "description": "Workflowy MCP server (npx mcp-workflowy; credentials from secrets.env)."
     },
     {
+      "name": "atlassian-sbb",
+      "type": "mcp",
+      "server": {
+        "command": "uvx",
+        "args": ["--from", "git+https://github.com/Troubladore/mcp-atlassian", "mcp-atlassian"],
+        "timeout": 60000,
+        "env": {
+          "CONFLUENCE_URL": "https://localhost:8090",
+          "CONFLUENCE_PERSONAL_TOKEN": "${SECRET:ATLASSIAN_SBB_CONFLUENCE_TOKEN}",
+          "CONFLUENCE_SSL_VERIFY": "false",
+          "JIRA_URL": "https://localhost:8080",
+          "JIRA_PERSONAL_TOKEN": "${SECRET:ATLASSIAN_SBB_JIRA_TOKEN}",
+          "JIRA_SSL_VERIFY": "false"
+        }
+      },
+      "description": "SBB Confluence/Jira MCP via SSH tunnel (Troubladore fork — proforma/SLA/page-view tools missing upstream)."
+    },
+    {
+      "name": "atlassian-akros",
+      "type": "mcp",
+      "server": {
+        "command": "uvx",
+        "args": ["--from", "git+https://github.com/Troubladore/mcp-atlassian", "mcp-atlassian"],
+        "timeout": 60000,
+        "env": {
+          "CONFLUENCE_URL": "https://intranet.nosergroup.com",
+          "CONFLUENCE_PERSONAL_TOKEN": "${SECRET:ATLASSIAN_AKROS_CONFLUENCE_TOKEN}",
+          "CONFLUENCE_SSL_VERIFY": "true"
+        }
+      },
+      "description": "Akros/Noser intranet Confluence MCP (Troubladore fork of mcp-atlassian)."
+    },
+    {
       "name": "versioning-hooks",
       "type": "hook",
       "path": "tools/githooks",
