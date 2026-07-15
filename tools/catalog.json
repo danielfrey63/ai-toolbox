@@ -151,19 +151,13 @@
       "type": "mcp",
       "server": {
         "type": "stdio",
-        "command": "npx",
+        "command": "workflowy",
         "args": [
-          "-y",
-          "mcp-workflowy@latest",
-          "server",
-          "start"
-        ],
-        "env": {
-          "WORKFLOWY_USERNAME": "${SECRET:WORKFLOWY_USERNAME}",
-          "WORKFLOWY_PASSWORD": "${SECRET:WORKFLOWY_PASSWORD}"
-        }
+          "mcp",
+          "--expose=all"
+        ]
       },
-      "description": "Workflowy MCP server (npx mcp-workflowy; credentials from secrets.env)."
+      "description": "Workflowy MCP server (mholzen/workflowy Go binary on PATH; official API, key in ~/.workflowy/api.key)."
     },
     {
       "name": "atlassian-sbb",
