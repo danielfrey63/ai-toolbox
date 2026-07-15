@@ -35,7 +35,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.40.254'
+APP_VERSION='0.41.257'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -357,7 +357,8 @@ run_validate() {
                 fi
                 if [ -d "$src" ]; then
                     # checkout present: declared link sources must exist
-                    missing=$(printf '%s' "$tool" | jq -r '(.links // [])[].path' | while IFS= read -r lp; do
+                    missing=$(printf '%s' "$tool" | jq -r '(.links // [])[].path' | tr -d '\r' | while IFS= read -r lp; do
+                        # tr strips the CR that jq emits on Windows (CRLF output)
                         [ -e "$src/$lp" ] || printf '%s ' "$lp"
                     done)
                     if [ -n "$missing" ]; then

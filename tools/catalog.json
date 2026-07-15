@@ -50,6 +50,24 @@
       "description": "Offline single-file SPA archetype in three tiers (monolith, file-linked, sections+build)."
     },
     {
+      "name": "doc-consistency",
+      "type": "skill",
+      "path": ".agents/skills/doc-consistency",
+      "description": "Re-read guard + consistency propagation across coupled document artifacts (MD/Confluence/Jira)."
+    },
+    {
+      "name": "remote-deploy",
+      "type": "skill",
+      "path": ".agents/skills/remote-deploy",
+      "description": "Deploy to legacy servers over SSH with offline vendoring, patches, verification and rollback."
+    },
+    {
+      "name": "session-to-md",
+      "type": "skill",
+      "path": ".agents/skills/session-to-md",
+      "description": "Export a Claude Code session transcript (JSONL) as clean Markdown conversation."
+    },
+    {
       "name": "llm-provider",
       "type": "repo",
       "path": "../llm-provider",
@@ -67,6 +85,21 @@
         { "type": "bin", "path": "bin/full-rag.js", "command": "full-rag" }
       ],
       "description": "Local hybrid RAG with GraphRAG — index a corpus, ask with citations (skill + CLI)."
+    },
+    {
+      "name": "cc-plugins",
+      "type": "repo",
+      "path": "../../../../Akros/Kunden/SBB/Develop/cc-plugins",
+      "url": "ssh://git@codessh.sbb.ch:7999/ai-tools-exploration/cc-plugins.git",
+      "links": [
+        { "type": "skill", "path": "plugins/sbb-atlassian/skills/atlassian-connect", "name": "sbb-atlassian--atlassian-connect" },
+        { "type": "skill", "path": "plugins/sbb-generators/skills/doc-generator", "name": "sbb-generators--doc-generator" },
+        { "type": "skill", "path": "plugins/sbb-generators/skills/doc-generator-eval", "name": "sbb-generators--doc-generator-eval" },
+        { "type": "skill", "path": "plugins/sbb-generators/skills/ppt-generator", "name": "sbb-generators--ppt-generator" },
+        { "type": "skill", "path": "skills/jira-flow-metrics", "name": "jira-flow-metrics" },
+        { "type": "skill", "path": "skills/tunnel-connect", "name": "tunnel-connect" }
+      ],
+      "description": "SBB cc-plugins repo (customer-separated) — Atlassian, generator and SBB infra skills linked via toolbox."
     },
     {
       "name": "versioning-hooks",

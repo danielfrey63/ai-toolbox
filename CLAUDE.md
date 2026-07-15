@@ -121,7 +121,4 @@ Wenn Upstream Pfade umgezogen hat, IMMER nachträglich prüfen:
 
 - Claude Code cached Dateien lokal — gecachte Versionen können veraltet sein. Falls Änderungen nicht berücksichtigt werden: explizit auf aktuelle Version hinweisen oder Neuladen anfordern.
 
-<!-- APP_VERSION: 0.5.8 -->
-# graphify
-- **graphify** (`~/.claude/skills/graphify/SKILL.md`) - any input to knowledge graph. Trigger: `/graphify`
-When the user types `/graphify`, invoke the Skill tool with `skill: "graphify"` before doing anything else.
+<!-- APP_VERSION: 0.6.10 -->
