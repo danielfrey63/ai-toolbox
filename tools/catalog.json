@@ -70,34 +70,63 @@
     {
       "name": "llm-provider",
       "type": "repo",
-      "path": "../llm-provider",
       "url": "git@github.com:danielfrey63/llm-provider.git",
       "description": "Provider registry + HTTP call engine for LLM apps (dependency-free UMD, sibling checkout)."
     },
     {
       "name": "full-rag",
       "type": "repo",
-      "path": "../full-rag",
       "url": "git@github.com:danielfrey63/full-rag.git",
       "install": "npm ci",
       "links": [
-        { "type": "skill", "path": "skill", "name": "full-rag" },
-        { "type": "bin", "path": "bin/full-rag.js", "command": "full-rag" }
+        {
+          "type": "skill",
+          "path": "skill",
+          "name": "full-rag"
+        },
+        {
+          "type": "bin",
+          "path": "bin/full-rag.js",
+          "command": "full-rag"
+        }
       ],
       "description": "Local hybrid RAG with GraphRAG — index a corpus, ask with citations (skill + CLI)."
     },
     {
       "name": "cc-plugins",
       "type": "repo",
-      "path": "../cc-plugins",
       "url": "ssh://git@codessh.sbb.ch:7999/ai-tools-exploration/cc-plugins.git",
       "links": [
-        { "type": "skill", "path": "plugins/sbb-atlassian/skills/atlassian-connect", "name": "sbb-atlassian--atlassian-connect" },
-        { "type": "skill", "path": "plugins/sbb-generators/skills/doc-generator", "name": "sbb-generators--doc-generator" },
-        { "type": "skill", "path": "plugins/sbb-generators/skills/doc-generator-eval", "name": "sbb-generators--doc-generator-eval" },
-        { "type": "skill", "path": "plugins/sbb-generators/skills/ppt-generator", "name": "sbb-generators--ppt-generator" },
-        { "type": "skill", "path": "skills/jira-flow-metrics", "name": "jira-flow-metrics" },
-        { "type": "skill", "path": "skills/tunnel-connect", "name": "tunnel-connect" }
+        {
+          "type": "skill",
+          "path": "plugins/sbb-atlassian/skills/atlassian-connect",
+          "name": "sbb-atlassian--atlassian-connect"
+        },
+        {
+          "type": "skill",
+          "path": "plugins/sbb-generators/skills/doc-generator",
+          "name": "sbb-generators--doc-generator"
+        },
+        {
+          "type": "skill",
+          "path": "plugins/sbb-generators/skills/doc-generator-eval",
+          "name": "sbb-generators--doc-generator-eval"
+        },
+        {
+          "type": "skill",
+          "path": "plugins/sbb-generators/skills/ppt-generator",
+          "name": "sbb-generators--ppt-generator"
+        },
+        {
+          "type": "skill",
+          "path": "skills/jira-flow-metrics",
+          "name": "jira-flow-metrics"
+        },
+        {
+          "type": "skill",
+          "path": "skills/tunnel-connect",
+          "name": "tunnel-connect"
+        }
       ],
       "description": "SBB cc-plugins repo (customer-separated) — Atlassian, generator and SBB infra skills linked via toolbox."
     },

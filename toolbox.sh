@@ -9,9 +9,10 @@
 #   config — symlink a global config file (CLAUDE.md) into ~/.claude/
 #   bin    — make a CLI available system-wide (PATH symlink, or sourced shell
 #            function via catalog "source: true" — needed for env-setting tools)
-#   repo   — clone/update an external tool repo as a SIBLING of this toolbox
-#            (catalog path "../<name>"), run its dependency install when the
-#            lockfile changed, then link its declared artifacts (skill/bin)
+#   repo   — clone/update an external tool repo (existing SIBLING checkout of
+#            this toolbox wins, else ~/.local/share/ai-toolbox/repos/<name>),
+#            run its dependency install when the lockfile changed, then link
+#            its declared artifacts (skill/bin)
 #            via the standard link mechanics. remove unlinks the artifacts but
 #            never deletes the checkout.
 #
@@ -35,7 +36,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.41.257'
+APP_VERSION='0.42.264'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -272,6 +273,24 @@ validate_skill_dir() {  # name src -> 0/1/2
     return 0
 }
 
+# Resolve where a repo-type tool's checkout lives. The sibling of this toolbox
+# wins (a dev working copy doubles as the installed copy); otherwise the XDG
+# data dir is used, so plain user machines keep checkouts tidy under $HOME.
+# When both exist they can drift apart over time — warn and use the sibling.
+_repo_dest() {  # name → abspath (warning on stderr)
+    local name=$1 sib xdg
+    sib=$(readlink -f -- "$REPO_ROOT/../$name" 2>/dev/null || printf '%s' "$REPO_ROOT/../$name")
+    xdg="${XDG_DATA_HOME:-$HOME/.local/share}/ai-toolbox/repos/$name"
+    if [ -d "$sib/.git" ]; then
+        if [ -d "$xdg/.git" ]; then
+            printf '  [! ] %-18s checkout exists twice: sibling %s AND data dir %s — using the sibling; remove one to silence this\n' "$name" "$sib" "$xdg" >&2
+        fi
+        printf '%s' "$sib"
+    else
+        printf '%s' "$xdg"
+    fi
+}
+
 # Walks every catalog entry (index-based, not piped — a piped `while read`
 # forks a subshell and the fail/warn counters below would not survive it) and
 # checks it resolves to something real on disk. Prints one line per entry plus
@@ -288,7 +307,9 @@ run_validate() {
         type=$(printf '%s' "$tool" | jq -r '.type // empty')
         path=$(printf '%s' "$tool" | jq -r '.path // empty')
         desc=$(printf '%s' "$tool" | jq -r '.description // empty')
-        if [ -z "$name" ] || [ -z "$type" ] || [ -z "$path" ] || [ -z "$desc" ]; then
+        # repo entries need no path — their checkout location is resolved
+        # from the name (sibling, else XDG data dir).
+        if [ -z "$name" ] || [ -z "$type" ] || { [ "$type" != repo ] && [ -z "$path" ]; } || [ -z "$desc" ]; then
             printf '  [!] %-18s missing required field(s) (name/type/path/description)\n' "${name:-?}" >&2
             fail=$((fail + 1)); continue
         fi
@@ -345,8 +366,10 @@ run_validate() {
                 esac
                 ;;
             repo)
-                # path is the checkout DESTINATION — its absence is fine (not
-                # cloned yet), but the entry needs a url and well-formed links.
+                # the checkout location is resolved from the name — its absence
+                # is fine (not cloned yet), but the entry needs a url and
+                # well-formed links.
+                src=$(_repo_dest "$name"); path=$src
                 if [ -z "$(printf '%s' "$tool" | jq -r '.url // empty')" ]; then
                     printf '  [!] %-18s repo missing "url" field\n' "$name" >&2
                     fail=$((fail + 1)); continue
@@ -1340,8 +1363,9 @@ handle_plugin() {
 }
 
 # --- repo handler ---------------------------------------------------------------
-# Clones/updates an external tool repo as a sibling of this toolbox (catalog
-# path "../<name>"), brings its dependencies to the desired state, then links
+# Clones/updates an external tool repo at the location _repo_dest resolves
+# (dev sibling checkout wins, else the XDG data dir; catalog "path" is
+# ignored), brings its dependencies to the desired state, then links
 # the artifacts the catalog declares under "links" (skill/bin) through the
 # standard link mechanics. Desired-state throughout: clone only if missing,
 # ff-pull only when it applies cleanly, re-install deps only when the lockfile
@@ -1416,7 +1440,7 @@ _repo_link() {  # repo_name dest link_json
 handle_repo() {  # name path url install links_json
     local name=$1 path=$2 url=$3 install=$4 links=$5
     local dest remote before after n i
-    dest=$(readlink -f -- "$REPO_ROOT/$path" 2>/dev/null || printf '%s' "$REPO_ROOT/$path")
+    dest=$(_repo_dest "$name")
 
     case "$CMD" in
         install)
