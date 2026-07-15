@@ -8,7 +8,8 @@
 #   config — symlink a global config file (CLAUDE.md) into ~/.claude/
 #   bin    — install a CLI as a function in the PowerShell $PROFILE — using
 #            `&` (exec) or `.` (sourced, catalog "source: true")
-#   repo   — clone/update an external tool repo as a sibling of this toolbox,
+#   repo   — clone/update an external tool repo (existing sibling checkout of
+#            this toolbox wins, else ~/.local/share/ai-toolbox/repos/<name>),
 #            run its dependency install on lockfile change, link its declared
 #            artifacts (skill/bin); remove unlinks but never deletes the checkout
 #
@@ -26,7 +27,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.40.238'
+$APP_VERSION = '0.41.244'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -229,6 +230,23 @@ function Test-SkillDir([string]$name, [string]$src) {
     return 'ok'
 }
 
+# Resolve where a repo-type tool's checkout lives. The sibling of this toolbox
+# wins (a dev working copy doubles as the installed copy); otherwise the XDG
+# data dir is used, so plain user machines keep checkouts tidy under $HOME.
+# When both exist they can drift apart over time — warn and use the sibling.
+function Resolve-RepoDest([string]$name) {
+    $sib = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot "../$name"))
+    $dataHome = if ($env:XDG_DATA_HOME) { $env:XDG_DATA_HOME } else { Join-Path $HOME '.local/share' }
+    $xdg = Join-Path $dataHome "ai-toolbox/repos/$name"
+    if (Test-Path -LiteralPath (Join-Path $sib '.git')) {
+        if (Test-Path -LiteralPath (Join-Path $xdg '.git')) {
+            [Console]::Error.WriteLine("  [! ] $name  checkout exists twice: sibling $sib AND data dir $xdg — using the sibling; remove one to silence this")
+        }
+        return $sib
+    }
+    return $xdg
+}
+
 # Walks every catalog entry and checks it resolves to something real on disk.
 # Prints one line per entry plus a summary; returns 0 iff nothing failed.
 function Invoke-Validate {
@@ -236,7 +254,9 @@ function Invoke-Validate {
     $tools = @((Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools)
     foreach ($t in $tools) {
         $name = $t.name; $type = $t.type; $path = $t.path; $desc = $t.description
-        if (-not $name -or -not $type -or -not $path -or -not $desc) {
+        # repo entries need no path — their checkout location is resolved
+        # from the name (sibling, else XDG data dir).
+        if (-not $name -or -not $type -or (-not $path -and $type -ne 'repo') -or -not $desc) {
             [Console]::Error.WriteLine("  [!] $($name ?? '?')  missing required field(s) (name/type/path/description)")
             $fail++; continue
         }
@@ -296,8 +316,10 @@ function Invoke-Validate {
                 }
             }
             'repo' {
-                # path is the checkout DESTINATION — its absence is fine (not
-                # cloned yet), but the entry needs a url and well-formed links.
+                # the checkout location is resolved from the name — its absence
+                # is fine (not cloned yet), but the entry needs a url and
+                # well-formed links.
+                $src = Resolve-RepoDest $name; $path = $src
                 if (-not $t.url) {
                     [Console]::Error.WriteLine("  [!] $name  repo missing `"url`" field"); $fail++; $failed = $true; break
                 }
@@ -1281,7 +1303,9 @@ function Repo-Link([string]$repoName, [string]$dest, $link) {
 }
 
 function Handle-Repo([string]$name, [string]$path, [string]$url, [string]$install, $links) {
-    $dest = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot $path))
+    # catalog/registry "path" is ignored — the checkout location is resolved
+    # from the name (dev sibling checkout wins, else the XDG data dir).
+    $dest = Resolve-RepoDest $name
     switch ($Cmd) {
         'install' {
             if (-not (Test-Path -LiteralPath (Join-Path $dest '.git'))) {
