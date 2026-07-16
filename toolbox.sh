@@ -38,7 +38,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.43.274'
+APP_VERSION='0.44.278'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -1599,6 +1599,9 @@ registry_add() {  # name type path scope target project
     case "$2" in
         config|bin|mcp)  scope=global; target=''; project='' ;;
         # repo checkouts are machine-global; only the skill-link target varies.
+        # A bare (target="") repo entry describes just the checkout, which any
+        # targeted entry covers too — the upsert below treats it as subsumed,
+        # so target-less and targeted installs never pile up as duplicates.
         repo)        scope=global; project='' ;;
         # A hook entry without a project is meaningless (per-repo installs
         # only) — never record one, e.g. from a global-scope dispatch pass.
@@ -1615,10 +1618,19 @@ registry_add() {  # name type path scope target project
     data=$(registry_read | jq \
         --arg tool "$1" --arg type "$2" --arg path "$3" \
         --arg scope "$scope" --arg target "$target" --arg project "$project" '
-        map(select((.tool==$tool and .scope==$scope
-                    and .target==$target and .project==$project) | not))
-        + [{tool:$tool, type:$type, path:$path,
-            scope:$scope, target:$target, project:$project}]
+        . as $all
+        | map(select((.tool==$tool and .scope==$scope
+                      and .target==$target and .project==$project)
+                     or ($type=="repo" and .tool==$tool and .type=="repo"
+                         and .target=="")
+              | not))
+        | if $type=="repo" and $target==""
+             and ([$all[] | select(.tool==$tool and .type=="repo"
+                                   and .target!="")] | length) > 0
+          then .   # bare repo row is subsumed by an existing targeted one
+          else . + [{tool:$tool, type:$type, path:$path,
+                     scope:$scope, target:$target, project:$project}]
+          end
         | sort_by(.tool, .scope, .target, .project)
     ' 2>/dev/null) || return 0
     mkdir -p "$(dirname "$REGISTRY")" && printf '%s\n' "$data" > "$REGISTRY"
@@ -1696,7 +1708,11 @@ registry_sweep() {
     #   4. Mixed project-path forms — backslashes vs forward slashes, with or
     #      without a trailing slash. Symmetric with the per-call normalization
     #      in registry_add (sh) and _Registry-Normalize (ps1).
-    #   5. Functionally identical entries that only differ by the above — dedup.
+    #   5. Literal "null" paths — pre-fix installs recorded jq'\''s null for
+    #      catalog entries without a path (repo/mcp) — collapse to "".
+    #   6. Functionally identical entries that only differ by the above — dedup;
+    #      a bare (target="") repo row is subsumed by any targeted row of the
+    #      same tool (same rule as the registry_add upsert).
     # The post-pass below this jq filter resolves hook-target conflicts (same
     # repo with both target="" and target="claude") by probing reality.
     entries=$(registry_read | jq '
@@ -1713,11 +1729,17 @@ registry_sweep() {
         def normproj: if has("project") and (.project // "") != ""
                       then .project |= (gsub("\\\\"; "/") | sub("/+$"; ""))
                       else . end;
+        def normpath: if (.path // "") == "null" then .path = "" else . end;
         [.[] | unwrap]
         | map(with_entries(.value |= trim))
         | map(normtype)
         | map(normproj)
+        | map(normpath)
         | unique_by([.tool, .type, .scope, .target, .project])
+        | [group_by(.tool + "|" + .type)[]
+           | if .[0].type == "repo" and any(.[]; .target != "")
+             then map(select(.target != "")) else . end]
+        | add // []
     ' 2>/dev/null)
     # Hook-target conflict resolution: pre-d4be626 (and the brief target=""
     # forced era after) can leave one repo recorded twice — once as the bare
@@ -1995,7 +2017,8 @@ printf '%s\n' "$selected" | while IFS= read -r tool; do
     [ -n "$tool" ] || continue
     name=$(printf '%s' "$tool" | jq -r '.name')
     type=$(printf '%s' "$tool" | jq -r '.type')
-    path=$(printf '%s' "$tool" | jq -r '.path')
+    # repo/mcp entries have no catalog path — record "" (not jq's "null").
+    path=$(printf '%s' "$tool" | jq -r '.path // empty')
     if [ "$TARGET" = kilo ] && [ "$type" != skill ] && [ "$type" != repo ]; then
         printf '  [.] %-18s --target kilo supports the skill type only — skipped (%s)\n' "$name" "$type"
         continue

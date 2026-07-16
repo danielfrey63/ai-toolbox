@@ -29,7 +29,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.42.255'
+$APP_VERSION = '0.43.259'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -1513,6 +1513,9 @@ function _Registry-Normalize([string]$type, [ref]$scope, [ref]$target, [ref]$pro
         'bin'    { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
         'mcp'    { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
         # repo checkouts are machine-global; only the skill-link target varies.
+        # A bare (target="") repo entry describes just the checkout, which any
+        # targeted entry covers too — Registry-Add treats it as subsumed, so
+        # target-less and targeted installs never pile up as duplicates.
         'repo'   { $scope.Value = 'global'; $project.Value = '' }
     }
     # Path keys: '/' separators + no trailing slash. Resolve-Path on Windows
@@ -1531,13 +1534,25 @@ function Registry-Add([string]$tool, [string]$type, [string]$path,
     # — never record one, e.g. from a global-scope dispatch pass.
     if ($type -eq 'hook' -and -not $project) { return }
     _Registry-Normalize $type ([ref]$scope) ([ref]$target) ([ref]$project)
-    $kept = @(Registry-Read | Where-Object {
-        -not ($_.tool -eq $tool -and $_.scope -eq $scope -and
-              $_.target -eq $target -and $_.project -eq $project)
+    $all = @(Registry-Read)
+    # Repo subsumption: drop any bare (target="") repo row of the same tool on
+    # upsert, and never add a bare row next to an existing targeted one.
+    # Mirrors the registry_add jq in the sh port.
+    $kept = @($all | Where-Object {
+        -not (($_.tool -eq $tool -and $_.scope -eq $scope -and
+               $_.target -eq $target -and $_.project -eq $project) -or
+              ($type -eq 'repo' -and $_.tool -eq $tool -and
+               $_.type -eq 'repo' -and $_.target -eq ''))
     })
-    $kept += [pscustomobject]@{
-        tool = $tool; type = $type; path = $path
-        scope = $scope; target = $target; project = $project
+    $subsumed = $type -eq 'repo' -and $target -eq '' -and
+        @($all | Where-Object {
+            $_.tool -eq $tool -and $_.type -eq 'repo' -and $_.target -ne ''
+        }).Count -gt 0
+    if (-not $subsumed) {
+        $kept += [pscustomobject]@{
+            tool = $tool; type = $type; path = $path
+            scope = $scope; target = $target; project = $project
+        }
     }
     Registry-Write (@($kept) | Sort-Object tool, scope, target, project)
 }
@@ -1565,8 +1580,11 @@ function Registry-Sweep {
     #   (2) Normalize project paths to forward slashes, no trailing slash, so
     #       `D:\foo` and `D:/foo/` pairs collapse to one entry. Symmetric with
     #       _Registry-Normalize.
-    #   (3) Dedup by exact key.
-    #   (4) Hook-target conflict resolution: same repo with both target="" and
+    #   (3) Literal "null" paths — pre-fix installs recorded a stringified
+    #       null for catalog entries without a path (repo/mcp) — collapse to ''.
+    #   (4) Dedup by exact key; a bare (target="") repo row is subsumed by any
+    #       targeted row of the same tool (same rule as the Registry-Add upsert).
+    #   (5) Hook-target conflict resolution: same repo with both target="" and
     #       target="claude" picks the entry that matches reality (probed via
     #       Get-ClaudeHookState). The other entry is the artifact.
     # Mirrors the jq pipeline + _heal_hook_targets in registry_sweep (sh port).
@@ -1579,6 +1597,9 @@ function Registry-Sweep {
         if ($e.PSObject.Properties.Match('project').Count -and $e.project) {
             $e.project = ($e.project -replace '\\', '/') -replace '/+$', ''
         }
+        if ($e.PSObject.Properties.Match('path').Count -and $e.path -eq 'null') {
+            $e.path = ''
+        }
     }
     $seen = @{}
     $deduped = @()
@@ -1589,6 +1610,13 @@ function Registry-Sweep {
             $deduped += $e
         }
     }
+    $targetedRepos = @($deduped | Where-Object {
+        $_.type -eq 'repo' -and $_.target -ne ''
+    } | ForEach-Object tool)
+    $deduped = @($deduped | Where-Object {
+        -not ($_.type -eq 'repo' -and $_.target -eq '' -and
+              $targetedRepos -contains $_.tool)
+    })
     # Hook-target conflict resolution. Group same-repo hook entries (same
     # tool/scope/project, differing only in target). For each group probe
     # reality — does the project carry our claude PostToolUse? — and produce
