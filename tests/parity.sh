@@ -8,7 +8,8 @@
 # artifacts), runs the same read-only commands through both ports, and
 # asserts that exit codes, per-tool status lines and failure counts agree.
 #
-# Covered commands: validate (clean fixture), validate (broken fixture), list.
+# Covered commands: validate (clean fixture), validate (broken fixture), list,
+# status --all (registry healing of legacy repo-row duplicates + "null" paths).
 #
 # Usage:
 #   tests/parity.sh          # run the parity assertions
@@ -23,7 +24,7 @@
 # repo itself is never touched.
 # =============================================================================
 
-APP_VERSION='0.2.3'
+APP_VERSION='0.3.7'
 
 set -u
 
@@ -156,6 +157,80 @@ check_case() {  # label sandbox expected_exit cmd...
     fi
 }
 
+# --- registry healing ------------------------------------------------------------
+# The sweep must collapse legacy registry pathologies the same way in both
+# ports: a bare (target="") repo row is subsumed by the targeted row of the
+# same tool, and literal "null" paths (recorded by pre-fix installs for
+# path-less repo/mcp catalog entries) collapse to "". Each port gets its own
+# XDG base dir holding a seeded registry and a fake checkout under the XDG
+# data dir (where _repo_dest resolves when no sibling checkout exists), so the
+# swept rows verify as installed instead of being pruned.
+
+make_reg_sandbox() {  # -> sandbox dir on stdout
+    local d
+    d=$(mktemp -d) || exit 1
+    cp "$ROOT/toolbox.sh" "$ROOT/toolbox.ps1" "$d/"
+    chmod +x "$d/toolbox.sh" 2>/dev/null
+    mkdir -p "$d/tools"
+    cat > "$d/tools/catalog.json" <<'EOF'
+{ "tools": [
+  { "name": "fixrepo", "type": "repo", "url": "https://example.invalid/fixrepo.git", "description": "fixture repo" }
+] }
+EOF
+    printf '%s' "$d"
+}
+
+seed_reg_xdg() {  # sandbox port -> XDG base dir on stdout
+    local base="$1/xdg-$2"
+    mkdir -p "$base/config/ai-toolbox" "$base/data/ai-toolbox/repos/fixrepo/.git"
+    cat > "$base/config/ai-toolbox/installs.json" <<'EOF'
+[
+  {"tool":"fixrepo","type":"repo","path":"../fixrepo","scope":"global","target":"","project":""},
+  {"tool":"fixrepo","type":"repo","path":"null","scope":"global","target":"claude","project":""}
+]
+EOF
+    printf '%s' "$base"
+}
+
+# Canonicalize a swept registry for comparison: tolerate a bare object (PS
+# single-element output), fix key order, keep only the fixture's rows.
+reg_canon() {
+    jq -Sc 'if type == "array" then . else [.] end
+            | map(select(.tool == "fixrepo"))
+            | map({tool, type, path, scope, target, project})' \
+        "$1/config/ai-toolbox/installs.json" 2>/dev/null
+}
+
+check_registry_heal() {
+    local d base rc got_sh got_ps want
+    d=$(make_reg_sandbox); CLEANUP="$CLEANUP $d"
+    want='[{"path":"","project":"","scope":"global","target":"claude","tool":"fixrepo","type":"repo"}]'
+
+    base=$(seed_reg_xdg "$d" sh)
+    (export XDG_CONFIG_HOME="$base/config" XDG_DATA_HOME="$base/data"
+     run_sh "$d" status --all >/dev/null); rc=$?
+    got_sh=$(reg_canon "$base")
+    if [ "$rc" -eq 0 ] && [ "$got_sh" = "$want" ]; then
+        ok "registry-heal: sh collapses bare repo row + null path"
+    else
+        bad "registry-heal: sh exit $rc, registry after sweep: ${got_sh:-<unreadable>} (want $want)"
+    fi
+
+    [ -n "$PWSH" ] || return 0
+    base=$(seed_reg_xdg "$d" ps)
+    (export XDG_CONFIG_HOME="$base/config" XDG_DATA_HOME="$base/data"
+     run_ps "$d" status --all >/dev/null); rc=$?
+    got_ps=$(reg_canon "$base")
+    if [ "$rc" -eq 0 ] && [ "$got_ps" = "$want" ]; then
+        ok "registry-heal: ps1 collapses bare repo row + null path"
+    else
+        bad "registry-heal: ps1 exit $rc, registry after sweep: ${got_ps:-<unreadable>} (want $want)"
+    fi
+    [ "$got_sh" = "$got_ps" ] \
+        && ok "registry-heal: healed registry identical across ports" \
+        || bad "registry-heal: healed registry differs across ports"
+}
+
 echo "parity: building fixtures..."
 GOOD=$(make_sandbox good); CLEANUP="$CLEANUP $GOOD"
 BAD=$(make_sandbox bad);   CLEANUP="$CLEANUP $BAD"
@@ -168,6 +243,9 @@ check_case "validate/broken" "$BAD" 1 validate
 
 echo "parity: list on clean fixture (expect exit 0)"
 check_case "list" "$GOOD" 0 list
+
+echo "parity: registry healing via status --all"
+check_registry_heal
 
 # --- optional lint layer (informational, never fails the run) -----------------
 
