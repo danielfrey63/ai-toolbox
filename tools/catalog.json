@@ -149,6 +149,16 @@
     {
       "name": "workflowy",
       "type": "mcp",
+      "requires": [
+        {
+          "command": "workflowy",
+          "hint": "binary from github.com/mholzen/workflowy releases -> ~/.local/bin"
+        },
+        {
+          "file": "~/.workflowy/api.key",
+          "hint": "create at https://workflowy.com/api-key/ (chmod 600)"
+        }
+      ],
       "server": {
         "type": "stdio",
         "command": "workflowy",

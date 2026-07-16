@@ -38,7 +38,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.44.278'
+APP_VERSION='0.45.284'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -321,6 +321,11 @@ run_validate() {
             *) printf '  [!] %-18s unknown type: %s\n' "$name" "$type" >&2
                fail=$((fail + 1)); continue ;;
         esac
+        # "requires" is type-agnostic — each element needs a command or a file.
+        if [ "$(printf '%s' "$tool" | jq -r '(.requires // []) | map(select((.command // .file) == null)) | length')" != 0 ]; then
+            printf '  [!] %-18s requires entries need "command" or "file"\n' "$name" >&2
+            fail=$((fail + 1)); continue
+        fi
         src="$REPO_ROOT/$path"
         case "$type" in
             skill)
@@ -1571,6 +1576,38 @@ handle_mcp() {  # name server_json
     esac
 }
 
+# --- requires checks ------------------------------------------------------------
+# Declarative preconditions on a catalog entry: each element of "requires"
+# names a command that must be on PATH or a file that must exist (leading ~/
+# is expanded), plus a hint telling the user how to provide it. Checked on
+# install and status — never blocks, but flags the tool [!] so the gap is
+# visible; sweeps downgrade an ok entry to partial so it stays on the
+# punch-list instead of silently passing.
+check_requires() {  # name requires_json → 0 all met, 1 something missing
+    local name=$1 reqs=$2 n i req cmd file hint miss=0
+    n=$(printf '%s' "$reqs" | jq 'length' 2>/dev/null) || return 0
+    [ "${n:-0}" -gt 0 ] || return 0
+    i=0
+    while [ "$i" -lt "$n" ]; do
+        req=$(printf '%s' "$reqs" | jq -c ".[$i]"); i=$((i + 1))
+        cmd=$(printf '%s' "$req" | jq -r '.command // empty')
+        file=$(printf '%s' "$req" | jq -r '.file // empty')
+        hint=$(printf '%s' "$req" | jq -r '.hint // empty')
+        if [ -n "$cmd" ] && ! command -v "$cmd" >/dev/null 2>&1; then
+            printf '  [!] %-18s requires command "%s"%s\n' "$name" "$cmd" "${hint:+ — $hint}" >&2
+            miss=1
+        fi
+        if [ -n "$file" ]; then
+            case "$file" in "~/"*) file="$HOME/${file#"~/"}" ;; esac
+            if [ ! -e "$file" ]; then
+                printf '  [!] %-18s requires file %s%s\n' "$name" "$file" "${hint:+ — $hint}" >&2
+                miss=1
+            fi
+        fi
+    done
+    return $miss
+}
+
 # --- registry -----------------------------------------------------------------
 # Records every install so `status --all` / `remove --all` can find them across
 # all scopes, targets and projects. The registry is only a discovery index —
@@ -1696,7 +1733,7 @@ _heal_hook_targets() {  # entries_json → healed_json
 # entries. remove: uninstall each, then empty the registry. Entries carry
 # only install parameters — the handlers re-verify against reality.
 registry_sweep() {
-    local entries n i e tool type path mkt plg cmdname bin_src url inst links kept='[]'
+    local entries n i e tool type path mkt plg cmdname bin_src url inst links reqs kept='[]'
     # Heal five legacy registry pathologies in one pass:
     #   1. {value:[...], Count:n} hulls from PS 5.1 ConvertTo-Json on single-
     #      element arrays — flatten them into their inner entries.
@@ -1797,6 +1834,13 @@ registry_sweep() {
                 handle_mcp "$tool" "$server" ;;
             *)  printf '  [!] %-18s unknown type "%s"\n' "$tool" "$type" >&2 ;;
         esac
+
+        if [ "$CMD" = status ]; then
+            # Unmet requires downgrade an ok entry to partial — kept on the
+            # punch-list below instead of passing silently.
+            reqs=$(jq -c --arg n "$tool" 'first(.tools[] | select(.name==$n) | .requires) // []' "$CATALOG")
+            check_requires "$tool" "$reqs" || { [ "$STATE" = ok ] && STATE=partial; }
+        fi
 
         if [ "$CMD" = status ]; then
             # bin entries are kept regardless of the verdict — their install
@@ -2052,6 +2096,10 @@ printf '%s\n' "$selected" | while IFS= read -r tool; do
             continue
             ;;
     esac
+    # Declarative preconditions: surface unmet requires on install/status.
+    if [ "$CMD" != remove ]; then
+        check_requires "$name" "$(printf '%s' "$tool" | jq -c '.requires // []')" || true
+    fi
     case "$CMD" in
         install) registry_add "$name" "$type" "$path" "$SCOPE" "$TARGET" "$PROJECT" ;;
         remove)  registry_remove "$name" "$type" "$SCOPE" "$TARGET" "$PROJECT" ;;

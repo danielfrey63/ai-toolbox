@@ -29,7 +29,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.43.259'
+$APP_VERSION = '0.44.264'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -265,6 +265,11 @@ function Invoke-Validate {
         }
         if ($type -notin @('skill', 'hook', 'plugin', 'config', 'bin', 'repo', 'mcp')) {
             [Console]::Error.WriteLine("  [!] $name  unknown type: $type")
+            $fail++; continue
+        }
+        # "requires" is type-agnostic — each element needs a command or a file.
+        if ($t.requires -and @($t.requires | Where-Object { -not $_.command -and -not $_.file }).Count -gt 0) {
+            [Console]::Error.WriteLine("  [!] $name  requires entries need `"command`" or `"file`"")
             $fail++; continue
         }
         $src = Join-Path $RepoRoot $path
@@ -1499,6 +1504,31 @@ function Registry-Write([object[]]$entries) {
     Set-Content -LiteralPath $Registry -Value ("[`n  " + ($parts -join ",`n  ") + "`n]")
 }
 
+# --- requires checks ------------------------------------------------------------
+# Declarative preconditions on a catalog entry: each element of "requires"
+# names a command that must be on PATH or a file that must exist (leading ~/
+# is expanded), plus a hint telling the user how to provide it. Checked on
+# install and status — never blocks, but flags the tool [!]; sweeps downgrade
+# an ok entry to partial so the gap stays on the punch-list.
+function Test-Requires([string]$name, $requires) {
+    $met = $true
+    foreach ($r in @($requires)) {
+        $hint = if ($r.hint) { " — $($r.hint)" } else { '' }
+        if ($r.command -and -not (Get-Command $r.command -ErrorAction SilentlyContinue)) {
+            [Console]::Error.WriteLine("  [!] $name  requires command `"$($r.command)`"$hint")
+            $met = $false
+        }
+        if ($r.file) {
+            $f = $r.file -replace '^~(?=[/\\])', $HOME
+            if (-not (Test-Path -LiteralPath $f)) {
+                [Console]::Error.WriteLine("  [!] $name  requires file $f$hint")
+                $met = $false
+            }
+        }
+    }
+    return $met
+}
+
 # Normalize scope/target/project for the registry key, per tool type. Handlers
 # that ignore --target/--scope must not leak those into the key, or one install
 # can be recorded as multiple entries that differ only by an ignored field.
@@ -1674,6 +1704,15 @@ function Registry-Sweep {
             }
             default {
                 [Console]::Error.WriteLine("  [!] $($e.tool)  unknown type `"$($e.type)`"")
+            }
+        }
+        if ($Cmd -eq 'status') {
+            # Unmet requires downgrade an ok entry to partial — kept on the
+            # punch-list below instead of passing silently.
+            $catReq = ((Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools |
+                Where-Object { $_.name -eq $e.tool } | Select-Object -First 1).requires
+            if ($catReq -and -not (Test-Requires $e.tool $catReq)) {
+                if ($script:State -eq 'ok') { $script:State = 'partial' }
             }
         }
         if ($Cmd -eq 'status') {
@@ -1886,6 +1925,10 @@ foreach ($tool in $selected) {
         default {
             [Console]::Error.WriteLine("  [!] $($tool.name)  unknown type `"$($tool.type)`"")
         }
+    }
+    # Declarative preconditions: surface unmet requires on install/status.
+    if ($Cmd -ne 'remove' -and $tool.requires) {
+        [void](Test-Requires $tool.name $tool.requires)
     }
     if ($tool.type -in @('skill', 'hook', 'config', 'bin', 'plugin', 'repo', 'mcp')) {
         if ($Cmd -eq 'install') {
