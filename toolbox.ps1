@@ -29,7 +29,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.44.264'
+$APP_VERSION = '0.45.275'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -259,12 +259,21 @@ function Invoke-Validate {
         # repo entries need no path (checkout location is resolved from the
         # name: sibling, else XDG data dir); mcp entries carry a server object
         # instead of a path.
-        if (-not $name -or -not $type -or (-not $path -and $type -notin @('repo', 'mcp')) -or -not $desc) {
+        if (-not $name -or -not $type -or (-not $path -and $type -notin @('repo', 'mcp', 'release')) -or -not $desc) {
             [Console]::Error.WriteLine("  [!] $($name ?? '?')  missing required field(s) (name/type/path/description)")
             $fail++; continue
         }
-        if ($type -notin @('skill', 'hook', 'plugin', 'config', 'bin', 'repo', 'mcp')) {
+        if ($type -notin @('skill', 'hook', 'plugin', 'config', 'bin', 'repo', 'mcp', 'release')) {
             [Console]::Error.WriteLine("  [!] $name  unknown type: $type")
+            $fail++; continue
+        }
+        # "needs" is type-agnostic — every referenced name must exist.
+        $unknownNeeds = @()
+        foreach ($nn in @($t.needs)) {
+            if ($nn -and -not ($tools | Where-Object { $_.name -eq $nn })) { $unknownNeeds += $nn }
+        }
+        if ($unknownNeeds.Count -gt 0) {
+            [Console]::Error.WriteLine("  [!] $name  needs unknown catalog tool(s): $($unknownNeeds -join ' ')")
             $fail++; continue
         }
         # "requires" is type-agnostic — each element needs a command or a file.
@@ -321,6 +330,16 @@ function Invoke-Validate {
                         [Console]::Out.WriteLine("  [i] $name  no PowerShell sibling: $ps1")
                         $warn++
                     }
+                }
+            }
+            'release' {
+                # no path — the binary is provisioned from the GitHub release.
+                $path = "github:$($t.repo ?? '?')@$($t.version ?? '?')"
+                if (-not $t.repo -or -not $t.version -or -not $t.command) {
+                    [Console]::Error.WriteLine("  [!] $name  release needs `"repo`", `"version`" and `"command`""); $fail++; $failed = $true; break
+                }
+                if (-not $t.assets -or @($t.assets.PSObject.Properties).Count -eq 0) {
+                    [Console]::Error.WriteLine("  [!] $name  release needs a non-empty `"assets`" platform map"); $fail++; $failed = $true
                 }
             }
             'mcp' {
@@ -1393,6 +1412,135 @@ function Resolve-McpSecrets([string]$json) {
     return $json
 }
 
+# --- release handler -------------------------------------------------------------
+# Provisions a single binary from a GitHub release archive (tar.gz/zip, or a
+# plain binary asset) into ~/.local/bin. Desired-state via a version stamp
+# written on install: matching stamp + binary present = nothing to do. A
+# binary that resolves elsewhere on PATH (brew/scoop/manual) is respected and
+# left alone; a stampless binary at OUR dest is overwritten with the pinned
+# version (same managed location, reproducible from upstream). When the
+# catalog names a "checksums" asset, the download is sha256-verified against
+# it and aborts on mismatch. `remove` only ever deletes a binary the stamp
+# proves we installed. Mirrors handle_release in the sh port.
+function Get-ReleaseStampDir {
+    $dataHome = if ($env:XDG_DATA_HOME) { $env:XDG_DATA_HOME } else { Join-Path $HOME '.local/share' }
+    return Join-Path $dataHome 'ai-toolbox/releases'
+}
+
+function Get-ReleasePlatform {
+    $os = if ($IsLinux) { 'linux' } elseif ($IsMacOS) { 'darwin' } else { 'windows' }
+    $arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()) {
+        'X64'   { 'x86_64' }
+        'Arm64' { 'arm64' }
+        default { $_.ToLower() }
+    }
+    return "$os-$arch"
+}
+
+function Handle-Release([string]$name, [string]$ghrepo, [string]$version, $assets, [string]$command, [string]$checksums) {
+    $destDir = Join-Path $HOME '.local/bin'
+    $plat = Get-ReleasePlatform
+    $exeSuffix = if ($plat.StartsWith('windows')) { '.exe' } else { '' }
+    $dest = Join-Path $destDir "$command$exeSuffix"
+    $stamp = Join-Path (Get-ReleaseStampDir) "$name.version"
+    $have = if (Test-Path -LiteralPath $stamp) { (Get-Content -LiteralPath $stamp -Raw).Trim() } else { '' }
+
+    switch ($Cmd) {
+        'install' {
+            if ((Test-Path -LiteralPath $dest) -and $have -eq $version) {
+                Write-Output "  [=] $name  $command $version up to date"
+                return
+            }
+            $found = Get-Command $command -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found -and -not (Test-Path -LiteralPath $dest)) {
+                Write-Output "  [i] $name  $command found at $($found.Source) (not toolbox-managed) — leaving as-is"
+                return
+            }
+            $asset = $assets.$plat
+            if (-not $asset) {
+                [Console]::Error.WriteLine("  [!] $name  no release asset for platform $plat"); return
+            }
+            $tmp = Join-Path ([IO.Path]::GetTempPath()) ('ai-toolbox-rel-' + [IO.Path]::GetRandomFileName())
+            New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+            try {
+                $url = "https://github.com/$ghrepo/releases/download/$version/$asset"
+                try {
+                    Invoke-WebRequest -Uri $url -OutFile (Join-Path $tmp $asset) -UseBasicParsing
+                } catch {
+                    [Console]::Error.WriteLine("  [!] $name  download failed: $url"); return
+                }
+                if ($checksums) {
+                    try {
+                        Invoke-WebRequest -Uri "https://github.com/$ghrepo/releases/download/$version/$checksums" `
+                            -OutFile (Join-Path $tmp $checksums) -UseBasicParsing
+                    } catch {
+                        [Console]::Error.WriteLine("  [!] $name  checksums asset missing in release: $checksums"); return
+                    }
+                    $line = Select-String -LiteralPath (Join-Path $tmp $checksums) -SimpleMatch $asset | Select-Object -First 1
+                    $want = if ($line) { ($line.Line.Trim() -split '\s+')[0] } else { '' }
+                    $got = (Get-FileHash -LiteralPath (Join-Path $tmp $asset) -Algorithm SHA256).Hash
+                    if (-not $want -or $want.ToLower() -ne $got.ToLower()) {
+                        [Console]::Error.WriteLine("  [!] $name  checksum mismatch for $asset — aborting"); return
+                    }
+                }
+                $archive = Join-Path $tmp $asset
+                if ($asset -match '\.zip$') {
+                    Expand-Archive -LiteralPath $archive -DestinationPath $tmp -Force
+                } elseif ($asset -match '\.(tar\.gz|tgz)$') {
+                    # bsdtar ships with Windows 10+ and every unix
+                    tar -xzf $archive -C $tmp
+                    if ($LASTEXITCODE -ne 0) {
+                        [Console]::Error.WriteLine("  [!] $name  extraction failed: $asset"); return
+                    }
+                }
+                $bin = Get-ChildItem -Path $tmp -Recurse -File |
+                    Where-Object { $_.Name -in @($command, "$command.exe") } | Select-Object -First 1
+                # a plain-binary asset IS the binary — no archive to search
+                $src = if ($bin) { $bin.FullName } else { $archive }
+                New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+                New-Item -ItemType Directory -Path (Get-ReleaseStampDir) -Force | Out-Null
+                Copy-Item -LiteralPath $src -Destination $dest -Force
+                if ($IsLinux -or $IsMacOS) { chmod +x $dest }
+                Set-Content -LiteralPath $stamp -Value $version -NoNewline
+                $verb = if ($have) { 'updated' } else { 'installed' }
+                Write-Output "  [+] $name  $verb $version -> $dest"
+                if ((($env:PATH -split [IO.Path]::PathSeparator) | ForEach-Object { $_.TrimEnd('/', '\') }) -notcontains $destDir.TrimEnd('/', '\')) {
+                    Write-Output "  [i] $name  $destDir is not on PATH — add it to use $command"
+                }
+            } finally {
+                Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+            }
+        }
+        'status' {
+            if ((Test-Path -LiteralPath $dest) -and $have -eq $version) {
+                Write-Output "  [ok] $name  $command $version ($dest)"
+                $script:State = 'ok'
+            } elseif (Test-Path -LiteralPath $dest) {
+                $haveLabel = if ($have) { $have } else { 'none' }
+                Write-Output "  [! ] $name  $command present but $version wanted (stamp: $haveLabel) — re-run install"
+                $script:State = 'partial'
+            } elseif (Get-Command $command -CommandType Application -ErrorAction SilentlyContinue) {
+                $found = Get-Command $command -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+                Write-Output "  [ok] $name  $command at $($found.Source) (not toolbox-managed)"
+                $script:State = 'ok'
+            } else {
+                Write-Output "  [ ] $name  $command not installed"
+            }
+        }
+        'remove' {
+            if ((Test-Path -LiteralPath $stamp) -and (Test-Path -LiteralPath $dest)) {
+                Remove-Item -LiteralPath $dest, $stamp -Force
+                Write-Output "  [-] $name  $dest removed"
+            } elseif (Test-Path -LiteralPath $stamp) {
+                Remove-Item -LiteralPath $stamp -Force
+                Write-Output "  [.] $name  binary already gone — stamp cleared"
+            } else {
+                Write-Output "  [.] $name  not toolbox-managed — nothing removed"
+            }
+        }
+    }
+}
+
 function Handle-Mcp([string]$name, $server) {
     if (-not (Get-Command jq -ErrorAction SilentlyContinue)) {
         [Console]::Error.WriteLine("  [!] $name  jq is required for mcp entries — install it (e.g. scoop install jq)")
@@ -1542,6 +1690,7 @@ function _Registry-Normalize([string]$type, [ref]$scope, [ref]$target, [ref]$pro
         'config' { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
         'bin'    { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
         'mcp'    { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
+        'release' { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
         # repo checkouts are machine-global; only the skill-link target varies.
         # A bare (target="") repo entry describes just the checkout, which any
         # targeted entry covers too — Registry-Add treats it as subsumed, so
@@ -1701,6 +1850,11 @@ function Registry-Sweep {
                 $cat = (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools |
                     Where-Object { $_.name -eq $e.tool } | Select-Object -First 1
                 Handle-Mcp $e.tool $cat.server
+            }
+            'release' {
+                $cat = (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools |
+                    Where-Object { $_.name -eq $e.tool } | Select-Object -First 1
+                Handle-Release $e.tool $cat.repo $cat.version $cat.assets $cat.command $cat.checksums
             }
             default {
                 [Console]::Error.WriteLine("  [!] $($e.tool)  unknown type `"$($e.type)`"")
@@ -1896,11 +2050,30 @@ if (-not $selected) {
     }
 }
 
+# Catalog dependencies: a tool may declare needs: [names] — other catalog
+# entries that must be installed first (e.g. an mcp server needing its
+# release-provisioned binary). Expand the install selection with the needed
+# tools, dependencies first, skipping ones already selected. One level deep —
+# needs of needs are not chased. Mirrors the sh port.
+if ($Cmd -eq 'install') {
+    $needNames = @($selected | ForEach-Object { @($_.needs) } | Where-Object { $_ } | Sort-Object -Unique)
+    foreach ($nn in $needNames) {
+        if (@($selected | Where-Object { $_.name -eq $nn }).Count -gt 0) { continue }
+        $dep = $tools | Where-Object { $_.name -eq $nn } | Select-Object -First 1
+        if ($dep) {
+            Write-Output ("  [i] {0,-18} needed by the selection — installing first" -f $nn)
+            $selected = @($dep) + @($selected)
+        } else {
+            [Console]::Error.WriteLine("  [!] needs: unknown catalog tool `"$nn`" — skipped")
+        }
+    }
+}
+
 # --target is required unless every selected tool ignores it (hook, config,
 # bin — and repo, unless it declares a skill link, which is target-specific).
 if (-not $Target) {
     $needsTarget = $selected | Where-Object {
-        ($_.type -notin @('hook', 'config', 'bin', 'repo', 'mcp')) -or
+        ($_.type -notin @('hook', 'config', 'bin', 'repo', 'mcp', 'release')) -or
         ($_.type -eq 'repo' -and @(@($_.links) | Where-Object { $_ -and $_.type -eq 'skill' }).Count -gt 0)
     } | Select-Object -First 1
     if ($needsTarget) {
@@ -1922,6 +2095,7 @@ foreach ($tool in $selected) {
         'plugin' { Handle-Plugin $tool.name $tool.path $tool.marketplace $tool.plugin }
         'repo'   { Handle-Repo $tool.name $tool.path $tool.url $tool.install $tool.links }
         'mcp'    { Handle-Mcp $tool.name $tool.server }
+        'release' { Handle-Release $tool.name $tool.repo $tool.version $tool.assets $tool.command $tool.checksums }
         default {
             [Console]::Error.WriteLine("  [!] $($tool.name)  unknown type `"$($tool.type)`"")
         }
@@ -1930,7 +2104,7 @@ foreach ($tool in $selected) {
     if ($Cmd -ne 'remove' -and $tool.requires) {
         [void](Test-Requires $tool.name $tool.requires)
     }
-    if ($tool.type -in @('skill', 'hook', 'config', 'bin', 'plugin', 'repo', 'mcp')) {
+    if ($tool.type -in @('skill', 'hook', 'config', 'bin', 'plugin', 'repo', 'mcp', 'release')) {
         if ($Cmd -eq 'install') {
             Registry-Add $tool.name $tool.type $tool.path $Scope $Target $Project
         } elseif ($Cmd -eq 'remove') {

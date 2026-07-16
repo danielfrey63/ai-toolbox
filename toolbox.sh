@@ -11,6 +11,9 @@
 #            function via catalog "source: true" — needed for env-setting tools)
 #   mcp    — merge an MCP server definition into ~/.claude.json (mcpServers);
 #            secrets via ${SECRET:NAME} from ~/.config/ai-toolbox/secrets.env
+#   release— download a single binary from a GitHub release archive into
+#            ~/.local/bin (checksum-verified, version-stamped, desired-state);
+#            other entries pull one in via "needs": ["<release-name>"]
 #   repo   — clone/update an external tool repo (existing SIBLING checkout of
 #            this toolbox wins, else ~/.local/share/ai-toolbox/repos/<name>),
 #            run its dependency install when the lockfile changed, then link
@@ -38,7 +41,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.45.284'
+APP_VERSION='0.46.297'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -312,15 +315,23 @@ run_validate() {
         # repo entries need no path (checkout location is resolved from the
         # name: sibling, else XDG data dir); mcp entries carry a server object
         # instead of a path.
-        if [ -z "$name" ] || [ -z "$type" ] || { [ "$type" != repo ] && [ "$type" != mcp ] && [ -z "$path" ]; } || [ -z "$desc" ]; then
+        if [ -z "$name" ] || [ -z "$type" ] || { [ "$type" != repo ] && [ "$type" != mcp ] && [ "$type" != release ] && [ -z "$path" ]; } || [ -z "$desc" ]; then
             printf '  [!] %-18s missing required field(s) (name/type/path/description)\n' "${name:-?}" >&2
             fail=$((fail + 1)); continue
         fi
         case "$type" in
-            skill|hook|plugin|config|bin|repo|mcp) ;;
+            skill|hook|plugin|config|bin|repo|mcp|release) ;;
             *) printf '  [!] %-18s unknown type: %s\n' "$name" "$type" >&2
                fail=$((fail + 1)); continue ;;
         esac
+        # "needs" is type-agnostic — every referenced name must exist.
+        missing_needs=$(printf '%s' "$tool" | jq -r '(.needs // [])[]' | tr -d '\r' | while IFS= read -r nn; do
+            jq -e --arg n "$nn" 'any(.tools[]; .name == $n)' "$CATALOG" >/dev/null 2>&1 || printf '%s ' "$nn"
+        done)
+        if [ -n "$missing_needs" ]; then
+            printf '  [!] %-18s needs unknown catalog tool(s): %s\n' "$name" "$missing_needs" >&2
+            fail=$((fail + 1)); continue
+        fi
         # "requires" is type-agnostic — each element needs a command or a file.
         if [ "$(printf '%s' "$tool" | jq -r '(.requires // []) | map(select((.command // .file) == null)) | length')" != 0 ]; then
             printf '  [!] %-18s requires entries need "command" or "file"\n' "$name" >&2
@@ -372,6 +383,20 @@ run_validate() {
                         fi
                         ;;
                 esac
+                ;;
+            release)
+                # no path — the binary is provisioned from the GitHub release.
+                path="github:$(printf '%s' "$tool" | jq -r '.repo // "?"')@$(printf '%s' "$tool" | jq -r '.version // "?"')"
+                if [ -z "$(printf '%s' "$tool" | jq -r '.repo // empty')" ] \
+                    || [ -z "$(printf '%s' "$tool" | jq -r '.version // empty')" ] \
+                    || [ -z "$(printf '%s' "$tool" | jq -r '.command // empty')" ]; then
+                    printf '  [!] %-18s release needs "repo", "version" and "command"\n' "$name" >&2
+                    fail=$((fail + 1)); continue
+                fi
+                if ! printf '%s' "$tool" | jq -e '.assets | (type == "object") and (length > 0)' >/dev/null 2>&1; then
+                    printf '  [!] %-18s release needs a non-empty "assets" platform map\n' "$name" >&2
+                    fail=$((fail + 1)); continue
+                fi
                 ;;
             mcp)
                 # no path — the entry carries the server definition itself.
@@ -1511,6 +1536,134 @@ handle_repo() {  # name path url install links_json
     done
 }
 
+# --- release handler -------------------------------------------------------------
+# Provisions a single binary from a GitHub release archive (tar.gz/zip, or a
+# plain binary asset) into ~/.local/bin. Desired-state via a version stamp
+# written on install: matching stamp + binary present = nothing to do. A
+# binary that resolves elsewhere on PATH (brew/scoop/manual) is respected and
+# left alone; a stampless binary at OUR dest is overwritten with the pinned
+# version (same managed location, reproducible from upstream). When the
+# catalog names a "checksums" asset, the download is sha256-verified against
+# it and aborts on mismatch. `remove` only ever deletes a binary the stamp
+# proves we installed.
+RELEASE_STAMPS="${XDG_DATA_HOME:-$HOME/.local/share}/ai-toolbox/releases"
+
+_release_platform() {  # → os-arch key matching the catalog "assets" map
+    local os arch
+    case "$(uname -s)" in
+        Linux)                os=linux ;;
+        Darwin)               os=darwin ;;
+        MINGW*|MSYS*|CYGWIN*) os=windows ;;
+        *)                    os=$(uname -s | tr '[:upper:]' '[:lower:]') ;;
+    esac
+    case "$(uname -m)" in
+        x86_64|amd64)  arch=x86_64 ;;
+        aarch64|arm64) arch=arm64 ;;
+        *)             arch=$(uname -m) ;;
+    esac
+    printf '%s-%s' "$os" "$arch"
+}
+
+handle_release() {  # name ghrepo version assets_json command checksums_asset
+    local name=$1 ghrepo=$2 version=$3 assets=$4 cmdname=$5 sums=$6
+    local destdir="$HOME/.local/bin" dest stamp have found plat asset url tmp bin want got
+    dest="$destdir/$cmdname"
+    plat=$(_release_platform)
+    [ "${plat%%-*}" = windows ] && dest="$dest.exe"
+    stamp="$RELEASE_STAMPS/$name.version"
+    have=$(cat "$stamp" 2>/dev/null || true)
+
+    case "$CMD" in
+        install)
+            if [ -x "$dest" ] && [ "$have" = "$version" ]; then
+                printf '  [=] %-18s %s %s up to date\n' "$name" "$cmdname" "$version"
+                return 0
+            fi
+            found=$(command -v "$cmdname" 2>/dev/null || true)
+            if [ -n "$found" ] && [ ! -e "$dest" ]; then
+                printf '  [i] %-18s %s found at %s (not toolbox-managed) — leaving as-is\n' "$name" "$cmdname" "$found"
+                return 0
+            fi
+            asset=$(printf '%s' "$assets" | jq -r --arg p "$plat" '.[$p] // empty')
+            if [ -z "$asset" ]; then
+                printf '  [!] %-18s no release asset for platform %s\n' "$name" "$plat" >&2
+                return 1
+            fi
+            if ! command -v curl >/dev/null 2>&1; then
+                printf '  [!] %-18s curl not found — cannot download\n' "$name" >&2
+                return 1
+            fi
+            url="https://github.com/$ghrepo/releases/download/$version/$asset"
+            tmp=$(mktemp -d) || return 1
+            if ! curl -fsSL -o "$tmp/$asset" "$url"; then
+                printf '  [!] %-18s download failed: %s\n' "$name" "$url" >&2
+                rm -rf "$tmp"; return 1
+            fi
+            if [ -n "$sums" ]; then
+                if ! curl -fsSL -o "$tmp/$sums" "https://github.com/$ghrepo/releases/download/$version/$sums"; then
+                    printf '  [!] %-18s checksums asset missing in release: %s\n' "$name" "$sums" >&2
+                    rm -rf "$tmp"; return 1
+                fi
+                want=$(grep -F "$asset" "$tmp/$sums" | awk '{print $1}' | head -1)
+                got=$( (sha256sum "$tmp/$asset" 2>/dev/null || shasum -a 256 "$tmp/$asset") | awk '{print $1}')
+                if [ -z "$want" ] || [ "$want" != "$got" ]; then
+                    printf '  [!] %-18s checksum mismatch for %s — aborting\n' "$name" "$asset" >&2
+                    rm -rf "$tmp"; return 1
+                fi
+            fi
+            case "$asset" in
+                *.tar.gz|*.tgz) tar -xzf "$tmp/$asset" -C "$tmp" || { rm -rf "$tmp"; return 1; } ;;
+                *.zip)
+                    if command -v unzip >/dev/null 2>&1; then
+                        unzip -q "$tmp/$asset" -d "$tmp" || { rm -rf "$tmp"; return 1; }
+                    else
+                        printf '  [!] %-18s unzip not found — cannot extract %s\n' "$name" "$asset" >&2
+                        rm -rf "$tmp"; return 1
+                    fi ;;
+            esac
+            bin=$(find "$tmp" -type f \( -name "$cmdname" -o -name "$cmdname.exe" \) 2>/dev/null | head -1)
+            # a plain-binary asset IS the binary — no archive to search
+            [ -n "$bin" ] || bin="$tmp/$asset"
+            mkdir -p "$destdir" "$RELEASE_STAMPS"
+            if ! install -m 755 "$bin" "$dest" 2>/dev/null; then
+                cp "$bin" "$dest" && chmod +x "$dest" 2>/dev/null
+            fi
+            printf '%s' "$version" > "$stamp"
+            rm -rf "$tmp"
+            printf '  [+] %-18s %s %s -> %s\n' "$name" "$([ -n "$have" ] && printf updated || printf installed)" "$version" "$dest"
+            case ":$PATH:" in
+                *":$destdir:"*) ;;
+                *) printf '  [i] %-18s %s is not on PATH — add it to use %s\n' "$name" "$destdir" "$cmdname" ;;
+            esac
+            ;;
+        status)
+            if [ -x "$dest" ] && [ "$have" = "$version" ]; then
+                printf '  [ok] %-18s %s %s (%s)\n' "$name" "$cmdname" "$version" "$dest"
+                STATE=ok
+            elif [ -e "$dest" ]; then
+                printf '  [! ] %-18s %s present but %s wanted (stamp: %s) — re-run install\n' "$name" "$cmdname" "$version" "${have:-none}"
+                STATE=partial
+            elif found=$(command -v "$cmdname" 2>/dev/null); then
+                printf '  [ok] %-18s %s at %s (not toolbox-managed)\n' "$name" "$cmdname" "$found"
+                STATE=ok
+            else
+                printf '  [ ] %-18s %s not installed\n' "$name" "$cmdname"
+            fi
+            ;;
+        remove)
+            if [ -f "$stamp" ] && [ -e "$dest" ]; then
+                rm -f "$dest" "$stamp"
+                printf '  [-] %-18s %s removed\n' "$name" "$dest"
+            elif [ -f "$stamp" ]; then
+                rm -f "$stamp"
+                printf '  [.] %-18s binary already gone — stamp cleared\n' "$name"
+            else
+                printf '  [.] %-18s not toolbox-managed — nothing removed\n' "$name"
+            fi
+            ;;
+    esac
+}
+
 # --- mcp handler ---------------------------------------------------------------
 # Merges an MCP server definition into ~/.claude.json (mcpServers.<name>),
 # desired-state: write only when the resolved definition differs from what is
@@ -1634,7 +1787,7 @@ registry_add() {  # name type path scope target project
     # repo-wide, so the same repo can legitimately have multiple hook entries
     # (target="" = bare git-hook, target="claude" = git-hook + claude patch).
     case "$2" in
-        config|bin|mcp)  scope=global; target=''; project='' ;;
+        config|bin|mcp|release)  scope=global; target=''; project='' ;;
         # repo checkouts are machine-global; only the skill-link target varies.
         # A bare (target="") repo entry describes just the checkout, which any
         # targeted entry covers too — the upsert below treats it as subsumed,
@@ -1678,7 +1831,7 @@ registry_remove() {  # name type scope target project
     [ -f "$REGISTRY" ] || return 0
     local scope=$3 target=$4 project=$5
     case "$2" in
-        config|bin|mcp)  scope=global; target=''; project='' ;;
+        config|bin|mcp|release)  scope=global; target=''; project='' ;;
         repo)        scope=global; project='' ;;
     esac
     if [ -n "$project" ]; then
@@ -1734,6 +1887,7 @@ _heal_hook_targets() {  # entries_json → healed_json
 # only install parameters — the handlers re-verify against reality.
 registry_sweep() {
     local entries n i e tool type path mkt plg cmdname bin_src url inst links reqs kept='[]'
+    local ghrepo relver assets sums
     # Heal five legacy registry pathologies in one pass:
     #   1. {value:[...], Count:n} hulls from PS 5.1 ConvertTo-Json on single-
     #      element arrays — flatten them into their inner entries.
@@ -1832,6 +1986,18 @@ registry_sweep() {
                 server=$(jq -c --arg n "$tool" \
                     'first(.tools[] | select(.name==$n) | .server) // empty' "$CATALOG")
                 handle_mcp "$tool" "$server" ;;
+            release)
+                ghrepo=$(jq -r --arg n "$tool" \
+                    'first(.tools[] | select(.name==$n) | .repo) // empty' "$CATALOG")
+                relver=$(jq -r --arg n "$tool" \
+                    'first(.tools[] | select(.name==$n) | .version) // empty' "$CATALOG")
+                assets=$(jq -c --arg n "$tool" \
+                    'first(.tools[] | select(.name==$n) | .assets) // {}' "$CATALOG")
+                cmdname=$(jq -r --arg n "$tool" \
+                    'first(.tools[] | select(.name==$n) | .command) // empty' "$CATALOG")
+                sums=$(jq -r --arg n "$tool" \
+                    'first(.tools[] | select(.name==$n) | .checksums) // empty' "$CATALOG")
+                handle_release "$tool" "$ghrepo" "$relver" "$assets" "$cmdname" "$sums" ;;
             *)  printf '  [!] %-18s unknown type "%s"\n' "$tool" "$type" >&2 ;;
         esac
 
@@ -2044,11 +2210,29 @@ if [ -z "$selected" ]; then
         '.tools[] | select($what == "all" or .name == $what or .type == $what)' "$CATALOG")
 fi
 
+# Catalog dependencies: a tool may declare needs: [names] — other catalog
+# entries that must be installed first (e.g. an mcp server needing its
+# release-provisioned binary). Expand the install selection with the needed
+# tools, dependencies first, skipping ones already selected. One level deep —
+# needs of needs are not chased.
+if [ "$CMD" = install ]; then
+    for nn in $(printf '%s\n' "$selected" | jq -r '.needs // [] | .[]' | sort -u); do
+        printf '%s\n' "$selected" | jq -e -s --arg n "$nn" 'map(.name) | index($n) != null' >/dev/null && continue
+        dep=$(jq -c --arg n "$nn" 'first(.tools[] | select(.name == $n)) // empty' "$CATALOG")
+        if [ -n "$dep" ]; then
+            printf '  [i] %-18s needed by the selection — installing first\n' "$nn"
+            selected=$(printf '%s\n%s' "$dep" "$selected")
+        else
+            printf '  [!] needs: unknown catalog tool "%s" — skipped\n' "$nn" >&2
+        fi
+    done
+fi
+
 # --target is required unless every selected tool ignores it (hook, config,
 # bin — and repo, unless it declares a skill link, which is target-specific).
 if [ -z "$TARGET" ]; then
     needs_target=$(printf '%s\n' "$selected" \
-        | jq -r 'select((.type != "hook" and .type != "config" and .type != "bin" and .type != "repo" and .type != "mcp")
+        | jq -r 'select((.type != "hook" and .type != "config" and .type != "bin" and .type != "repo" and .type != "mcp" and .type != "release")
                         or (.type == "repo" and (((.links // []) | map(select(.type == "skill")) | length) > 0))) | .name' | head -1)
     if [ -n "$needs_target" ]; then
         printf 'toolbox: --target is required (claude|codex|agents|kilo) — "%s" needs it\n' \
@@ -2090,6 +2274,14 @@ printf '%s\n' "$selected" | while IFS= read -r tool; do
         mcp)
             server=$(printf '%s' "$tool" | jq -c '.server // empty')
             handle_mcp "$name" "$server"
+            ;;
+        release)
+            ghrepo=$(printf '%s' "$tool" | jq -r '.repo // empty')
+            relver=$(printf '%s' "$tool" | jq -r '.version // empty')
+            assets=$(printf '%s' "$tool" | jq -c '.assets // {}')
+            cmdname=$(printf '%s' "$tool" | jq -r '.command // empty')
+            sums=$(printf '%s' "$tool" | jq -r '.checksums // empty')
+            handle_release "$name" "$ghrepo" "$relver" "$assets" "$cmdname" "$sums"
             ;;
         *)
             printf '  [!] %-18s unknown type "%s"\n' "$name" "$type" >&2
