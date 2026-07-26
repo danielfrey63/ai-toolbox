@@ -1,0 +1,6 @@
+[Unit]
+Description=Two-stage CPU temperature watchdog (warn, then shed batch load)
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/cpu-watchdog.sh
