@@ -1032,6 +1032,9 @@ def _transcribe_chunks(
     `tag_speakers` is forwarded to the stitcher: per-chunk-diarizing backends
     need chunk-local speaker labels kept distinct for later reconciliation.
     """
+    # Partial-success gap: there is no per-chunk try/except, so one timeout
+    # (including via fut.result()) aborts the entire run; resume state is only
+    # written after every chunk completes successfully.
     if parallel_uploads is not None:
         configured = parallel_uploads
     elif len(chunks) == 2:
