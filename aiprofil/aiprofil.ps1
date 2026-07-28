@@ -26,7 +26,7 @@
 #   codex         shell + config   User scope + config   (skip)
 # =============================================================================
 
-$APP_VERSION = '0.6.24'
+$APP_VERSION = '0.7.26'
 $_ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $_Adapters  = Join-Path $_ScriptDir 'adapters'
 
@@ -90,7 +90,21 @@ $_rest   = if ($args.Count -gt 1) { $args[1..($args.Count - 1)] } else { @() }
 
 switch ($_action) {
     'use'    { _Ai-Use -UseArgs $_rest }
-    'list'   { & (Join-Path $_Adapters 'kilo-profil.ps1') list; Write-Host "CC active (session): $($env:CC_PROFILE ?? '<none>')"; Write-Host "Switch defaults: --target both | --scope session (kilo needs --scope user)" }
+    'list'   {
+        Write-Host "Profiles ($env:PROFILES_DIR):"
+        Get-ChildItem "$env:PROFILES_DIR\*.env" -ErrorAction SilentlyContinue | ForEach-Object {
+            $name = $_.BaseName
+            $markers = '[cc]'
+            if (Select-String -Path $_.FullName -Pattern '^KILO_PROVIDER_ID=' -Quiet) { $markers += ' [kilo]' }
+            if (Select-String -Path $_.FullName -Pattern '^(CODEX_MODEL_DEPLOYMENT|CODEX_AUTH)=' -Quiet) { $markers += ' [codex]' }
+            if ($name -eq $env:CC_PROFILE) {
+                Write-Host ("  * {0,-16} {1} (active)" -f $name, $markers) -ForegroundColor Green
+            } else {
+                Write-Host ("    {0,-16} {1}" -f $name, $markers)
+            }
+        }
+        Write-Host "Switch defaults: --target both | --scope session (kilo needs --scope user)"
+    }
     'status' { Write-Host "CC active (session): $($env:CC_PROFILE ?? '<none>')"; & (Join-Path $_Adapters 'kilo-profil.ps1') status @_rest; & (Join-Path $_Adapters 'codex-profil.ps1') status }
     default  {
         Write-Host "aiprofil $APP_VERSION — unified profile switcher (Claude Code + Kilo + Codex)."

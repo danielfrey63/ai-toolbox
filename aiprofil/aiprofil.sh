@@ -26,7 +26,7 @@
 #   codex         shell + config   shell + config        (skip)
 # =============================================================================
 
-APP_VERSION='0.6.24'
+APP_VERSION='0.7.26'
 
 _aiprofil_main() {
     local script_dir adapters profiles_dir
@@ -104,8 +104,20 @@ _aiprofil_main() {
     }
 
     _ai_list() {
-        bash "${adapters}/kilo-profil.sh" list
-        echo "CC active (session): ${CC_PROFILE:-<none>}"
+        local f name markers
+        echo "Profiles (${profiles_dir}):"
+        for f in "${profiles_dir}"/*.env; do
+            [[ -f "$f" ]] || continue
+            name="$(basename "$f" .env)"
+            markers="[cc]"
+            grep -Eq '^KILO_PROVIDER_ID=' "$f" && markers+=" [kilo]"
+            grep -Eq '^(CODEX_MODEL_DEPLOYMENT|CODEX_AUTH)=' "$f" && markers+=" [codex]"
+            if [[ "$name" == "${CC_PROFILE:-}" ]]; then
+                printf '  * %-16s %s \033[32m(active)\033[0m\n' "$name" "$markers"
+            else
+                printf '    %-16s %s\n' "$name" "$markers"
+            fi
+        done
         echo "Switch defaults: --target both | --scope session (kilo needs --scope user)"
     }
 
