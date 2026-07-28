@@ -51,8 +51,9 @@ aiprofil use sbb-dfa   --target kilo --scope project   # only Kilo, ./kilo.jsonc
 aiprofil use max       --scope session --target cc      # only this shell
 ```
 
-`max` (OAuth, no `KILO_*`/`CODEX_*` keys) projects to CC only; the Kilo and
-Codex targets no-op with an info line.
+`max` (OAuth) projects to CC via `claude auth login` and to Codex via the
+subscription mode below; the Kilo target no-ops with an info line. Profiles
+without any `KILO_*`/`CODEX_*` keys skip those targets entirely.
 
 ## Profiles — "one profile, three tools"
 
@@ -79,6 +80,16 @@ Adapter translation of the generic keys:
 `KILO_*`/`CODEX_*` keys are **not** exported into the shell by cc-profil — they
 belong to their adapters. A profile without a Foundry backend just omits the
 generic keys.
+
+### Codex subscription mode
+
+A profile with `CODEX_AUTH=chatgpt` (e.g. `max`) repoints Codex at the
+built-in `openai` provider with the ChatGPT sign-in instead of Azure: the
+adapter sets `model_provider = "openai"` and `forced_login_method = "chatgpt"`,
+drops the Azure `model` repoint (optional `CODEX_MODEL` pins one), and skips
+the API key entirely. The interactive sign-in itself is `codex login` — the
+adapter hints at it when `auth.json` is missing. Azure mode conversely removes
+`forced_login_method`, so switching between the two profiles is symmetric.
 
 ## How the Codex edit stays safe
 

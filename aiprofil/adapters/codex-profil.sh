@@ -17,6 +17,11 @@
 # Generic profile keys consumed (legacy ANTHROPIC_FOUNDRY_* as fallback):
 #   FOUNDRY_RESOURCE, FOUNDRY_API_KEY, CODEX_MODEL_DEPLOYMENT
 #
+# Subscription mode (CODEX_AUTH=chatgpt) instead targets the built-in openai
+# provider with the ChatGPT sign-in (codex login): sets forced_login_method,
+# drops the Azure repoint, and uses CODEX_MODEL (or the Codex default) as
+# model. No API key involved.
+#
 # Should be sourced for `use` so AZURE_OPENAI_API_KEY lands in the caller's
 # shell — the sourcing function is wired by `toolbox install --what codex-profil`.
 # Executed directly, `use` still writes config.toml but only warns about the
@@ -28,7 +33,7 @@
 #   project  no Codex analog -> skipped with a note
 # =============================================================================
 
-APP_VERSION='0.2.3'
+APP_VERSION='0.3.10'
 
 _codex_profil_main() {
     local script_dir profiles_dir
@@ -86,13 +91,22 @@ _codex_profil_main() {
         }'
     }
 
+    # toml_del <section> <key> — stdin filter. Drops the key line inside the
+    # given section ('' = top-level); everything else passes through.
+    _cx_toml_del() {
+        awk -v section="$1" -v key="$2" '
+        BEGIN { cur = "" }
+        /^\[/ { cur = $0; sub(/^\[/, "", cur); sub(/\].*$/, "", cur); print; next }
+        { if (cur == section && $0 ~ ("^[[:space:]]*" key "[[:space:]]*=")) next; print }'
+    }
+
     _cx_list() {
         local f name
         echo "Profiles (${profiles_dir}):" >&2
         for f in "${profiles_dir}"/*.env; do
             [[ -f "$f" ]] || continue
             name="$(basename "$f" .env)"
-            if grep -Eq '^CODEX_MODEL_DEPLOYMENT=' "$f"; then
+            if grep -Eq '^(CODEX_MODEL_DEPLOYMENT|CODEX_AUTH)=' "$f"; then
                 printf '  %-16s [codex-capable]\n' "$name" >&2
             else
                 printf '  %-16s (no codex block)\n' "$name" >&2
@@ -103,20 +117,25 @@ _codex_profil_main() {
     _cx_status() {
         local file; file="$(_cx_config_file)"
         _cx_info "target: ${file}"
+        local p=""
         if [[ -f "$file" ]]; then
-            local m p b
+            local m b l
             m="$(grep -E '^[[:space:]]*model[[:space:]]*=' "$file" | head -1 | sed -E 's/.*=[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/')"
             p="$(grep -E '^[[:space:]]*model_provider[[:space:]]*=' "$file" | head -1 | sed -E 's/.*=[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/')"
             b="$(grep -E '^[[:space:]]*base_url[[:space:]]*=' "$file" | head -1 | sed -E 's/.*=[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/')"
-            _cx_ok "model: ${m:-<unset>}  provider: ${p:-<unset>}"
+            l="$(grep -E '^[[:space:]]*forced_login_method[[:space:]]*=' "$file" | head -1 | sed -E 's/.*=[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/')"
+            _cx_ok "model: ${m:-<unset>}  provider: ${p:-<unset>}  login: ${l:-<default>}"
             _cx_info "base_url: ${b:-<unset>}"
         else
             _cx_warn "config does not exist yet"
         fi
-        if [[ -n "${AZURE_OPENAI_API_KEY:-}" ]]; then
-            _cx_ok "AZURE_OPENAI_API_KEY set (session)"
-        else
-            _cx_warn "AZURE_OPENAI_API_KEY not set in this shell"
+        # The env key only matters when the azure provider is active.
+        if [[ "$p" == "azure" ]]; then
+            if [[ -n "${AZURE_OPENAI_API_KEY:-}" ]]; then
+                _cx_ok "AZURE_OPENAI_API_KEY set (session)"
+            else
+                _cx_warn "AZURE_OPENAI_API_KEY not set in this shell"
+            fi
         fi
     }
 
@@ -141,20 +160,31 @@ _codex_profil_main() {
         local f="${profiles_dir}/${name}.env"
         [[ -f "$f" ]] || { _cx_fail "profile not found: ${f}"; return 1; }
 
-        # A profile is Codex-capable iff it names an Azure deployment.
-        local deployment resource api_key
+        # A profile is Codex-capable iff it names an Azure deployment
+        # (CODEX_MODEL_DEPLOYMENT) or a subscription login (CODEX_AUTH=chatgpt).
+        local auth deployment model resource api_key mode
+        auth="$(_cx_profile_val "$f" CODEX_AUTH)"
         deployment="$(_cx_profile_val "$f" CODEX_MODEL_DEPLOYMENT)"
-        if [[ -z "$deployment" ]]; then
-            _cx_info "profile '${name}' has no CODEX_MODEL_DEPLOYMENT — nothing for the codex target."
+        model="$(_cx_profile_val "$f" CODEX_MODEL)"
+        if [[ -z "$auth" && -z "$deployment" ]]; then
+            _cx_info "profile '${name}' has no CODEX_* keys — nothing for the codex target."
             return 0
         fi
-        resource="$(_cx_profile_val "$f" FOUNDRY_RESOURCE)"
-        [[ -z "$resource" ]] && resource="$(_cx_profile_val "$f" ANTHROPIC_FOUNDRY_RESOURCE)"
-        api_key="$(_cx_profile_val "$f" FOUNDRY_API_KEY)"
-        [[ -z "$api_key" ]] && api_key="$(_cx_profile_val "$f" ANTHROPIC_FOUNDRY_API_KEY)"
-        if [[ -z "$resource" ]]; then
-            _cx_fail "profile '${name}' sets CODEX_MODEL_DEPLOYMENT but no FOUNDRY_RESOURCE."
+        if [[ "$auth" == "chatgpt" ]]; then
+            mode="chatgpt"
+        elif [[ -n "$auth" ]]; then
+            _cx_fail "profile '${name}': unknown CODEX_AUTH '${auth}' (use chatgpt, or omit for Azure mode)."
             return 1
+        else
+            mode="azure"
+            resource="$(_cx_profile_val "$f" FOUNDRY_RESOURCE)"
+            [[ -z "$resource" ]] && resource="$(_cx_profile_val "$f" ANTHROPIC_FOUNDRY_RESOURCE)"
+            api_key="$(_cx_profile_val "$f" FOUNDRY_API_KEY)"
+            [[ -z "$api_key" ]] && api_key="$(_cx_profile_val "$f" ANTHROPIC_FOUNDRY_API_KEY)"
+            if [[ -z "$resource" ]]; then
+                _cx_fail "profile '${name}' sets CODEX_MODEL_DEPLOYMENT but no FOUNDRY_RESOURCE."
+                return 1
+            fi
         fi
 
         # desired-state: patch config.toml only where it deviates.
@@ -163,26 +193,44 @@ _codex_profil_main() {
         mkdir -p "$dir"
         old=""; [[ -f "$file" ]] && old="$(cat "$file")"
         new="$old"
-        _cx_apply() {
-            if [[ -z "$new" ]]; then new="$(_cx_toml_set "$@" </dev/null)"
-            else new="$(printf '%s\n' "$new" | _cx_toml_set "$@")"; fi
+        _cx_apply() {  # <set|del> <section> <key> [value]
+            local op="$1"; shift
+            if [[ -z "$new" ]]; then new="$("_cx_toml_${op}" "$@" </dev/null)"
+            else new="$(printf '%s\n' "$new" | "_cx_toml_${op}" "$@")"; fi
         }
-        _cx_apply "" model "$deployment"
-        _cx_apply "" model_provider azure
-        _cx_apply model_providers.azure name "Azure OpenAI"
-        _cx_apply model_providers.azure base_url "https://${resource}.openai.azure.com/openai/v1"
-        _cx_apply model_providers.azure env_key AZURE_OPENAI_API_KEY
-        _cx_apply model_providers.azure wire_api responses
+        if [[ "$mode" == "chatgpt" ]]; then
+            # Subscription mode: built-in openai provider + ChatGPT sign-in.
+            # Without CODEX_MODEL the model key is dropped -> Codex default.
+            _cx_apply set "" model_provider openai
+            _cx_apply set "" forced_login_method chatgpt
+            if [[ -n "$model" ]]; then _cx_apply set "" model "$model"
+            else _cx_apply del "" model; fi
+        else
+            _cx_apply set "" model "$deployment"
+            _cx_apply set "" model_provider azure
+            _cx_apply del "" forced_login_method
+            _cx_apply set model_providers.azure name "Azure OpenAI"
+            _cx_apply set model_providers.azure base_url "https://${resource}.openai.azure.com/openai/v1"
+            _cx_apply set model_providers.azure env_key AZURE_OPENAI_API_KEY
+            _cx_apply set model_providers.azure wire_api responses
+        fi
         unset -f _cx_apply
 
         if [[ "$new" == "$old" ]]; then
             _cx_ok "config already up to date (${file})"
+        elif [[ "$mode" == "chatgpt" ]]; then
+            printf '%s\n' "$new" > "$file"
+            _cx_ok "model -> ${model:-<codex default>}, provider openai, login chatgpt (${file})"
         else
             printf '%s\n' "$new" > "$file"
             _cx_ok "model -> ${deployment}, provider azure (${file})"
         fi
 
-        if [[ -z "$api_key" ]]; then
+        if [[ "$mode" == "chatgpt" ]]; then
+            if [[ ! -f "${CODEX_HOME:-$HOME/.codex}/auth.json" ]]; then
+                _cx_info "no Codex login found — run 'codex login' once to sign in with the ChatGPT account."
+            fi
+        elif [[ -z "$api_key" ]]; then
             _cx_warn "no FOUNDRY_API_KEY in profile — set AZURE_OPENAI_API_KEY yourself."
         elif [[ "${CODEX_PROFIL_SOURCED:-false}" == "true" ]]; then
             export AZURE_OPENAI_API_KEY="$api_key"
@@ -208,7 +256,9 @@ Actions:
                                 (--scope session|user; idempotent)
 
 Profiles dir: ${profiles_dir}
-Profile keys consumed: FOUNDRY_RESOURCE, FOUNDRY_API_KEY, CODEX_MODEL_DEPLOYMENT
+Profile keys consumed:
+  Azure mode:        FOUNDRY_RESOURCE, FOUNDRY_API_KEY, CODEX_MODEL_DEPLOYMENT
+  Subscription mode: CODEX_AUTH=chatgpt [CODEX_MODEL]  (sign-in via codex login)
 Installation: toolbox install --what codex-profil
 EOF
             ;;
@@ -220,7 +270,7 @@ EOF
     local rc=$?
 
     unset -f _cx_info _cx_ok _cx_warn _cx_fail _cx_config_file _cx_profile_val \
-             _cx_toml_set _cx_list _cx_status _cx_use
+             _cx_toml_set _cx_toml_del _cx_list _cx_status _cx_use
     return $rc
 }
 
