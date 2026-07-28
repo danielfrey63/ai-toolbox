@@ -26,7 +26,7 @@
 #   codex         shell + config   shell + config        (skip)
 # =============================================================================
 
-APP_VERSION='0.5.22'
+APP_VERSION='0.6.24'
 
 _aiprofil_main() {
     local script_dir adapters profiles_dir
@@ -57,7 +57,7 @@ _aiprofil_main() {
             esac
         done
         if [[ -z "$profile" ]]; then
-            echo "Usage: aiprofil use <profile> [--target cc|kilo|both] [--scope session|user|project]"
+            echo "Usage: aiprofil use <profile> [--target cc|kilo|codex|both] [--scope session|user|project]"
             return 1
         fi
 

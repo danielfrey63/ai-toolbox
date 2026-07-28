@@ -26,7 +26,7 @@
 #   codex         shell + config   User scope + config   (skip)
 # =============================================================================
 
-$APP_VERSION = '0.5.22'
+$APP_VERSION = '0.6.24'
 $_ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $_Adapters  = Join-Path $_ScriptDir 'adapters'
 
@@ -47,7 +47,7 @@ function _Ai-Use {
         elseif (-not $a.StartsWith('-')) { $profile = $a }
     }
     if (-not $profile) {
-        Write-Host "Usage: aiprofil use <profile> [--target cc|kilo|both] [--scope session|user|project]" -ForegroundColor Yellow
+        Write-Host "Usage: aiprofil use <profile> [--target cc|kilo|codex|both] [--scope session|user|project]" -ForegroundColor Yellow
         return
     }
 
