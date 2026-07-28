@@ -22,7 +22,7 @@
 #   project  no CC analog -> skipped with a note.
 # =============================================================================
 
-APP_VERSION='0.2.6'
+APP_VERSION='0.3.8'
 
 _cc_profil_main() {
     local script_dir profiles_dir managed_vars_file
@@ -98,18 +98,29 @@ _cc_profil_main() {
             [[ -n "$var" ]] && unset "$var"
         done < <(_read_managed_vars)
 
-        # Load the new profile. KILO_* keys belong to the kilo-profil adapter
-        # (they configure a file edit, not the shell env) — don't export them.
-        local post_cmd=""
+        # Load the new profile. KILO_*/CODEX_* keys belong to the kilo/codex
+        # adapters (they configure file edits, not the shell env) — don't
+        # export them. Generic FOUNDRY_* keys are canonical cross-tool facts;
+        # this adapter translates them into the CC env vars below.
+        local post_cmd="" foundry_resource="" foundry_api_key=""
         local key val
         while IFS='=' read -r key val; do
             if [[ "$key" == "POST_ACTIVATE_CMD" ]]; then
                 post_cmd="$val"
                 continue
             fi
-            [[ "$key" == KILO_* ]] && continue
+            if [[ "$key" == "FOUNDRY_RESOURCE" ]]; then foundry_resource="$val"; continue; fi
+            if [[ "$key" == "FOUNDRY_API_KEY" ]];  then foundry_api_key="$val";  continue; fi
+            [[ "$key" == KILO_* || "$key" == CODEX_* ]] && continue
             export "${key}=${val}"
         done < <(grep -E '^[A-Z_][A-Z0-9_]*=' "$env_file")
+
+        # Translate generic keys — an explicit ANTHROPIC_FOUNDRY_* in the
+        # profile wins (legacy profiles keep working unchanged).
+        [[ -n "$foundry_resource" && -z "${ANTHROPIC_FOUNDRY_RESOURCE:-}" ]] \
+            && export ANTHROPIC_FOUNDRY_RESOURCE="$foundry_resource"
+        [[ -n "$foundry_api_key" && -z "${ANTHROPIC_FOUNDRY_API_KEY:-}" ]] \
+            && export ANTHROPIC_FOUNDRY_API_KEY="$foundry_api_key"
         export CC_PROFILE="$profile"
 
         echo "[cc-profil] profile '${profile}' activated (scope: ${scope})."

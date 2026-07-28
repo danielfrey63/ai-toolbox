@@ -21,7 +21,7 @@
 # Sub-commands: help | list | status | use <profile> [--scope user|project]
 # =============================================================================
 
-APP_VERSION='0.2.3'
+APP_VERSION='0.3.5'
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -204,7 +204,7 @@ cmd_use() {
     if ! provider_present "$file" "${KILO_PROVIDER_ID}"; then
         warn "provider '${KILO_PROVIDER_ID}' not in ${file} — repoint skipped."
         warn "Add this provider block first (see kilo-profil README / aiprofil), then re-run:"
-        local res="${ANTHROPIC_FOUNDRY_RESOURCE:-<resource>}"
+        local res="${FOUNDRY_RESOURCE:-${ANTHROPIC_FOUNDRY_RESOURCE:-<resource>}}"
         printf '  "%s": { "name": "%s", "npm": "@ai-sdk/anthropic",\n' "${KILO_PROVIDER_ID}" "${name}" >&2
         printf '    "options": { "baseURL": "https://%s.services.ai.azure.com/anthropic/v1",\n' "$res" >&2
         printf '                 "apiKey": "<key>", "headers": { "api-key": "<key>" } } }\n' >&2

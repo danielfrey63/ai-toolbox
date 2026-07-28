@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # =============================================================================
-# aiprofil — unified backend-profile switcher across two tools (bash):
-#   - CC  : Claude Code CLI env vars        (adapter: adapters/cc-profil.sh)
-#   - Kilo: Kilo Code config kilo.jsonc     (adapter: adapters/kilo-profil.sh)
+# aiprofil — unified backend-profile switcher across three tools (bash):
+#   - CC   : Claude Code CLI env vars       (adapter: adapters/cc-profil.sh)
+#   - Kilo : Kilo Code config kilo.jsonc    (adapter: adapters/kilo-profil.sh)
+#   - Codex: Codex CLI ~/.codex/config.toml (adapter: adapters/codex-profil.sh)
 #
-# One profile (profiles/<name>.env), two targets. MUST be sourced — the CC
-# target mutates the current shell's environment. The sourcing `aiprofil()`
-# function is wired into ~/.bashrc by `toolbox install --what aiprofil`.
+# One profile (profiles/<name>.env), three targets. MUST be sourced — the CC
+# and Codex targets mutate the current shell's environment. The sourcing
+# `aiprofil()` function is wired into ~/.bashrc by `toolbox install --what aiprofil`.
 #
 # Two orthogonal enums:
-#   --target  cc | kilo | both   (also a list: cc,kilo)   default: both
-#   --scope   session | user | project                    default: session
+#   --target  cc | kilo | codex | both   (also a list: cc,codex)  default: both
+#             ('both' and its alias 'all' select every target)
+#   --scope   session | user | project                            default: session
 #
 # Default is 'session': cc writes only the current shell's env (instant). The
 # User scope persists across shells but is slow on Windows, so opt into it with
@@ -18,12 +20,13 @@
 # session analog).
 #
 # Scope maps per target (no analog -> skipped with a note):
-#                 session     user                  project
-#   cc            shell       User scope            (skip)
-#   kilo          (skip)      ~/.config/kilo         ./kilo.jsonc
+#                 session          user                  project
+#   cc            shell            User scope            (skip)
+#   kilo          (skip)           ~/.config/kilo        ./kilo.jsonc
+#   codex         shell + config   shell + config        (skip)
 # =============================================================================
 
-APP_VERSION='0.4.16'
+APP_VERSION='0.5.22'
 
 _aiprofil_main() {
     local script_dir adapters profiles_dir
@@ -59,14 +62,15 @@ _aiprofil_main() {
         fi
 
         # Normalize target to a comma-free membership test.
-        local want_cc=false want_kilo=false
+        local want_cc=false want_kilo=false want_codex=false
         case ",${target}," in
-            *,both,*) want_cc=true; want_kilo=true ;;
-            *) [[ ",${target}," == *,cc,*   ]] && want_cc=true
-               [[ ",${target}," == *,kilo,* ]] && want_kilo=true ;;
+            *,both,*|*,all,*) want_cc=true; want_kilo=true; want_codex=true ;;
+            *) [[ ",${target}," == *,cc,*    ]] && want_cc=true
+               [[ ",${target}," == *,kilo,*  ]] && want_kilo=true
+               [[ ",${target}," == *,codex,* ]] && want_codex=true ;;
         esac
-        if ! $want_cc && ! $want_kilo; then
-            echo "[WARN] --target '${target}' selected nothing (use cc|kilo|both)"; return 1
+        if ! $want_cc && ! $want_kilo && ! $want_codex; then
+            echo "[WARN] --target '${target}' selected nothing (use cc|kilo|codex|both)"; return 1
         fi
 
         # CC target.
@@ -87,6 +91,16 @@ _aiprofil_main() {
                 bash "${adapters}/kilo-profil.sh" use "$profile" --scope "$scope"
             fi
         fi
+
+        # Codex target.
+        if $want_codex; then
+            if [[ "$scope" == "project" ]]; then
+                _ai_info "codex: scope 'project' has no Codex analog — skipped"
+            else
+                # Sourced so AZURE_OPENAI_API_KEY lands in the caller's shell.
+                source "${adapters}/codex-profil.sh" use "$profile" --scope "$scope"
+            fi
+        fi
     }
 
     _ai_list() {
@@ -98,6 +112,7 @@ _aiprofil_main() {
     _ai_status() {
         echo "CC active (session): ${CC_PROFILE:-<none>}"
         bash "${adapters}/kilo-profil.sh" status "$@"
+        bash "${adapters}/codex-profil.sh" status
     }
 
     local action="${1:-help}"; shift || true
@@ -107,7 +122,7 @@ _aiprofil_main() {
         status) _ai_status "$@" ;;
         *)
             cat <<EOF
-aiprofil ${APP_VERSION} — unified profile switcher (Claude Code + Kilo).
+aiprofil ${APP_VERSION} — unified profile switcher (Claude Code + Kilo + Codex).
 
 Usage: aiprofil <action> [args]
 
@@ -115,7 +130,7 @@ Actions:
   list                          profiles + active CC/Kilo state
   status [--scope user|project] what each target points at
   use <profile> [--target ...] [--scope ...]
-        --target  cc | kilo | both   (default both; list ok: cc,kilo)
+        --target  cc | kilo | codex | both   (default both = all; list ok: cc,codex)
         --scope   session | user | project   (default session; kilo needs user)
 
 Profiles: ${profiles_dir}

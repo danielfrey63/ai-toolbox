@@ -1,47 +1,49 @@
 # aiprofil
 
-Unified **backend-profile switcher** across two tools that both talk to the
-same Azure-Foundry-Claude backends but configure them very differently:
+Unified **backend-profile switcher** across three tools that all talk to the
+same Azure-Foundry backends but configure them very differently:
 
 - **CC** — the Claude Code CLI, via environment variables (`cc-profil`).
 - **Kilo** — the Kilo Code config `kilo.jsonc`, via a provider/model edit (`kilo-profil`).
+- **Codex** — the Codex CLI config `~/.codex/config.toml` plus `AZURE_OPENAI_API_KEY` (`codex-profil`).
 
-One profile, two tools. A profile (`profiles/<name>.env`) holds the canonical
+One profile, three tools. A profile (`profiles/<name>.env`) holds the canonical
 facts once; each adapter projects them into its tool's native form.
 
 ## Layout
 
 ```
 aiprofil/
-├── aiprofil.sh / .ps1        orchestrator (sourced) — calls both adapters
+├── aiprofil.sh / .ps1         orchestrator (sourced) — calls the adapters
 ├── adapters/
-│   ├── cc-profil.sh / .ps1   CC env adapter (sourced)
-│   └── kilo-profil.sh / .ps1 Kilo kilo.jsonc adapter (plain exec)
-├── profiles/                 SHARED profile source
-│   ├── <name>.env            real (gitignored — holds live keys)
-│   ├── *.env.example         committed templates
-│   └── .managed-vars         env vars cc-profil resets on switch
+│   ├── cc-profil.sh / .ps1    CC env adapter (sourced)
+│   ├── kilo-profil.sh / .ps1  Kilo kilo.jsonc adapter (plain exec)
+│   └── codex-profil.sh / .ps1 Codex config.toml + env adapter (sourced)
+├── profiles/                  SHARED profile source
+│   ├── <name>.env             real (gitignored — holds live keys)
+│   ├── *.env.example          committed templates
+│   └── .managed-vars          env vars cc-profil resets on switch
 └── README.md
 ```
 
 ## Invocation — two orthogonal enums
 
 ```
-aiprofil use <profile> [--target cc|kilo|both] [--scope session|user|project]
+aiprofil use <profile> [--target cc|kilo|codex|both] [--scope session|user|project]
 ```
 
 | Switch | Values | Default | Meaning |
 |---|---|---|---|
-| `--target` | `cc` \| `kilo` \| `both` (list ok: `cc,kilo`) | `both` | *which* tool |
+| `--target` | `cc` \| `kilo` \| `codex` \| `both` (alias `all`; list ok: `cc,codex`) | `both` | *which* tool |
 | `--scope`  | `session` \| `user` \| `project` | `user` | *how persistent* |
 
 Scope maps per target; where a target has no analog it is **skipped with a note**:
 
-| `--scope` | CC (env) | Kilo (`kilo.jsonc`) |
-|---|---|---|
-| `session` | current shell | — skip |
-| `user`    | User scope (persistent) | global `~/.config/kilo/kilo.jsonc` |
-| `project` | — skip | `./kilo.jsonc` (or `.kilo/kilo.jsonc`) |
+| `--scope` | CC (env) | Kilo (`kilo.jsonc`) | Codex (`config.toml` + env) |
+|---|---|---|---|
+| `session` | current shell | — skip | env in shell + config (config is per-user by nature) |
+| `user`    | User scope (persistent) | global `~/.config/kilo/kilo.jsonc` | env User scope (pwsh) + config |
+| `project` | — skip | `./kilo.jsonc` (or `.kilo/kilo.jsonc`) | — skip |
 
 ```
 aiprofil use sbb-ai-dz --scope user            # CC User scope + Kilo global
@@ -49,25 +51,42 @@ aiprofil use sbb-dfa   --target kilo --scope project   # only Kilo, ./kilo.jsonc
 aiprofil use max       --scope session --target cc      # only this shell
 ```
 
-`max` (OAuth, no `KILO_*` keys) projects to CC only; the Kilo target no-ops with
-an info line.
+`max` (OAuth, no `KILO_*`/`CODEX_*` keys) projects to CC only; the Kilo and
+Codex targets no-op with an info line.
 
-## Profiles — "one profile, two tools"
+## Profiles — "one profile, three tools"
 
-Existing CC keys are reused; the optional `KILO_*` block adds the Kilo
-projection (omit it to make a profile CC-only):
+The shared Foundry facts live once in **generic** keys; each adapter translates
+them into its tool's native form. The optional `KILO_*`/`CODEX_*` blocks add
+the respective projection (omit them to make a profile CC-only):
 
 ```ini
-ANTHROPIC_FOUNDRY_RESOURCE=...                 # CC + derives Kilo baseURL
-ANTHROPIC_FOUNDRY_API_KEY=***                  # gitignored, reused by Kilo
+FOUNDRY_RESOURCE=...                           # shared Azure Foundry resource
+FOUNDRY_API_KEY=***                            # gitignored, shared key
 ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-7   # CC tier default
+CODEX_MODEL_DEPLOYMENT=gpt-5-codex             # GPT deployment name on the resource
 KILO_PROVIDER_ID=ai-dz-anthropic               # must match provider.<id> in kilo.jsonc
 KILO_ACTIVE_MODEL=claude-opus-4-7
 KILO_SMALL_MODEL=claude-haiku-4-5
 ```
 
-`KILO_*` keys are **not** exported into the shell by cc-profil — they belong to
-the kilo adapter.
+Adapter translation of the generic keys:
+
+- **cc-profil** exports them as `ANTHROPIC_FOUNDRY_RESOURCE` / `ANTHROPIC_FOUNDRY_API_KEY` (an explicit `ANTHROPIC_FOUNDRY_*` in the profile wins — legacy profiles keep working unchanged).
+- **kilo-profil** derives the provider `baseURL` (`https://<resource>.services.ai.azure.com/anthropic/v1`).
+- **codex-profil** derives the Azure OpenAI `base_url` (`https://<resource>.openai.azure.com/openai/v1`) and sets `AZURE_OPENAI_API_KEY` — Codex refuses inline keys, its `env_key` must reference an env variable.
+
+`KILO_*`/`CODEX_*` keys are **not** exported into the shell by cc-profil — they
+belong to their adapters. A profile without a Foundry backend just omits the
+generic keys.
+
+## How the Codex edit stays safe
+
+`codex-profil` patches `${CODEX_HOME:-~/.codex}/config.toml` desired-state:
+only the top-level `model` / `model_provider` keys and the
+`[model_providers.azure]` section are touched, everything else (other
+providers, profiles, MCP config) is preserved. If nothing deviates, the file
+is left untouched.
 
 ## How the Kilo edit stays safe
 
@@ -83,6 +102,7 @@ blind-written into the JSONC.
 toolbox install --what aiprofil      # orchestrator (sourced into $PROFILE/.bashrc)
 toolbox install --what cc-profil     # CC adapter, standalone command
 toolbox install --what kilo-profil   # Kilo adapter, standalone command
+toolbox install --what codex-profil  # Codex adapter, standalone command (sourced)
 ```
 
 `cc-profil` was relocated here from the old top-level `cc-profil/`. Three things

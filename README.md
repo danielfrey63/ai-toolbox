@@ -137,9 +137,9 @@ toolbox remove --all     # alles Installierte wieder entfernen
 Vor jeder Aktion wird gegen die Realität verifiziert — der Index kann nicht
 gefährlich driften, und `status --all` heilt ihn.
 
-## `aiprofil` — Backend-Profile für Claude Code & Kilo
+## `aiprofil` — Backend-Profile für Claude Code, Kilo & Codex
 
-Schaltet zwischen benannten Backend-Profilen um — API-Key, Foundry-Endpoint, Modell-Defaults, Git-Identität, …. Jedes Profil ist eine `.env`-Datei unter `aiprofil/profiles/`; `aiprofil use <profil> [--target cc|kilo|both] [--scope session|user|project]` projiziert es über die Adapter `cc-profil` (env-Vars für Claude Code) und `kilo-profil` (`kilo.jsonc`) auf die Ziele, `aiprofil list` zeigt Profile plus aktiven Zustand, `aiprofil status` was jedes Ziel gerade verwendet.
+Schaltet zwischen benannten Backend-Profilen um — API-Key, Foundry-Endpoint, Modell-Defaults, Git-Identität, …. Jedes Profil ist eine `.env`-Datei unter `aiprofil/profiles/` mit generischen Foundry-Keys (`FOUNDRY_RESOURCE`, `FOUNDRY_API_KEY`); `aiprofil use <profil> [--target cc|kilo|codex|both] [--scope session|user|project]` projiziert es über die Adapter `cc-profil` (env-Vars für Claude Code), `kilo-profil` (`kilo.jsonc`) und `codex-profil` (`~/.codex/config.toml` + `AZURE_OPENAI_API_KEY`) auf die Ziele, `aiprofil list` zeigt Profile plus aktiven Zustand, `aiprofil status` was jedes Ziel gerade verwendet.
 
 Einmalig installieren (legt die sourcing-Funktion in `~/.bashrc` bzw. PowerShell-`$PROFILE` an):
 
@@ -159,9 +159,9 @@ ai-toolbox/
 ├── toolbox.sh / toolbox.ps1     ← die CLI (bash + PowerShell)
 ├── CLAUDE.md                    ← globale Claude-Konfiguration
 ├── .agents/skills/              ← integrierte Skills (component-audit, discover, fable-mode, transcribe, …)
-├── aiprofil/                    ← Backend-Profil-Switcher (Claude Code + Kilo)
+├── aiprofil/                    ← Backend-Profil-Switcher (Claude Code + Kilo + Codex)
 │   ├── aiprofil.sh / .ps1
-│   ├── adapters/                ← cc-profil, kilo-profil
+│   ├── adapters/                ← cc-profil, kilo-profil, codex-profil
 │   └── profiles/                ← *.env.example getrackt, echte *.env lokal
 ├── cc-profil/                   ← Deprecation-Shims (alter cc-profil-Pfad)
 ├── tests/

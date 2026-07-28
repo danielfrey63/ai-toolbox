@@ -1,15 +1,17 @@
 # =============================================================================
-# aiprofil — unified backend-profile switcher across two tools (PowerShell):
-#   - CC  : Claude Code CLI env vars        (adapter: adapters/cc-profil.ps1)
-#   - Kilo: Kilo Code config kilo.jsonc     (adapter: adapters/kilo-profil.ps1)
+# aiprofil — unified backend-profile switcher across three tools (PowerShell):
+#   - CC   : Claude Code CLI env vars       (adapter: adapters/cc-profil.ps1)
+#   - Kilo : Kilo Code config kilo.jsonc    (adapter: adapters/kilo-profil.ps1)
+#   - Codex: Codex CLI ~/.codex/config.toml (adapter: adapters/codex-profil.ps1)
 #
-# One profile (profiles/<name>.env), two targets. MUST be dot-sourced — the CC
-# target mutates the current shell's environment. The sourcing `aiprofil`
-# function is wired into $PROFILE by `toolbox install --what aiprofil`.
+# One profile (profiles/<name>.env), three targets. MUST be dot-sourced — the
+# CC and Codex targets mutate the current shell's environment. The sourcing
+# `aiprofil` function is wired into $PROFILE by `toolbox install --what aiprofil`.
 #
 # Two orthogonal enums:
-#   --target  cc | kilo | both   (also a list: cc,kilo)   default: both
-#   --scope   session | user | project                    default: session
+#   --target  cc | kilo | codex | both   (also a list: cc,codex)  default: both
+#             ('both' and its alias 'all' select every target)
+#   --scope   session | user | project                            default: session
 #
 # Default is 'session': cc writes only the current shell's env (instant). The
 # User scope persists across shells but each User-scope env write broadcasts a
@@ -18,12 +20,13 @@
 # kilo target is skipped (it has no session analog).
 #
 # Scope maps per target (no analog -> skipped with a note):
-#                 session     user                  project
-#   cc            shell       User scope            (skip)
-#   kilo          (skip)      ~/.config/kilo         ./kilo.jsonc
+#                 session          user                  project
+#   cc            shell            User scope            (skip)
+#   kilo          (skip)           ~/.config/kilo        ./kilo.jsonc
+#   codex         shell + config   User scope + config   (skip)
 # =============================================================================
 
-$APP_VERSION = '0.4.16'
+$APP_VERSION = '0.5.22'
 $_ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $_Adapters  = Join-Path $_ScriptDir 'adapters'
 
@@ -49,10 +52,12 @@ function _Ai-Use {
     }
 
     $parts = $target -split ','
-    $wantCc   = ($parts -contains 'both') -or ($parts -contains 'cc')
-    $wantKilo = ($parts -contains 'both') -or ($parts -contains 'kilo')
-    if (-not $wantCc -and -not $wantKilo) {
-        Write-Host "[WARN] --target '$target' selected nothing (use cc|kilo|both)" -ForegroundColor Yellow; return
+    $wantAll   = ($parts -contains 'both') -or ($parts -contains 'all')
+    $wantCc    = $wantAll -or ($parts -contains 'cc')
+    $wantKilo  = $wantAll -or ($parts -contains 'kilo')
+    $wantCodex = $wantAll -or ($parts -contains 'codex')
+    if (-not $wantCc -and -not $wantKilo -and -not $wantCodex) {
+        Write-Host "[WARN] --target '$target' selected nothing (use cc|kilo|codex|both)" -ForegroundColor Yellow; return
     }
 
     if ($wantCc) {
@@ -70,6 +75,14 @@ function _Ai-Use {
             & (Join-Path $_Adapters 'kilo-profil.ps1') use $profile --scope $scope
         }
     }
+    if ($wantCodex) {
+        if ($scope -eq 'project') {
+            Write-Host "[aiprofil] codex: scope 'project' has no Codex analog — skipped" -ForegroundColor DarkGray
+        } else {
+            # Dot-source so AZURE_OPENAI_API_KEY lands in the caller's shell.
+            . (Join-Path $_Adapters 'codex-profil.ps1') use $profile --scope $scope
+        }
+    }
 }
 
 $_action = if ($args.Count -gt 0) { $args[0] } else { 'help' }
@@ -78,9 +91,9 @@ $_rest   = if ($args.Count -gt 1) { $args[1..($args.Count - 1)] } else { @() }
 switch ($_action) {
     'use'    { _Ai-Use -UseArgs $_rest }
     'list'   { & (Join-Path $_Adapters 'kilo-profil.ps1') list; Write-Host "CC active (session): $($env:CC_PROFILE ?? '<none>')"; Write-Host "Switch defaults: --target both | --scope session (kilo needs --scope user)" }
-    'status' { Write-Host "CC active (session): $($env:CC_PROFILE ?? '<none>')"; & (Join-Path $_Adapters 'kilo-profil.ps1') status @_rest }
+    'status' { Write-Host "CC active (session): $($env:CC_PROFILE ?? '<none>')"; & (Join-Path $_Adapters 'kilo-profil.ps1') status @_rest; & (Join-Path $_Adapters 'codex-profil.ps1') status }
     default  {
-        Write-Host "aiprofil $APP_VERSION — unified profile switcher (Claude Code + Kilo)."
+        Write-Host "aiprofil $APP_VERSION — unified profile switcher (Claude Code + Kilo + Codex)."
         Write-Host ""
         Write-Host "Usage: aiprofil <action> [args]"
         Write-Host ""
@@ -88,7 +101,7 @@ switch ($_action) {
         Write-Host "  list                          profiles + active CC/Kilo state"
         Write-Host "  status [--scope user|project] what each target points at"
         Write-Host "  use <profile> [--target ...] [--scope ...]"
-        Write-Host "      --target  cc | kilo | both   (default both; list ok: cc,kilo)"
+        Write-Host "      --target  cc | kilo | codex | both   (default both = all; list ok: cc,codex)"
         Write-Host "      --scope   session | user | project   (default session; kilo needs user)"
         Write-Host ""
         Write-Host "Installation: toolbox install --what aiprofil"

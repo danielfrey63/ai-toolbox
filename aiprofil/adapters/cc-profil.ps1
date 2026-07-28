@@ -17,7 +17,7 @@
 # still carry profiles under the old path keep working without a re-install.
 # =============================================================================
 
-$APP_VERSION = '0.3.2'
+$APP_VERSION = '0.4.4'
 
 $_ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 
@@ -103,16 +103,33 @@ function _Do-Use {
         if ($doGlobal) { [System.Environment]::SetEnvironmentVariable($_, $null, 'User') }
     }
 
-    # Load the new profile. KILO_* keys belong to the kilo-profil adapter
-    # (they configure a file edit, not the shell env) — don't export them.
-    $postCmd = $null
+    # Load the new profile. KILO_*/CODEX_* keys belong to the kilo/codex
+    # adapters (they configure file edits, not the shell env) — don't export
+    # them. Generic FOUNDRY_* keys are canonical cross-tool facts; this
+    # adapter translates them into the CC env vars below.
+    $postCmd = $null; $foundryResource = $null; $foundryApiKey = $null
+    $explicitVars = @()
     Get-Content $envFile | Where-Object { $_ -match '^[A-Z_][A-Z0-9_]*=' } | ForEach-Object {
         $key, $val = $_ -split '=', 2
         if ($key -eq 'POST_ACTIVATE_CMD') { $postCmd = $val; return }
         if ($key -eq 'CC_PROFILE') { return }   # set explicitly below
-        if ($key -like 'KILO_*') { return }
+        if ($key -eq 'FOUNDRY_RESOURCE') { $foundryResource = $val; return }
+        if ($key -eq 'FOUNDRY_API_KEY')  { $foundryApiKey  = $val; return }
+        if ($key -like 'KILO_*' -or $key -like 'CODEX_*') { return }
+        $explicitVars += $key
         [System.Environment]::SetEnvironmentVariable($key, $val, 'Process')
         if ($doGlobal) { [System.Environment]::SetEnvironmentVariable($key, $val, 'User') }
+    }
+
+    # Translate generic keys — an explicit ANTHROPIC_FOUNDRY_* in the profile
+    # wins (legacy profiles keep working unchanged).
+    if ($foundryResource -and ($explicitVars -notcontains 'ANTHROPIC_FOUNDRY_RESOURCE')) {
+        [System.Environment]::SetEnvironmentVariable('ANTHROPIC_FOUNDRY_RESOURCE', $foundryResource, 'Process')
+        if ($doGlobal) { [System.Environment]::SetEnvironmentVariable('ANTHROPIC_FOUNDRY_RESOURCE', $foundryResource, 'User') }
+    }
+    if ($foundryApiKey -and ($explicitVars -notcontains 'ANTHROPIC_FOUNDRY_API_KEY')) {
+        [System.Environment]::SetEnvironmentVariable('ANTHROPIC_FOUNDRY_API_KEY', $foundryApiKey, 'Process')
+        if ($doGlobal) { [System.Environment]::SetEnvironmentVariable('ANTHROPIC_FOUNDRY_API_KEY', $foundryApiKey, 'User') }
     }
 
     [System.Environment]::SetEnvironmentVariable('CC_PROFILE', $profile, 'Process')
