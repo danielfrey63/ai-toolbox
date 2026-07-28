@@ -22,7 +22,7 @@
 #         project  no Codex analog -> skipped with a note
 # =============================================================================
 
-$APP_VERSION = '0.3.12'
+$APP_VERSION = '0.4.14'
 
 $_CxScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 
@@ -195,6 +195,9 @@ function _Cx-Use {
     $oldText = if (Test-Path $file) { [System.IO.File]::ReadAllText($file) } else { '' }
     $nl = if ($oldText -match "`r`n") { "`r`n" } else { "`n" }
     $lines = if ($oldText) { $oldText -split "`r?`n" } else { @() }
+    # Drop the empty element the trailing newline produces on split — otherwise
+    # it reads as a blank line and each write grows the file by one blank.
+    if ($lines.Count -gt 0 -and $lines[-1] -eq '') { $lines = $lines[0..($lines.Count - 2)] }
 
     if ($mode -eq 'chatgpt') {
         # Subscription mode: built-in openai provider + ChatGPT sign-in.
