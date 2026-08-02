@@ -41,7 +41,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.46.297'
+APP_VERSION='0.47.299'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -430,7 +430,9 @@ run_validate() {
                         fail=$((fail + 1)); continue
                     fi
                 else
-                    printf '  [i] %-18s not cloned yet (%s)\n' "$name" "$src"
+                    # a missing checkout is a state note, not a defect — fold
+                    # it into the [ok] line so the tool isn't listed twice.
+                    path="$src — not cloned yet (install clones it)"
                     warn=$((warn + 1))
                 fi
                 ;;

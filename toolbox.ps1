@@ -29,7 +29,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.45.275'
+$APP_VERSION = '0.46.277'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -372,7 +372,9 @@ function Invoke-Validate {
                         [Console]::Error.WriteLine("  [!] $name  link source(s) missing in checkout: $($missing -join ' ')"); $fail++; $failed = $true
                     }
                 } else {
-                    [Console]::Out.WriteLine("  [i] $name  not cloned yet ($src)")
+                    # a missing checkout is a state note, not a defect — fold
+                    # it into the [ok] line so the tool isn't listed twice.
+                    $path = "$src — not cloned yet (install clones it)"
                     $warn++
                 }
             }
