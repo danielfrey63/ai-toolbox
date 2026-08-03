@@ -18,3 +18,7 @@ cc-profil/profiles/*.env
 
 # transcribe skill output (generated reports, per-video folders)
 transcribe/
+
+# drive-sync — downloaded Google OAuth client secret and any local sync state
+drive-sync/client_secret_*.json
+drive-sync/*.log
