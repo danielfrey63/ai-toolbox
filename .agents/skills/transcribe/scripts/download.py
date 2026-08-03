@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -30,10 +31,42 @@ def is_url(source: str) -> bool:
     return parsed.scheme in ("http", "https")
 
 
-def resolve_local(path: str) -> dict:
+def resolve_source_path(path: str) -> Path:
+    """Resolve a local source path, tolerating NFC/NFD Unicode mismatches.
+
+    macOS-authored filenames arrive NFD (`Ö` as `O` + combining diaeresis)
+    while callers type NFC - or vice versa - so a byte-exact lookup misses a
+    file that visibly exists. Try both normal forms of the full path, then
+    scan the parent directory for a name that matches under NFC folding
+    (catches mixed-form names). If nothing matches, the byte-exact resolution
+    is returned unchanged - the caller decides how to fail.
+    """
     p = Path(path).expanduser().resolve()
+    if p.exists():
+        return p
+    for form in ("NFC", "NFD"):
+        candidate = Path(unicodedata.normalize(form, str(p)))
+        if candidate.exists():
+            return candidate
+    target = unicodedata.normalize("NFC", p.name)
+    try:
+        for entry in p.parent.iterdir():
+            if unicodedata.normalize("NFC", entry.name) == target:
+                return entry
+    except OSError:
+        pass
+    return p
+
+
+def resolve_local(path: str) -> dict:
+    p = resolve_source_path(path)
     if not p.exists():
         raise SystemExit(f"File not found: {p}")
+    if p.name != Path(path).name:
+        print(
+            f"[transcribe] resolved Unicode-normalized filename: {p.name}",
+            file=sys.stderr,
+        )
     if p.suffix.lower() not in KNOWN_MEDIA_EXTS:
         print(
             f"[transcribe] warning: {p.suffix} is not a known media extension, proceeding anyway",

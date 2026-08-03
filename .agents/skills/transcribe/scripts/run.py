@@ -196,7 +196,7 @@ from diarize import (  # noqa: E402
     diarize_pyannote_local,
     pick_backend as pick_diarize_backend,
 )
-from download import download, is_url  # noqa: E402
+from download import download, is_url, resolve_source_path  # noqa: E402
 from frames import (  # noqa: E402
     MAX_FPS,
     auto_fps,
@@ -382,7 +382,9 @@ def main() -> int:
     if args.save_md:
         save_md_path = Path(args.save_md).expanduser().resolve()
     elif not args.no_save_md and not is_url(args.source):
-        src = Path(args.source).expanduser().resolve()
+        # Unicode-normalization-tolerant lookup so the .md lands next to the
+        # actual file (same NFC/NFD form) even when the argument's form differs.
+        src = resolve_source_path(args.source)
         save_md_path = src.with_suffix(".md")
 
     if args.out_dir:
