@@ -19,9 +19,11 @@ Design:
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -908,6 +910,57 @@ def _venv_base_interpreter_ok() -> bool:
     return True
 
 
+@functools.lru_cache(maxsize=1)
+def _venv_runtime_version() -> str | None:
+    """Actual `major.minor` the venv's interpreter runs, or None if it won't.
+
+    `_venv_base_interpreter_ok()` only proves *some* base binary exists - it
+    can still be the wrong version (an in-place 3.13 -> 3.14 host upgrade
+    leaves the shim working but flips the ABI under the installed wheels).
+    Only the interpreter itself knows what it runs, so ask it: one bare `-I -c`
+    spawn, no ML imports - a full `import numpy, faster_whisper` smoke test
+    would blow the per-invocation `--check` budget. Cached per process; callers
+    that rebuild the venv must `cache_clear()` afterwards.
+    """
+    try:
+        out = subprocess.run(
+            [str(venv_python()), "-I", "-c",
+             "import sys; sys.stdout.write('%d.%d' % sys.version_info[:2])"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    version = out.stdout.strip()
+    return version if out.returncode == 0 and version else None
+
+
+def _venv_wheel_abi() -> str | None:
+    """`major.minor` encoded in the venv's compiled wheels, or None if unknown.
+
+    Probes numpy's C extension (always present - numpy rides in with torch /
+    faster-whisper): its filename carries the ABI tag
+    (`_multiarray_umath.cp313-win_amd64.pyd` / `...cpython-313-...so`), which
+    records the Python the wheels were built for regardless of what the venv
+    interpreter currently runs. Comparing the two catches the cp313-wheels-
+    under-Python-3.14 mismatch that a pure existence check waves through.
+    """
+    if IS_WINDOWS:
+        roots = [VENV_DIR / "Lib" / "site-packages"]
+    else:
+        roots = sorted((VENV_DIR / "lib").glob("python3.*/site-packages"))
+    for root in roots:
+        # numpy 2.x keeps the extension under _core, 1.x under core.
+        for pkg_dir in ("_core", "core"):
+            ext_dir = root / "numpy" / pkg_dir
+            if not ext_dir.is_dir():
+                continue
+            for ext in ext_dir.glob("_multiarray_umath.*"):
+                m = re.search(r"(?:cp|cpython-)3(\d+)", ext.name)
+                if m:
+                    return f"3.{m.group(1)}"
+    return None
+
+
 def _gpu_available() -> bool:
     """CUDA GPU present? nvidia-smi on PATH and answering is good enough."""
     smi = shutil.which("nvidia-smi")
@@ -960,6 +1013,23 @@ def venv_status() -> dict:
     marker_py = marker.get("python") or UV_PYTHON_VERSION
     if marker.get("signature") != _venv_signature(gpu, marker_py):
         return {"ready": False, "reason": "pins or GPU availability changed", "gpu": gpu}
+    # Ground-truth ABI check: what the interpreter actually runs vs. what the
+    # wheels were built for. Existence/marker checks alone waved a Python-3.14
+    # venv full of cp313 wheels through as "ready" - every import then died.
+    runtime = _venv_runtime_version()
+    if runtime is None:
+        return {"ready": False,
+                "reason": "venv python fails to run - rebuild needed", "gpu": gpu}
+    if runtime != marker_py:
+        return {"ready": False,
+                "reason": f"venv runs Python {runtime}, expected {marker_py} - rebuild needed",
+                "gpu": gpu}
+    wheel_abi = _venv_wheel_abi()
+    if wheel_abi and wheel_abi != runtime:
+        return {"ready": False,
+                "reason": f"ABI mismatch: venv runs Python {runtime} but wheels "
+                          f"are cp{wheel_abi.replace('.', '')} - rebuild needed",
+                "gpu": gpu}
     return {"ready": True, "reason": "", "gpu": gpu}
 
 
@@ -992,8 +1062,10 @@ def cmd_provision_venv(force: bool = False) -> int:
         f"{'~2.5 GB' if gpu else '~300 MB'}...\n"
     )
 
-    # Recreate from scratch when the venv is missing or the marker records a
-    # different pinned Python. `uv venv` fetches its own managed CPython
+    # Recreate from scratch when the venv is missing, the marker records a
+    # different pinned Python, or the venv's actual runtime / wheel ABI drifted
+    # from the pin (a `uv pip install` into a wrong-versioned venv would just
+    # re-install the mismatch). `uv venv` fetches its own managed CPython
     # (UV_PYTHON_VERSION), so the host Python is irrelevant - a 3.14-only box
     # still gets a 3.13 venv that can host the torch wheels.
     marker_py = None
@@ -1001,13 +1073,17 @@ def cmd_provision_venv(force: bool = False) -> int:
         marker_py = json.loads(VENV_MARKER.read_text(encoding="utf-8")).get("python")
     except (OSError, ValueError):
         pass
+    wheel_abi = _venv_wheel_abi()
     if (not venv_python().exists() or not _venv_base_interpreter_ok()
-            or (marker_py and marker_py != UV_PYTHON_VERSION) or force):
+            or (marker_py and marker_py != UV_PYTHON_VERSION)
+            or _venv_runtime_version() != UV_PYTHON_VERSION
+            or (wheel_abi and wheel_abi != UV_PYTHON_VERSION) or force):
         if VENV_DIR.exists():
             shutil.rmtree(VENV_DIR)
         result = subprocess.run(
             [uv, "venv", str(VENV_DIR), "--python", UV_PYTHON_VERSION]
         )
+        _venv_runtime_version.cache_clear()
         if result.returncode != 0:
             sys.stderr.write("[setup] ERROR: venv creation failed\n")
             return 1
