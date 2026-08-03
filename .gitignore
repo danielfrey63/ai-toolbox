@@ -16,8 +16,8 @@ cc-profil/profiles/*.env
 # *.tmpl templates are committed.
 .agents/skills/oracle-skill/config/oracle.env
 
-# transcribe skill output (generated reports, per-video folders)
-transcribe/
+# Python bytecode caches (py_compile / test runs on the skill scripts)
+__pycache__/
 
 # drive-sync — downloaded Google OAuth client secret and any local sync state
 drive-sync/client_secret_*.json
