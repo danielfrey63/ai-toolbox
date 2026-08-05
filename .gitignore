@@ -22,3 +22,4 @@ __pycache__/
 # drive-sync — downloaded Google OAuth client secret and any local sync state
 drive-sync/client_secret_*.json
 drive-sync/*.log
+drive-sync/filters.txt.md5
