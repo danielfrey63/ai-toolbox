@@ -18,8 +18,3 @@ cc-profil/profiles/*.env
 
 # Python bytecode caches (py_compile / test runs on the skill scripts)
 __pycache__/
-
-# drive-sync — downloaded Google OAuth client secret and any local sync state
-drive-sync/client_secret_*.json
-drive-sync/*.log
-drive-sync/filters.txt.md5
