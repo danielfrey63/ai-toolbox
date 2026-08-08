@@ -1,0 +1,8 @@
+{
+  "enabled": true,
+  "minTranscriptKB": 200,
+  "delaySeconds": 3300,
+  "maxTicks": 3,
+  "quietFrom": "",
+  "quietTo": ""
+}
