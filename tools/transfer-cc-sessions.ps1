@@ -90,16 +90,38 @@ function Find-RealPathByEncoding([string]$base, [string]$projectName) {
     return $null
 }
 
+# Fallback when the OLD tree is already gone (physically moved): mirror the
+# walk through the NEW tree and match the project name against the encoding
+# of the corresponding OLD path. Only structure-preserving moves resolve.
+function Find-OldPathViaNewTree([string]$newBase, [string]$oldBase, [string]$projectName) {
+    $enc = Get-CCProjectName $oldBase
+    if ($enc -eq $projectName) { return $oldBase }
+    if (-not $projectName.StartsWith("$enc-")) { return $null }
+    foreach ($child in Get-ChildItem $newBase -Directory -Force -ErrorAction SilentlyContinue) {
+        $hit = Find-OldPathViaNewTree $child.FullName (Join-Path $oldBase $child.Name) $projectName
+        if ($hit) { return $hit }
+    }
+    return $null
+}
+
 $moved = 0
 $skippedFiles = 0
 foreach ($proj in Get-ChildItem $ProjectsDir -Directory) {
     $root = Get-ProjectRoot $proj.FullName $proj.Name
     if (-not $root) { $root = Find-RealPathByEncoding $OldRoot $proj.Name }
+    if (-not $root) { $root = Find-OldPathViaNewTree $NewRoot $OldRoot $proj.Name }
     if (-not $root) { continue }
     if (-not ($root.Equals($OldRoot, 'OrdinalIgnoreCase') -or
               $root.StartsWith("$OldRoot\", 'OrdinalIgnoreCase'))) { continue }
 
     $newPath = $NewRoot + $root.Substring($OldRoot.Length)
+    # a physical move must have put the project there - a missing target
+    # means this prefix mapping does not apply to the project (moved with a
+    # different structure, deleted, ...): report and leave it alone
+    if (-not (Test-Path -LiteralPath $newPath -PathType Container)) {
+        Write-Host "SKIP (target missing): $($proj.Name)  root: $root  ->  $newPath"
+        continue
+    }
     $targetName = Get-CCProjectName $newPath
     if ($targetName -eq $proj.Name) { continue }   # encoding collision, nothing to do
     $targetDir = Join-Path $ProjectsDir $targetName
