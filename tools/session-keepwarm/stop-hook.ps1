@@ -7,6 +7,10 @@
 # re-schedule until MaxTicks consecutive ticks passed without real user activity.
 $ErrorActionPreference = 'Stop'
 
+# Claude Code exchanges hook I/O as UTF-8; the console default (OEM codepage) would mangle umlauts.
+[Console]::InputEncoding = [Text.Encoding]::UTF8
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+
 $TickMarker = '[keepwarm-tick]'
 
 # --- Config (defaults overridable via config.json next to this script) ---
