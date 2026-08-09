@@ -19,12 +19,16 @@ Kosten-Nutzen: Ein Tick kostet ca. 10% des Kontextpreises (Cache-Read), der verm
 
 ## Installation
 
-```powershell
-.\install.ps1            # registriert den Stop-Hook in ~/.claude/settings.json
-.\install.ps1 -Uninstall # entfernt ihn
+Über die Toolbox (empfohlen, plattformübergreifend):
+
+```
+toolbox install --what session-keepwarm
+toolbox remove --what session-keepwarm
 ```
 
-Gilt für neu gestartete Sessions. Der Hook-State liegt unter `%LOCALAPPDATA%\ai-toolbox\session-keepwarm\`.
+Oder direkt: unter Windows `.\install.ps1` (`-Uninstall`/`-Status`), unter Linux `./install.sh` (`--uninstall`/`--status`; braucht `jq`). Beide registrieren den plattformeigenen Stop-Hook (`stop-hook.ps1` bzw. `stop-hook.sh`) in `~/.claude/settings.json`.
+
+Gilt für neu gestartete Sessions. Der Hook-State liegt unter `%LOCALAPPDATA%\ai-toolbox\session-keepwarm\` (Windows) bzw. `~/.local/state/ai-toolbox/session-keepwarm/` (Linux).
 
 ## Konfiguration
 

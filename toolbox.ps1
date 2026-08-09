@@ -29,7 +29,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.46.277'
+$APP_VERSION = '0.47.287'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -125,6 +125,8 @@ Examples:
     plugin  Real `claude plugin` install (target=claude) or skill-link.
     config  Global config file (e.g. CLAUDE.md) into ~/.claude/.
     bin     Make a CLI available system-wide (exec or sourced shell function).
+    installer  Tool with its own install script (install.ps1/install.sh),
+               e.g. a scheduled task or a Claude Code hook registration.
 
   Examples:
     toolbox install --what cli                     # by name (a bin entry)
@@ -263,7 +265,7 @@ function Invoke-Validate {
             [Console]::Error.WriteLine("  [!] $($name ?? '?')  missing required field(s) (name/type/path/description)")
             $fail++; continue
         }
-        if ($type -notin @('skill', 'hook', 'plugin', 'config', 'bin', 'repo', 'mcp', 'release')) {
+        if ($type -notin @('skill', 'hook', 'plugin', 'config', 'bin', 'repo', 'mcp', 'release', 'installer')) {
             [Console]::Error.WriteLine("  [!] $name  unknown type: $type")
             $fail++; continue
         }
@@ -340,6 +342,15 @@ function Invoke-Validate {
                 }
                 if (-not $t.assets -or @($t.assets.PSObject.Properties).Count -eq 0) {
                     [Console]::Error.WriteLine("  [!] $name  release needs a non-empty `"assets`" platform map"); $fail++; $failed = $true
+                }
+            }
+            'installer' {
+                if (-not (Test-Path -LiteralPath $src -PathType Container)) {
+                    [Console]::Error.WriteLine("  [!] $name  source missing: $src"); $fail++; $failed = $true; break
+                }
+                if (-not (Test-Path -LiteralPath (Join-Path $src 'install.ps1') -PathType Leaf) -or
+                    -not (Test-Path -LiteralPath (Join-Path $src 'install.sh') -PathType Leaf)) {
+                    [Console]::Error.WriteLine("  [!] $name  installer dir missing install.ps1/install.sh: $src"); $fail++; $failed = $true
                 }
             }
             'mcp' {
@@ -689,6 +700,67 @@ function Handle-Config([string]$name, [string]$path) {
         [Console]::Error.WriteLine("  [!] $name  source missing: $src"); return
     }
     Link-Artifact $name $src (Join-Path $HOME '.claude')
+}
+
+# --- installer handler --------------------------------------------------------
+# Delegates to the tool's own platform installer: install.ps1 on Windows,
+# install.sh elsewhere. Contract: a plain run installs idempotently,
+# -Uninstall/--uninstall removes, -Status/--status exits 0 iff installed.
+# Global scope only, ignores --target.
+
+# Runs the platform installer in a child process — its `exit` must not tear
+# down this toolbox run. Child output is echoed indented unless $quiet.
+function Invoke-ToolInstaller([string]$dir, [string]$mode, [bool]$quiet = $false) {
+    if ($env:OS -eq 'Windows_NT') {
+        $exe = (Get-Command pwsh -ErrorAction SilentlyContinue)?.Source
+        if (-not $exe) { $exe = (Get-Command powershell).Source }
+        # NB: assign real arrays — `$x = switch ...` unrolls a one-element array
+        # to a string, and @-splatting a string passes it character by character.
+        [string[]]$extra = if ($mode -eq 'remove') { '-Uninstall' } elseif ($mode -eq 'status') { '-Status' } else { @() }
+        $out = & $exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir 'install.ps1') @extra 2>&1
+    } else {
+        [string[]]$extra = if ($mode -eq 'remove') { '--uninstall' } elseif ($mode -eq 'status') { '--status' } else { @() }
+        $out = & bash (Join-Path $dir 'install.sh') @extra 2>&1
+    }
+    $rc = $LASTEXITCODE
+    if (-not $quiet) { foreach ($l in @($out)) { if ($null -ne $l) { [Console]::Out.WriteLine("      $l") } } }
+    return $rc
+}
+
+function Handle-Installer([string]$name, [string]$path) {
+    if ($Scope -ne 'global') {
+        Write-Output "  [.] $name  installer is global-only — use --scope global"
+        return
+    }
+    $dir = Join-Path $RepoRoot $path
+    $entry = Join-Path $dir $(if ($env:OS -eq 'Windows_NT') { 'install.ps1' } else { 'install.sh' })
+    if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) {
+        [Console]::Error.WriteLine("  [!] $name  source missing: $entry"); return
+    }
+    switch ($Cmd) {
+        'install' {
+            if ((Invoke-ToolInstaller $dir 'install') -eq 0) {
+                Write-Output "  [+] $name  installed via $(Split-Path -Leaf $entry)"
+            } else {
+                [Console]::Error.WriteLine("  [!] $name  installer failed")
+            }
+        }
+        'status' {
+            if ((Invoke-ToolInstaller $dir 'status' $true) -eq 0) {
+                Write-Output "  [ok] $name  installed"
+                $script:State = 'ok'
+            } else {
+                Write-Output "  [ ] $name  not installed"
+            }
+        }
+        'remove' {
+            if ((Invoke-ToolInstaller $dir 'remove') -eq 0) {
+                Write-Output "  [-] $name  removed"
+            } else {
+                [Console]::Error.WriteLine("  [!] $name  uninstaller failed")
+            }
+        }
+    }
 }
 
 # --- bin handler --------------------------------------------------------------
@@ -1833,6 +1905,7 @@ function Registry-Sweep {
             'skill'  { Handle-Skill  $e.tool $e.path }
             'hook'   { Handle-Hook   $e.tool $e.path }
             'config' { Handle-Config $e.tool $e.path }
+            'installer' { Handle-Installer $e.tool $e.path }
             'bin' {
                 $cat = (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools |
                     Where-Object { $_.name -eq $e.tool } | Select-Object -First 1
@@ -2075,7 +2148,7 @@ if ($Cmd -eq 'install') {
 # bin — and repo, unless it declares a skill link, which is target-specific).
 if (-not $Target) {
     $needsTarget = $selected | Where-Object {
-        ($_.type -notin @('hook', 'config', 'bin', 'repo', 'mcp', 'release')) -or
+        ($_.type -notin @('hook', 'config', 'bin', 'repo', 'mcp', 'release', 'installer')) -or
         ($_.type -eq 'repo' -and @(@($_.links) | Where-Object { $_ -and $_.type -eq 'skill' }).Count -gt 0)
     } | Select-Object -First 1
     if ($needsTarget) {
@@ -2093,6 +2166,7 @@ foreach ($tool in $selected) {
         'skill'  { Handle-Skill $tool.name $tool.path }
         'hook'   { Handle-Hook $tool.name $tool.path }
         'config' { Handle-Config $tool.name $tool.path }
+        'installer' { Handle-Installer $tool.name $tool.path }
         'bin'    { Handle-Bin $tool.name $tool.path $tool.command ([bool]$tool.source) }
         'plugin' { Handle-Plugin $tool.name $tool.path $tool.marketplace $tool.plugin }
         'repo'   { Handle-Repo $tool.name $tool.path $tool.url $tool.install $tool.links }
@@ -2106,7 +2180,7 @@ foreach ($tool in $selected) {
     if ($Cmd -ne 'remove' -and $tool.requires) {
         [void](Test-Requires $tool.name $tool.requires)
     }
-    if ($tool.type -in @('skill', 'hook', 'config', 'bin', 'plugin', 'repo', 'mcp', 'release')) {
+    if ($tool.type -in @('skill', 'hook', 'config', 'bin', 'plugin', 'repo', 'mcp', 'release', 'installer')) {
         if ($Cmd -eq 'install') {
             Registry-Add $tool.name $tool.type $tool.path $Scope $Target $Project
         } elseif ($Cmd -eq 'remove') {

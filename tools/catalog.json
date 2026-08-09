@@ -227,6 +227,18 @@
       "description": "Akros/Noser intranet Confluence MCP (uvx mcp-atlassian, PyPI upstream)."
     },
     {
+      "name": "session-cleanup",
+      "type": "installer",
+      "path": "tools/session-cleanup",
+      "description": "Daily trash of empty Claude Code sessions (scheduled task / systemd user timer)."
+    },
+    {
+      "name": "session-keepwarm",
+      "type": "installer",
+      "path": "tools/session-keepwarm",
+      "description": "Keep large idle sessions' prompt cache warm (Stop hook + ScheduleWakeup ticks)."
+    },
+    {
       "name": "versioning-hooks",
       "type": "hook",
       "path": "tools/githooks",

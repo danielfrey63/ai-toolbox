@@ -1,8 +1,10 @@
 # Registers (or removes) the session-keepwarm Stop hook in ~/.claude/settings.json.
 # Idempotent: re-running updates the existing hook entry in place.
+# -Status reports the install state via exit code (0 = installed, 1 = not).
 [CmdletBinding()]
 param(
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    [switch]$Status
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,6 +12,10 @@ $ErrorActionPreference = 'Stop'
 $settingsFile = Join-Path $env:USERPROFILE '.claude\settings.json'
 $hookScript = Join-Path $PSScriptRoot 'stop-hook.ps1'
 $marker = 'session-keepwarm\stop-hook.ps1'
+
+if ($Status) {
+    if ((Test-Path $settingsFile) -and ((Get-Content $settingsFile -Raw) -match 'session-keepwarm')) { exit 0 } else { exit 1 }
+}
 
 # Prefer pwsh when available; fall back to Windows PowerShell.
 $shell = (Get-Command pwsh -ErrorAction SilentlyContinue)?.Source

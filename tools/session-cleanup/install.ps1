@@ -1,15 +1,21 @@
 # Registers (or removes) the daily scheduled task that trashes empty Claude Code sessions.
 # Idempotent: re-running replaces the existing task with the current definition.
+# -Status reports the install state via exit code (0 = installed, 1 = not).
 [CmdletBinding()]
 param(
     [string]$Time = '05:30',
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    [switch]$Status
 )
 
 $ErrorActionPreference = 'Stop'
 
 $taskName = 'AI-Toolbox Session Cleanup'
 $scriptPath = Join-Path $PSScriptRoot 'cleanup-sessions.ps1'
+
+if ($Status) {
+    if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }
+}
 
 if ($Uninstall) {
     if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {

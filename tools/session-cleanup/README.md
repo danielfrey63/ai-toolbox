@@ -12,12 +12,14 @@ Verschobene Sessions landen unter `~\.claude\projects-trash\<yyyy-MM-dd>\<projek
 
 ## Installation
 
-```powershell
-.\install.ps1            # registriert den täglichen Task (05:30, Catch-up bei verpasstem Lauf)
-.\install.ps1 -Uninstall # entfernt den Task
+Über die Toolbox (empfohlen, plattformübergreifend):
+
+```
+toolbox install --what session-cleanup
+toolbox remove --what session-cleanup
 ```
 
-Der Task heisst «AI-Toolbox Session Cleanup» und läuft idempotent — `install.ps1` kann beliebig oft ausgeführt werden und ersetzt die bestehende Definition.
+Oder direkt: unter Windows `.\install.ps1` (Scheduled Task «AI-Toolbox Session Cleanup», `-Uninstall` entfernt, `-Status` liefert Exit-Code 0/1), unter Linux `./install.sh` (systemd User-Timer `session-cleanup.timer`, `--uninstall`/`--status` analog). Beide Installer sind idempotent und ersetzen die bestehende Definition.
 
 ## Manuell ausführen
 

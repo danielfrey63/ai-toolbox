@@ -41,7 +41,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.47.299'
+APP_VERSION='0.48.307'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -164,6 +164,8 @@ _help_what() {
     plugin  Real `claude plugin` install (target=claude) or skill-link.
     config  Global config file (e.g. CLAUDE.md) into ~/.claude/.
     bin     Make a CLI available system-wide (exec or sourced shell function).
+    installer  Tool with its own install script (install.ps1/install.sh),
+               e.g. a scheduled task or a Claude Code hook registration.
 
   Examples:
     toolbox install --what cli                     # by name (a bin entry)
@@ -320,7 +322,7 @@ run_validate() {
             fail=$((fail + 1)); continue
         fi
         case "$type" in
-            skill|hook|plugin|config|bin|repo|mcp|release) ;;
+            skill|hook|plugin|config|bin|repo|mcp|release|installer) ;;
             *) printf '  [!] %-18s unknown type: %s\n' "$name" "$type" >&2
                fail=$((fail + 1)); continue ;;
         esac
@@ -395,6 +397,13 @@ run_validate() {
                 fi
                 if ! printf '%s' "$tool" | jq -e '.assets | (type == "object") and (length > 0)' >/dev/null 2>&1; then
                     printf '  [!] %-18s release needs a non-empty "assets" platform map\n' "$name" >&2
+                    fail=$((fail + 1)); continue
+                fi
+                ;;
+            installer)
+                [ -d "$src" ] || { printf '  [!] %-18s source missing: %s\n' "$name" "$src" >&2; fail=$((fail + 1)); continue; }
+                if [ ! -f "$src/install.sh" ] || [ ! -f "$src/install.ps1" ]; then
+                    printf '  [!] %-18s installer dir missing install.ps1/install.sh: %s\n' "$name" "$src" >&2
                     fail=$((fail + 1)); continue
                 fi
                 ;;
@@ -805,6 +814,52 @@ handle_config() {
         return
     fi
     link_artifact "$name" "$src" "$HOME/.claude"
+}
+
+# --- installer handler --------------------------------------------------------
+# Delegates to the tool's own platform installer (install.sh here; the pwsh
+# port runs install.ps1). Contract: a plain run installs idempotently,
+# --uninstall removes, --status exits 0 iff installed.
+# Global scope only, ignores --target.
+handle_installer() {
+    local name=$1 path=$2 entry out rc
+    if [ "$SCOPE" != global ]; then
+        printf '  [.] %-18s installer is global-only — use --scope global\n' "$name"
+        return
+    fi
+    entry="$REPO_ROOT/$path/install.sh"
+    if [ ! -f "$entry" ]; then
+        printf '  [!] %-18s source missing: %s\n' "$name" "$entry" >&2
+        return
+    fi
+    case "$CMD" in
+        install)
+            out=$(bash "$entry" 2>&1) && rc=0 || rc=$?
+            [ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/      /'
+            if [ "$rc" = 0 ]; then
+                printf '  [+] %-18s installed via install.sh\n' "$name"
+            else
+                printf '  [!] %-18s installer failed (rc=%s)\n' "$name" "$rc" >&2
+            fi
+            ;;
+        status)
+            if bash "$entry" --status >/dev/null 2>&1; then
+                printf '  [ok] %-18s installed\n' "$name"
+                STATE=ok
+            else
+                printf '  [ ] %-18s not installed\n' "$name"
+            fi
+            ;;
+        remove)
+            out=$(bash "$entry" --uninstall 2>&1) && rc=0 || rc=$?
+            [ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/      /'
+            if [ "$rc" = 0 ]; then
+                printf '  [-] %-18s removed\n' "$name"
+            else
+                printf '  [!] %-18s uninstaller failed (rc=%s)\n' "$name" "$rc" >&2
+            fi
+            ;;
+    esac
 }
 
 # --- bin handler --------------------------------------------------------------
@@ -1964,6 +2019,7 @@ registry_sweep() {
             skill)  handle_skill "$tool" "$path" ;;
             hook)   handle_hook "$tool" "$path" ;;
             config) handle_config "$tool" "$path" ;;
+            installer) handle_installer "$tool" "$path" ;;
             bin)
                 cmdname=$(jq -r --arg n "$tool" \
                     '.tools[] | select(.name==$n) | .command // empty' "$CATALOG")
@@ -2234,7 +2290,7 @@ fi
 # bin — and repo, unless it declares a skill link, which is target-specific).
 if [ -z "$TARGET" ]; then
     needs_target=$(printf '%s\n' "$selected" \
-        | jq -r 'select((.type != "hook" and .type != "config" and .type != "bin" and .type != "repo" and .type != "mcp" and .type != "release")
+        | jq -r 'select((.type != "hook" and .type != "config" and .type != "bin" and .type != "repo" and .type != "mcp" and .type != "release" and .type != "installer")
                         or (.type == "repo" and (((.links // []) | map(select(.type == "skill")) | length) > 0))) | .name' | head -1)
     if [ -n "$needs_target" ]; then
         printf 'toolbox: --target is required (claude|codex|agents|kilo) — "%s" needs it\n' \
@@ -2257,6 +2313,7 @@ printf '%s\n' "$selected" | while IFS= read -r tool; do
         skill)  handle_skill "$name" "$path" ;;
         hook)   handle_hook "$name" "$path" ;;
         config) handle_config "$name" "$path" ;;
+        installer) handle_installer "$name" "$path" ;;
         bin)
             cmdname=$(printf '%s' "$tool" | jq -r '.command // empty')
             bin_src=$(printf '%s' "$tool" | jq -r 'if .source then "1" else "" end')
