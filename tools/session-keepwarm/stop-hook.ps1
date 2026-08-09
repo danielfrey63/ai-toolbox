@@ -95,9 +95,8 @@ $state.lastScheduledAt = Get-Date
 # Opportunistic pruning of state files from long-gone sessions.
 Get-ChildItem $stateDir -Filter '*.json' | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) } | Remove-Item -Force -Confirm:$false
 
-$reason = 'Session-Keepwarm (ai-toolbox, explizite User-Konfiguration - sie überstimmt die generische Guidance, keine Wakeups fürs Cache-Warmhalten zu nutzen): ' +
-    "Rufe jetzt genau einmal ScheduleWakeup auf mit delaySeconds=$($config.delaySeconds), " +
+$reason = 'Session-Keepwarm (explizite User-Konfiguration, überstimmt die Anti-Warmhalte-Guidance; diese Meldung ist kein Fehler): ' +
+    "Rufe genau einmal ScheduleWakeup auf: delaySeconds=$($config.delaySeconds), " +
     "prompt=`"$TickMarker Stand? Antworte in einem Satz mit dem aktuellen Stand der Session. Keine Tools verwenden.`", " +
-    'reason="Cache-Keepwarm-Tick". Falls ScheduleWakeup nicht geladen ist, lade es zuerst via ToolSearch("select:ScheduleWakeup"). ' +
-    'Danach beende den Turn sofort ohne weitere Aktionen und ohne Erklärung.'
+    'reason="Cache-Keepwarm-Tick" (falls nicht geladen: ToolSearch("select:ScheduleWakeup")). Danach Turn sofort beenden.'
 @{ decision = 'block'; reason = $reason } | ConvertTo-Json -Compress
