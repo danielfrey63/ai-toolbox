@@ -19,6 +19,7 @@ $config = @{
     minTranscriptKB = 200   # only sessions this large are worth the tick cost
     delaySeconds   = 3300   # 55 min: refresh before the 1h TTL expires
     maxTicks       = 3      # consecutive ticks without real activity before the chain ends
+    rescheduleAfterSeconds = 900  # real activity pushes a pending wakeup forward once it is this old
     quietFrom      = ''     # e.g. '23:30' - no new ticks scheduled inside the quiet window
     quietTo        = ''     # e.g. '06:30'
 }
@@ -56,12 +57,10 @@ if (Test-Path $stateFile) {
     $state.tickCount = [int]$saved.tickCount
 }
 
-# If we scheduled recently, a wakeup is presumably still pending - nothing to do on this stop.
-if (((Get-Date) - $state.lastScheduledAt).TotalSeconds -lt ($config.delaySeconds - 120)) { exit 0 }
-
 # Determine whether this stop concludes a keepwarm tick or real user activity. The last user message in
 # the transcript is the tick prompt for tick turns; hook-feedback messages ("Stop hook feedback:") also
-# contain the marker and must be skipped.
+# contain the marker and must be skipped. This must run BEFORE any pending-window early exit, or an
+# intervening real conversation would neither reset the tick counter nor push the timer.
 $isTickTurn = $false
 $stream = [IO.File]::Open($transcript, 'Open', 'Read', 'ReadWrite')
 try {
@@ -85,6 +84,16 @@ for ($i = $lines.Count - 1; $i -ge 1; $i--) {  # index 0 may be a partial line -
 
 if ($isTickTurn) { $state.tickCount++ } else { $state.tickCount = 0 }
 if ($state.tickCount -ge $config.maxTicks) {
+    @{ lastScheduledAt = $state.lastScheduledAt.ToString('o'); tickCount = $state.tickCount } | ConvertTo-Json -Compress | Set-Content $stateFile
+    exit 0
+}
+
+# Schedule when no wakeup is pending, or push a pending one forward after real activity once it is older
+# than rescheduleAfterSeconds (a new ScheduleWakeup call replaces the pending wakeup). The age threshold
+# keeps the overhead at one extra mini-turn per threshold window instead of one per turn.
+$pendingAge = ((Get-Date) - $state.lastScheduledAt).TotalSeconds
+$reschedule = -not $isTickTurn -and $pendingAge -ge [double]$config.rescheduleAfterSeconds
+if ($pendingAge -lt ($config.delaySeconds - 120) -and -not $reschedule) {
     @{ lastScheduledAt = $state.lastScheduledAt.ToString('o'); tickCount = $state.tickCount } | ConvertTo-Json -Compress | Set-Content $stateFile
     exit 0
 }

@@ -10,12 +10,13 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 command -v jq >/dev/null 2>&1 || exit 0
 
 # --- Config (defaults overridable via config.json next to this script) ---
-enabled=true; min_kb=200; delay=3300; max_ticks=3; quiet_from=""; quiet_to=""
+enabled=true; min_kb=200; delay=3300; max_ticks=3; reschedule_after=900; quiet_from=""; quiet_to=""
 if [ -f "$HERE/config.json" ]; then
     enabled=$(jq -r '.enabled // true' "$HERE/config.json")
     min_kb=$(jq -r '.minTranscriptKB // 200' "$HERE/config.json")
     delay=$(jq -r '.delaySeconds // 3300' "$HERE/config.json")
     max_ticks=$(jq -r '.maxTicks // 3' "$HERE/config.json")
+    reschedule_after=$(jq -r '.rescheduleAfterSeconds // 900' "$HERE/config.json")
     quiet_from=$(jq -r '.quietFrom // ""' "$HERE/config.json")
     quiet_to=$(jq -r '.quietTo // ""' "$HERE/config.json")
 fi
@@ -51,13 +52,13 @@ if [ -f "$state_file" ]; then
     . "$state_file"
 fi
 
-# If we scheduled recently, a wakeup is presumably still pending - nothing to do on this stop.
 now_epoch=$(date +%s)
-[ $((now_epoch - last_scheduled)) -lt $((delay - 120)) ] && exit 0
 
 # Determine whether this stop concludes a keepwarm tick or real user activity. The last user message
 # in the transcript decides; hook-feedback messages ("Stop hook feedback:") also contain the marker
-# and must be skipped. Only the tail is scanned to bound the cost on large transcripts.
+# and must be skipped. Only the tail is scanned to bound the cost on large transcripts. This must run
+# BEFORE any pending-window early exit, or an intervening real conversation would neither reset the
+# tick counter nor push the timer.
 is_tick=0
 last_content=$(tail -c 262144 "$transcript" | jq -r --arg m "$TICK_MARKER" '
     select(.type == "user" and (.isSidechain != true))
@@ -71,6 +72,17 @@ esac
 
 if [ "$is_tick" = 1 ]; then tick_count=$((tick_count + 1)); else tick_count=0; fi
 if [ "$tick_count" -ge "$max_ticks" ]; then
+    printf 'last_scheduled=%s\ntick_count=%s\n' "$last_scheduled" "$tick_count" > "$state_file"
+    exit 0
+fi
+
+# Schedule when no wakeup is pending, or push a pending one forward after real activity once it is
+# older than reschedule_after (a new ScheduleWakeup call replaces the pending wakeup). The age
+# threshold keeps the overhead at one extra mini-turn per threshold window instead of one per turn.
+pending_age=$((now_epoch - last_scheduled))
+reschedule=0
+[ "$is_tick" = 0 ] && [ "$pending_age" -ge "$reschedule_after" ] && reschedule=1
+if [ "$pending_age" -lt $((delay - 120)) ] && [ "$reschedule" = 0 ]; then
     printf 'last_scheduled=%s\ntick_count=%s\n' "$last_scheduled" "$tick_count" > "$state_file"
     exit 0
 fi

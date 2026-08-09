@@ -3,6 +3,7 @@
   "minTranscriptKB": 200,
   "delaySeconds": 3300,
   "maxTicks": 3,
+  "rescheduleAfterSeconds": 900,
   "quietFrom": "",
   "quietTo": ""
 }

@@ -14,6 +14,7 @@ Ein globaler Stop-Hook (`~/.claude/settings.json`) läuft nach jedem Turn-Ende:
 2. Höchstens einmal pro `delaySeconds`-Fenster blockiert er den Stop und weist das Modell an, per `ScheduleWakeup` in 55 Minuten (Default) einen Tick zu planen. Während der Arbeit entsteht dadurch praktisch kein Overhead (ein Mini-Turn pro 55 Minuten).
 3. Der Tick `[keepwarm-tick] Stand?` feuert kurz vor Ablauf der 1h-TTL als normale Session-Anfrage: identischer Prefix, echter Cache-Refresh, und als Nebeneffekt steht beim Zurückkommen ein kurzer Stand in der Session.
 4. Tick-Turns re-schedulen sich selbst über denselben Hook. Nach `maxTicks` (Default 3) aufeinanderfolgenden Ticks ohne echte User-Aktivität endet die Kette — eine verlassene Session wird also maximal ca. 3 Stunden warmgehalten.
+5. Echte User-Aktivität setzt den Tick-Zähler zurück und zieht den Timer nach: Ist der pending Wakeup älter als `rescheduleAfterSeconds` (Default 15 min), wird er beim nächsten Turn-Ende auf +55 min neu gesetzt (ein neuer `ScheduleWakeup`-Aufruf ersetzt den pending Wakeup). Die Schwelle begrenzt den Overhead auf maximal einen Mini-Turn pro 15 Minuten Arbeit.
 
 Kosten-Nutzen: Ein Tick kostet ca. 10% des Kontextpreises (Cache-Read), der vermiedene Cold-Restart 125%. Bei einer 200k-Token-Session: Tick ca. $0.30, ersparter Re-Write ca. $3.40.
 
@@ -38,6 +39,7 @@ Gilt für neu gestartete Sessions. Der Hook-State liegt unter `%LOCALAPPDATA%\ai
 - `minTranscriptKB` (200) — Mindestgrösse des Transkripts, darunter kein Keepwarm.
 - `delaySeconds` (3300) — Tick-Abstand; muss unter der Cache-TTL (1h) liegen.
 - `maxTicks` (3) — maximale aufeinanderfolgende Ticks ohne echte User-Aktivität.
+- `rescheduleAfterSeconds` (900) — ab diesem Alter des pending Wakeups zieht echte Aktivität den Timer wieder auf volle 55 min nach.
 - `quietFrom` / `quietTo` (leer = aus) — Ruhefenster im Format `HH:mm`, in dem keine neuen Ticks geplant werden, z.B. `23:30`/`06:30`.
 
 ## Testen
