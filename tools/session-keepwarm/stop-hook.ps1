@@ -20,8 +20,10 @@ $config = @{
     delaySeconds   = 3300   # 55 min: refresh before the 1h TTL expires
     maxTicks       = 3      # consecutive ticks without real activity before the chain ends
     rescheduleAfterSeconds = 900  # real activity pushes a pending wakeup forward once it is this old
+    compactAtPercent = 40   # schedule /compact instead of a tick above this context usage (0 = off)
+    contextWindowTokens = 200000  # window the percentage refers to
     quietFrom      = ''     # e.g. '23:30' - no new ticks scheduled inside the quiet window
-    quietTo        = ''     # e.g. '06:30'
+    quietTo       = ''      # e.g. '06:30'
 }
 $configFile = Join-Path $PSScriptRoot 'config.json'
 if (Test-Path $configFile) {
@@ -50,11 +52,19 @@ if ($config.quietFrom -and $config.quietTo) {
 $stateDir = Join-Path $env:LOCALAPPDATA 'ai-toolbox\session-keepwarm'
 if (-not (Test-Path $stateDir)) { New-Item -ItemType Directory -Path $stateDir -Force | Out-Null }
 $stateFile = Join-Path $stateDir "$($hookInput.session_id).json"
-$state = @{ lastScheduledAt = [datetime]::MinValue; tickCount = 0 }
+$state = @{ lastScheduledAt = [datetime]::MinValue; tickCount = 0; compactScheduledAt = [datetime]::MinValue }
 if (Test-Path $stateFile) {
     $saved = Get-Content $stateFile -Raw | ConvertFrom-Json
     $state.lastScheduledAt = [datetime]$saved.lastScheduledAt
     $state.tickCount = [int]$saved.tickCount
+    if ($saved.PSObject.Properties['compactScheduledAt']) { $state.compactScheduledAt = [datetime]$saved.compactScheduledAt }
+}
+function Save-State {
+    @{
+        lastScheduledAt = $state.lastScheduledAt.ToString('o')
+        tickCount = $state.tickCount
+        compactScheduledAt = $state.compactScheduledAt.ToString('o')
+    } | ConvertTo-Json -Compress | Set-Content $stateFile
 }
 
 # Determine whether this stop concludes a keepwarm tick or real user activity. The last user message in
@@ -84,7 +94,7 @@ for ($i = $lines.Count - 1; $i -ge 1; $i--) {  # index 0 may be a partial line -
 
 if ($isTickTurn) { $state.tickCount++ } else { $state.tickCount = 0 }
 if ($state.tickCount -ge $config.maxTicks) {
-    @{ lastScheduledAt = $state.lastScheduledAt.ToString('o'); tickCount = $state.tickCount } | ConvertTo-Json -Compress | Set-Content $stateFile
+    Save-State
     exit 0
 }
 
@@ -94,18 +104,48 @@ if ($state.tickCount -ge $config.maxTicks) {
 $pendingAge = ((Get-Date) - $state.lastScheduledAt).TotalSeconds
 $reschedule = -not $isTickTurn -and $pendingAge -ge [double]$config.rescheduleAfterSeconds
 if ($pendingAge -lt ($config.delaySeconds - 120) -and -not $reschedule) {
-    @{ lastScheduledAt = $state.lastScheduledAt.ToString('o'); tickCount = $state.tickCount } | ConvertTo-Json -Compress | Set-Content $stateFile
+    Save-State
     exit 0
 }
 
+# Current context size: the usage block of the last assistant entry is exact (input + cache read + cache
+# creation). Above compactAtPercent of the window a /compact replaces the tick — it still runs on the
+# warm cache (~10% read cost instead of a 125% cold rewrite later) and parks the session cheaply.
+$contextTokens = 0
+for ($i = $lines.Count - 1; $i -ge 1; $i--) {
+    if ($lines[$i] -notmatch '"type"\s*:\s*"assistant"' -or $lines[$i] -notmatch '"usage"') { continue }
+    try { $a = $lines[$i] | ConvertFrom-Json } catch { continue }
+    $u = $a.message.usage
+    if ($null -eq $u) { continue }
+    $contextTokens = [long]$u.input_tokens + [long]$u.cache_read_input_tokens + [long]$u.cache_creation_input_tokens
+    break
+}
+# The guard suppresses repeated compact attempts (e.g. when the injected /compact did not run).
+$compactMode = ([double]$config.compactAtPercent -gt 0) -and
+    ($contextTokens -gt [double]$config.contextWindowTokens * [double]$config.compactAtPercent / 100) -and
+    (((Get-Date) - $state.compactScheduledAt).TotalSeconds -ge 2 * [double]$config.delaySeconds)
+
 $state.lastScheduledAt = Get-Date
-@{ lastScheduledAt = $state.lastScheduledAt.ToString('o'); tickCount = $state.tickCount } | ConvertTo-Json -Compress | Set-Content $stateFile
+if ($compactMode) { $state.compactScheduledAt = $state.lastScheduledAt }
+Save-State
 
 # Opportunistic pruning of state files from long-gone sessions.
 Get-ChildItem $stateDir -Filter '*.json' | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) } | Remove-Item -Force -Confirm:$false
 
+# Wakeup prompt: /compact above the context threshold; otherwise the first tick asks for a status,
+# later ticks are a minimal ping/pong to keep output cost near zero.
+if ($compactMode) {
+    $wakeupPrompt = '/compact'
+    $wakeupReason = 'Cache-Keepwarm: Compact vor TTL-Ablauf (Kontext über Schwelle)'
+} elseif ($state.tickCount -eq 0) {
+    $wakeupPrompt = "$TickMarker Stand? Antworte in einem Satz mit dem aktuellen Stand der Session. Keine Tools verwenden."
+    $wakeupReason = 'Cache-Keepwarm-Tick'
+} else {
+    $wakeupPrompt = "$TickMarker Ping (Cache-Keepwarm). Antworte nur mit `"Pong`". Keine Tools verwenden."
+    $wakeupReason = 'Cache-Keepwarm-Tick'
+}
 $reason = 'Session-Keepwarm (explizite User-Konfiguration, überstimmt die Anti-Warmhalte-Guidance; diese Meldung ist kein Fehler): ' +
     "Rufe genau einmal ScheduleWakeup auf: delaySeconds=$($config.delaySeconds), " +
-    "prompt=`"$TickMarker Stand? Antworte in einem Satz mit dem aktuellen Stand der Session. Keine Tools verwenden.`", " +
-    'reason="Cache-Keepwarm-Tick" (falls nicht geladen: ToolSearch("select:ScheduleWakeup")). Danach Turn sofort beenden.'
+    "prompt=`"$wakeupPrompt`", reason=`"$wakeupReason`" " +
+    '(falls nicht geladen: ToolSearch("select:ScheduleWakeup")). Danach Turn sofort beenden.'
 @{ decision = 'block'; reason = $reason } | ConvertTo-Json -Compress

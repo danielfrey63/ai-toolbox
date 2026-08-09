@@ -18,7 +18,7 @@ $big = Join-Path $testDir 'big.jsonl'
 Set-Content $big ($filler + $real)
 
 $out = Invoke-Hook @{ session_id = $sid; transcript_path = $big; stop_hook_active = $false }
-"T1 big+real -> blocked: $([bool]$out) (expect True)"
+"T1 big+real -> blocked: $([bool]$out), status prompt: $($out -match 'Stand\?') (expect True, True)"
 $out = Invoke-Hook @{ session_id = $sid; transcript_path = $big; stop_hook_active = $false }
 "T2 repeat while pending fresh -> blocked: $([bool]$out) (expect False)"
 
@@ -46,8 +46,21 @@ foreach ($n in 1..4) {
     @{ lastScheduledAt = (Get-Date).AddHours(-2).ToString('o'); tickCount = $state.tickCount } | ConvertTo-Json -Compress | Set-Content $stateFile
     $out = Invoke-Hook @{ session_id = $sid; transcript_path = $tickFile; stop_hook_active = $false }
     $count = (Get-Content $stateFile -Raw | ConvertFrom-Json).tickCount
-    "T5.$n tick turn -> blocked: $([bool]$out), tickCount: $count (expect blocked until tickCount reaches 3)"
+    "T5.$n tick turn -> blocked: $([bool]$out), tickCount: $count, pong prompt: $($out -match 'Pong') (expect blocked+pong until tickCount reaches 3)"
 }
+
+# Context above compactAtPercent of the window -> /compact replaces the tick; the guard suppresses a
+# second compact within 2x delay.
+$usage = '{"type":"assistant","message":{"role":"assistant","model":"claude-fable-5","usage":{"input_tokens":10,"cache_read_input_tokens":450000,"cache_creation_input_tokens":500,"output_tokens":5}}}'
+$bigCtx = Join-Path $testDir 'bigctx.jsonl'
+Set-Content $bigCtx ($filler + $real + "`n" + $usage)
+Remove-Item $stateFile -Force
+$out = Invoke-Hook @{ session_id = $sid; transcript_path = $bigCtx; stop_hook_active = $false }
+"T6 context 450k/1M -> blocked: $([bool]$out), compact prompt: $($out -match '/compact') (expect True, True)"
+$state = Get-Content $stateFile -Raw | ConvertFrom-Json
+@{ lastScheduledAt = (Get-Date).AddHours(-2).ToString('o'); tickCount = 0; compactScheduledAt = $state.compactScheduledAt } | ConvertTo-Json -Compress | Set-Content $stateFile
+$out = Invoke-Hook @{ session_id = $sid; transcript_path = $bigCtx; stop_hook_active = $false }
+"T7 compact recently scheduled -> blocked: $([bool]$out), compact prompt: $($out -match '/compact') (expect True, False: falls back to tick)"
 
 Remove-Item $testDir -Recurse -Force
 Remove-Item $stateFile -Force
