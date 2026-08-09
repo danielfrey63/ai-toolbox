@@ -4,7 +4,7 @@
   "delaySeconds": 3300,
   "maxTicks": 3,
   "rescheduleAfterSeconds": 900,
-  "compactAtPercent": 40,
+  "compactAtPercent": 0,
   "contextWindowTokens": 1000000,
   "quietFrom": "",
   "quietTo": ""
