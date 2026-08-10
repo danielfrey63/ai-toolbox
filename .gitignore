@@ -18,3 +18,6 @@ cc-profil/profiles/*.env
 
 # Python bytecode caches (py_compile / test runs on the skill scripts)
 __pycache__/
+
+# transcribe skill output reports (top-level only — .agents/skills/transcribe/ stays tracked)
+/transcribe/
