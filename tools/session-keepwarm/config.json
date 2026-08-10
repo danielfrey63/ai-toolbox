@@ -2,7 +2,7 @@
   "enabled": true,
   "minTranscriptKB": 200,
   "delaySeconds": 3300,
-  "maxTicks": 3,
+  "maxTicks": 10,
   "rescheduleAfterSeconds": 900,
   "compactAtPercent": 0,
   "contextWindowTokens": 1000000,
