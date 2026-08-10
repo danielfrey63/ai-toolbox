@@ -21,7 +21,7 @@ Sobald ein Text **in Daniels Namen** entworfen wird (Chat, Mail, Teams) — in j
 
 - **Shell:** Bash.
 - **Kommando-Trennung:** `&&` für bedingte Verkettung, `;` nur für unkonditionierte Trennung.
-- **SSH:** Lokaler `ssh-agent` (Bash lädt `eval "$(ssh-agent -s)" && ssh-add ~/.ssh/id_rsa` beim Start).
+- **SSH:** Desktop-Keyring-Agent (gcr) — die bashrc setzt `SSH_AUTH_SOCK` auf `$XDG_RUNTIME_DIR/gcr/ssh`, ein Agent für die ganze Login-Session (Keys einmalig per `ssh-add ~/.ssh/id_rsa` laden bzw. beim Login entsperren). Eigener `ssh-agent` nur als Fallback ohne Desktop (TTY/SSH-Login).
 
 ### Windows-Devbox (PowerShell + WSL)
 
@@ -130,4 +130,4 @@ In `~/.claude/settings.json` sind ungenutzte Built-in-Tools abgeschaltet (Analys
 - **`disableArtifact: true`** — kein Publizieren von Artifacts auf claude.ai. Reaktivieren für teilbare HTML-Reports/Seiten.
 - **Bewusst AKTIV gelassen**: AskUserQuestion (häufig genutzt, von dieser CLAUDE.md verlangt), Task-Tools, Agent/Skill/ToolSearch, ScheduleWakeup (für `/loop` und den session-keepwarm Stop-Hook, siehe `tools/session-keepwarm/`), SendUserFile, ReportFindings (für `/code-review`), Bundled Skills (`/loop`, `/update-config` in Nutzung), Remote Control (remoteControlAtStartup), claude.ai-Connectoren (gdrive-Skill braucht Google Drive; abschaltbar nur alle zusammen via `disableClaudeAiConnectors`).
 
-<!-- APP_VERSION: 0.9.15 -->
+<!-- APP_VERSION: 0.10.17 -->
