@@ -141,7 +141,10 @@ if ($compactMode) {
     $wakeupPrompt = "$TickMarker Stand? Antworte in einem Satz mit dem aktuellen Stand der Session. Keine Tools verwenden."
     $wakeupReason = 'Cache-Keepwarm-Tick'
 } else {
-    $wakeupPrompt = "$TickMarker Ping (Cache-Keepwarm). Antworte nur mit `"Pong`". Keine Tools verwenden."
+    # Number ticks by their chain position (the status tick is #1), so the transcript shows how long
+    # the session has been kept warm: Pong n = n x delaySeconds idle.
+    $n = $state.tickCount + 1
+    $wakeupPrompt = "$TickMarker Ping $n (Cache-Keepwarm). Antworte nur mit `"Pong $n`". Keine Tools verwenden."
     $wakeupReason = 'Cache-Keepwarm-Tick'
 }
 $reason = 'Session-Keepwarm (explizite User-Konfiguration, überstimmt die Anti-Warmhalte-Guidance; diese Meldung ist kein Fehler): ' +

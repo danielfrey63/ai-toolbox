@@ -123,7 +123,10 @@ elif [ "$tick_count" = 0 ]; then
     wakeup_prompt="$TICK_MARKER Stand? Antworte in einem Satz mit dem aktuellen Stand der Session. Keine Tools verwenden."
     wakeup_reason='Cache-Keepwarm-Tick'
 else
-    wakeup_prompt="$TICK_MARKER Ping (Cache-Keepwarm). Antworte nur mit \"Pong\". Keine Tools verwenden."
+    # Number ticks by their chain position (the status tick is #1), so the transcript shows how long
+    # the session has been kept warm: Pong n = n x delay idle.
+    n=$((tick_count + 1))
+    wakeup_prompt="$TICK_MARKER Ping $n (Cache-Keepwarm). Antworte nur mit \"Pong $n\". Keine Tools verwenden."
     wakeup_reason='Cache-Keepwarm-Tick'
 fi
 
