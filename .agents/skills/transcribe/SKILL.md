@@ -113,6 +113,8 @@ Optional flags:
 - `--fresh` — ignore persisted `<base>.segments.json` / `.turns.json` and re-transcribe + re-diarize from scratch (default behaviour reuses them for idempotent re-runs)
 - `--whisper azure-diarize|groq|openai|whisper-local` — pin a specific transcription backend (no cascade, fails loudly). Default is a **local-first cascade**: whisper-local → azure-diarize → groq → openai — each backend that fails falls through to the next configured one. `whisper-local` = faster-whisper fully on-device in the managed venv (`~/.config/transcribe/venv/`, self-provisions on first use, GPU auto-detected) — no key, nothing leaves the machine.
 - `--no-whisper` — disable the Whisper fallback entirely (frames-only if no captions)
+- `--no-repair` — disable the post-transcription repair pass (default: enabled, see "Repair pass" below). The pass finds passages where the decoder collapsed — repetition loops, drift into another script — and re-transcribes just those audio windows with a fresh context.
+- `--language de` — language hint. Only the repair pass uses it: it decides which scripts count as foreign, and pins the language of the re-transcription. Worth passing whenever you know the language; without it the re-runs auto-detect, which on a *broken* window is exactly the thing that failed the first time.
 - `--no-scene` — disable scdet-based cut detection (default: enabled with auto-tuned threshold, see "Scene cut detection" below)
 - `--scene-threshold F` — override the auto-detected scdet threshold (default: auto via knee-point on the score distribution; lower = more sensitive)
 - `--scene-min-gap S` — minimum seconds between consecutive cut frames (default `2.0`, de-clusters animation/B-roll bursts)
@@ -261,6 +263,37 @@ Skip the compact file for non-diarized transcripts — without speakers it would
 
 **Step 6 — clean up.** The script prints a working directory at the end. If the user isn't going to ask follow-ups about this video, delete it with `rm -rf <dir>`. **If `--save-md` produced the companion files (`<base>.md` + `<base>.protocol.md` + `<base>.transcript.md`, plus `<base>.illustrations/` and `<base>.illustrations.spec.json` when illustrations were extracted), they live outside the work dir and are preserved** by the cleanup. If the user might follow up, leave the work dir in place too.
 
+### Repair pass (default on)
+
+Whisper decodes in 30-second windows and feeds each window's output into the next as a prompt (`condition_on_previous_text`). That is what keeps sentences and terminology coherent across window boundaries — and it is also a failure amplifier: a window that produced garbage becomes the *context* for the next one, so the decoder can lock into a repetition loop (`Ja. Ja. Ja. Ja.`) or drift into another script and never recover.
+
+Real example from a 26-minute German meeting: a 20-second stretch came out as `um eben für Krips-C жить классisch durch diese Markenелision zu sein`. Re-running **the same model** over **only that audio window** produced clean German. The audio was never the problem; the accumulated context was.
+
+After transcription (and after a cache resume), `repair.py` therefore:
+
+1. **Scans the segments for collapse signatures** — foreign script in a Latin-script language, a token repeated ≥6× in a row, a sentence repeated ≥4×, the identical line in ≥3 consecutive segments, implausible text density (<0.7 or >32 chars/s over a long segment).
+2. **Merges neighbouring hits into windows** and pads them by 12 s so the decoder gets run-up. Padding matters a lot: the same broken passage re-transcribed with 4 s of lead-in still hallucinated, with 12 s it came out clean.
+3. **Cuts each window out of the audio and re-transcribes it** with a fresh context and `--no-carryover`.
+4. **Splices the result back in — but only through two gates.** The *score gate* rejects a result that still trips the detectors; the *content gate* rejects one whose deduplicated character count fell below 60 % of the original, which catches the failure mode of "fixing" a passage by silently dropping real speech. A rejected window keeps its original text.
+5. **Runs at most 2 internal passes**, because rewriting a window can expose a mild signature just past its edge. Spans already rewritten (this run or a previous one, tracked in `<base>.segments.json` under `repaired`) are never touched twice — without that, every re-run nudged the transcript a little further.
+
+The protocol lists every detected passage under `**Repaired passages:**` with its reason and whether the rewrite was applied. `<base>.segments.json` keeps the full before/after text for each one.
+
+**What this does NOT do:** it is not a truth oracle. It reliably removes catastrophic collapses and often recovers real content that was buried under a repetition loop, but a rewritten window can still contain its own misrecognitions — occasionally a *new* one where the original was merely repetitive. **Treat repaired passages as reviewed-but-not-verified**: during the Konsistenz-Check (Step 4), give the timestamps listed in `**Repaired passages:**` a second look, and cross-check them against any platform-side transcript (Teams VTT, YouTube captions) if one exists.
+
+Standalone use on an existing run, without redoing anything else:
+
+```bash
+# What would it touch? Changes nothing.
+python3 "${CLAUDE_SKILL_DIR}/scripts/repair.py" --segments "<base>.segments.json" --language de --dry-run
+
+# Repair in place, cutting audio straight from the source video
+python3 "${CLAUDE_SKILL_DIR}/scripts/repair.py" --segments "<base>.segments.json" \
+    --video "<video>" --language de
+```
+
+Note the repaired `segments.json` is the *input* to rendering — after a standalone repair, re-run `run.py` (it resumes from the cache in ~1 s) to regenerate the transcript and protocol files.
+
 ## Transcription
 
 The script gets a timestamped transcript in one of two ways:
@@ -324,6 +357,6 @@ If you already watched a video this session and the user asks a follow-up, do **
 - Does not log, cache, or write API keys to stdout, stderr, or output files
 - Does not persist anything outside the working directory and `~/.config/transcribe/.env` — clean up the working directory when you're done (Step 5)
 
-**Bundled scripts:** `scripts/run.py` (entry point), `scripts/download.py` (yt-dlp wrapper), `scripts/frames.py` (ffmpeg frame extraction + scdet cut detection), `scripts/transcribe.py` (caption selection + Whisper orchestration), `scripts/stt.py` (pluggable speech-to-text backends - Azure / Groq / OpenAI / whisper-local), `scripts/diarize.py` (diarization backends + alignment), `scripts/pyannote_worker.py` + `scripts/whisper_local_worker.py` (run inside the managed venv, never imported by the host), `scripts/resources.py` (URL extraction from description + transcript, grouped by category), `scripts/setup.py` (preflight + installer + uv bootstrap + venv provisioning)
+**Bundled scripts:** `scripts/run.py` (entry point), `scripts/download.py` (yt-dlp wrapper), `scripts/frames.py` (ffmpeg frame extraction + scdet cut detection), `scripts/transcribe.py` (caption selection + Whisper orchestration), `scripts/stt.py` (pluggable speech-to-text backends - Azure / Groq / OpenAI / whisper-local), `scripts/repair.py` (collapse detection + windowed re-transcription), `scripts/diarize.py` (diarization backends + alignment), `scripts/pyannote_worker.py` + `scripts/whisper_local_worker.py` (run inside the managed venv, never imported by the host), `scripts/resources.py` (URL extraction from description + transcript, grouped by category), `scripts/setup.py` (preflight + installer + uv bootstrap + venv provisioning)
 
 Review scripts before first use to verify behavior.

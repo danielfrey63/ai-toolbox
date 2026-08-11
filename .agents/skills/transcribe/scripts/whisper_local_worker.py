@@ -6,6 +6,14 @@ Contract: argv[1] = audio path, optional argv[2] = language code (e.g. "de";
 omit for auto-detect). JSON segments [{start, end, text}] on stdout,
 progress on stderr.
 
+Optional flag `--no-carryover` (anywhere in argv) disables Whisper's
+condition_on_previous_text. Whisper normally feeds each 30s window's output
+into the next one as a prompt, which keeps sentences and terminology
+coherent across window boundaries. The failure mode is that a window which
+produced garbage poisons the next one, so the model can lock into a
+repetition loop or drift into the wrong language and never recover.
+repair.py uses this when re-transcribing a collapsed passage.
+
 faster-whisper rides on ctranslate2 (torch-free), so it coexists with the
 pyannote stack in the same venv and uses the GPU when CUDA libs are present.
 large-v3 on GPU transcribes ~8x realtime; the CPU fallback drops to the
@@ -24,8 +32,12 @@ def log(msg: str) -> None:
 
 
 def main() -> int:
-    audio_path = Path(sys.argv[1])
-    language = sys.argv[2] if len(sys.argv) > 2 else None
+    argv = list(sys.argv[1:])
+    carryover = "--no-carryover" not in argv
+    if not carryover:
+        argv.remove("--no-carryover")
+    audio_path = Path(argv[0])
+    language = argv[1] if len(argv) > 1 else None
 
     from faster_whisper import WhisperModel
 
@@ -39,10 +51,12 @@ def main() -> int:
                              cpu_threads=threads)
         desc = f"medium / cpu int8 ({threads} threads)"
 
-    log(f"transcribing {audio_path.name} with faster-whisper {desc} "
+    log(f"transcribing {audio_path.name} with faster-whisper {desc}"
+        f"{'' if carryover else ' (no context carryover)'} "
         f"(first run downloads the model)...")
     segments, info = model.transcribe(str(audio_path), language=language,
-                                      vad_filter=True)
+                                      vad_filter=True,
+                                      condition_on_previous_text=carryover)
     out = [
         {
             "start": round(float(seg.start), 2),

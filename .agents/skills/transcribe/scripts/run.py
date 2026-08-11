@@ -258,6 +258,21 @@ def main() -> int:
              "extracted at every detected cut, in addition to the regular sampling.",
     )
     ap.add_argument(
+        "--no-repair",
+        action="store_true",
+        help="Disable the post-transcription repair pass. By default, passages "
+             "where the decoder collapsed (repetition loops, drift into another "
+             "script) are detected and re-transcribed from their own audio "
+             "window with a fresh context.",
+    )
+    ap.add_argument(
+        "--language",
+        default=None,
+        help='Language hint, e.g. "de". Only used by the repair pass, to decide '
+             "which scripts count as foreign and to pin the re-transcription. "
+             "Omit for auto-detect.",
+    )
+    ap.add_argument(
         "--scene-threshold",
         type=float,
         default=None,
@@ -643,6 +658,7 @@ def main() -> int:
         )
 
     transcript_segments: list[dict] = []
+    all_segments: list[dict] = []  # unfiltered; transcript_segments may be a --start/--end slice
     transcript_text: str | None = None
     transcript_source: str | None = None
     audio_path: Path | None = None  # populated on first audio extraction
@@ -751,6 +767,60 @@ def main() -> int:
                     )
                 else:
                     print(f"[transcribe] transcription failed: {exc}", file=sys.stderr)
+
+    # Repair pass: Whisper's condition_on_previous_text carries each window's
+    # output into the next, so one collapsed window can poison a whole stretch
+    # (repetition loops, drift into another script). repair.py finds those
+    # passages and re-transcribes just their audio with a fresh context. Only
+    # meaningful for ASR output - VTT captions come from the platform, not a
+    # decoder, and have no such failure mode.
+    repair_report: list[dict] = []
+    if (transcript_segments and not args.no_repair
+            and (transcript_source or "").startswith("transcript")):
+        try:
+            from repair import repair_segments
+
+            if audio_path is None or not audio_path.exists():
+                audio_path = extract_audio(video_path, work / "audio.mp3")
+            # Spans an earlier run already rewrote - never touch them twice,
+            # otherwise every re-run nudges the transcript a little further.
+            prior: list[dict] = []
+            if seg_cache.exists():
+                try:
+                    prior = json.loads(seg_cache.read_text(encoding="utf-8")).get("repaired", [])
+                except (ValueError, OSError):
+                    prior = []
+            skip_spans = [(r["padded_start"], r["padded_end"])
+                          for r in prior if r.get("applied")]
+
+            fixed, repair_report = repair_segments(
+                all_segments or transcript_segments, audio_path,
+                language=args.language, duration=full_duration,
+                skip_spans=skip_spans,
+            )
+            if any(r.get("applied") for r in repair_report):
+                all_segments = fixed
+                transcript_segments = (
+                    filter_range(all_segments, start_sec, end_sec) if focused else all_segments
+                )
+                # Keep the cache in step so a resumed run starts from the
+                # repaired text instead of redoing the same repairs.
+                if seg_cache.exists():
+                    try:
+                        payload = json.loads(seg_cache.read_text(encoding="utf-8"))
+                        payload["segments"] = all_segments
+                        payload["repaired"] = prior + [
+                            {k: r.get(k) for k in
+                             ("padded_start", "padded_end", "reasons", "applied",
+                              "old_text", "new_text")}
+                            for r in repair_report
+                        ]
+                        seg_cache.write_text(json.dumps(payload), encoding="utf-8")
+                    except (ValueError, KeyError, OSError) as exc:
+                        print(f"[transcribe] repair: cache not updated ({exc})",
+                              file=sys.stderr)
+        except (SystemExit, ImportError, OSError) as exc:
+            print(f"[transcribe] repair skipped ({exc})", file=sys.stderr)
 
     # Pyannote runs alongside Whisper and aligns to the transcript;
     # AssemblyAI already delivered speakers above.
@@ -967,6 +1037,19 @@ def main() -> int:
         )
     else:
         emit("- **Transcript:** none available")
+    if repair_report:
+        applied = [r for r in repair_report if r.get("applied")]
+        emit(
+            f"- **Repaired passages:** {len(applied)} of {len(repair_report)} "
+            f"detected (decoder collapse; re-transcribed from their own audio "
+            f"window with a fresh context)"
+        )
+        for r in repair_report:
+            mark = "replaced" if r.get("applied") else "kept original"
+            emit(
+                f"  - `{format_time(r['padded_start'])}-{format_time(r['padded_end'])}` "
+                f"{mark} - {', '.join(r['reasons'])}"
+            )
     if save_md_path:
         emit(f"- **Protocol file:** `{protocol_path}`")
         emit(f"- **Transcript file:** `{transcript_path}`")
