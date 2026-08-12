@@ -80,6 +80,48 @@ function Get-LastActivity([System.IO.FileInfo]$file) {
     return $file.LastWriteTime
 }
 
+# Human-readable session label: the first real user message (what the resume picker shows). Injected
+# meta messages (caveats, command wrappers, hook feedback, keepwarm ticks) are skipped.
+function Get-SessionTitle([System.IO.FileInfo]$file) {
+    try {
+        foreach ($line in Get-Content -LiteralPath $file.FullName -TotalCount 50) {
+            if ($line -notmatch '"type"\s*:\s*"user"') { continue }
+            try { $entry = $line | ConvertFrom-Json } catch { continue }
+            $content = $entry.message.content
+            if ($content -isnot [string]) { continue }
+            if ($content -match '^(Caveat:|<|\[keepwarm-tick\]|Stop hook feedback:)') { continue }
+            $t = ($content -replace '\s+', ' ').Trim()
+            if ($t.Length -gt 60) { $t = $t.Substring(0, 57) + '...' }
+            return $t
+        }
+    } catch {}
+    return '(no user message)'
+}
+
+# Timestamp of the last entry two diverged copies still share - the fork happened after this moment.
+function Get-ForkPoint([System.IO.FileInfo]$a, [System.IO.FileInfo]$b) {
+    try {
+        $bytesA = [IO.File]::ReadAllBytes($a.FullName)
+        $bytesB = [IO.File]::ReadAllBytes($b.FullName)
+        $max = [Math]::Min($bytesA.Length, $bytesB.Length)
+        $common = 0
+        # Block compare first, then byte-scan inside the first differing block.
+        while ($common -lt $max) {
+            $len = [int][Math]::Min(65536, $max - $common)
+            $segA = [ArraySegment[byte]]::new($bytesA, $common, $len)
+            $segB = [ArraySegment[byte]]::new($bytesB, $common, $len)
+            if (-not [Linq.Enumerable]::SequenceEqual($segA, $segB)) { break }
+            $common += $len
+        }
+        $end = [Math]::Min($common + 65536, $max)
+        while ($common -lt $end -and $bytesA[$common] -eq $bytesB[$common]) { $common++ }
+        if ($common -eq 0) { return $null }
+        $m = [regex]::Matches([Text.Encoding]::UTF8.GetString($bytesA, 0, $common), '"timestamp"\s*:\s*"([^"]+)"')
+        if ($m.Count -gt 0) { return ([datetime]$m[$m.Count - 1].Groups[1].Value).ToLocalTime().ToString('yyyy-MM-dd HH:mm') }
+    } catch {}
+    return $null
+}
+
 # True when $small's full content is a byte prefix of $big (identical files included).
 function Test-PrefixOf([System.IO.FileInfo]$small, [System.IO.FileInfo]$big) {
     if ($small.Length -gt $big.Length) { return $false }
@@ -140,15 +182,25 @@ foreach ($g in $dupGroups) {
         @{ Expression = 'Length'; Descending = $true },
         @{ Expression = 'LastWriteTime'; Descending = $true })
     $keeper = $ranked[0]
+    # Compare each copy against ALL kept ones, not only the keeper: two identical old copies that both
+    # diverge from the keeper still contain each other.
+    $kept = [Collections.Generic.List[System.IO.FileInfo]]::new()
+    $kept.Add($keeper)
     foreach ($other in ($ranked | Select-Object -Skip 1)) {
-        if (Test-PrefixOf $other $keeper) {
+        $container = $kept | Where-Object { Test-PrefixOf $other $_ } | Select-Object -First 1
+        if ($container) {
             if ($DryRun) {
-                Write-Log "DRYRUN would trash duplicate $($other.Directory.Name)\$($other.Name) (contained in $($keeper.Directory.Name))"
-            } elseif (Move-SessionToTrash $other "duplicate, contained in $($keeper.Directory.Name)") {
+                Write-Log "DRYRUN would trash duplicate $($other.Directory.Name)\$($other.Name) (contained in $($container.Directory.Name))"
+            } elseif (Move-SessionToTrash $other "duplicate, contained in $($container.Directory.Name)") {
                 $deduped++
             }
         } else {
-            Write-Log "kept diverged copy $($other.Directory.Name)\$($other.Name) (differs from $($keeper.Directory.Name) - review manually)"
+            $sizeMB = [math]::Round($other.Length / 1MB, 1)
+            $info = "`"$(Get-SessionTitle $other)`", ${sizeMB}MB, last activity $((Get-LastActivity $other).ToString('yyyy-MM-dd'))"
+            $fork = Get-ForkPoint $other $keeper
+            $forkTxt = if ($fork) { ", forked from $($keeper.Directory.Name) copy after $fork" } else { '' }
+            Write-Log "kept diverged copy $($other.Directory.Name)\$($other.Name) ($info$forkTxt - review manually)"
+            $kept.Add($other)
         }
     }
 }

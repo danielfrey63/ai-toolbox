@@ -74,6 +74,38 @@ trash_session() {
     return 1
 }
 
+# Human-readable session label: the first real user message (what the resume picker shows). Injected
+# meta messages (caveats, command wrappers, hook feedback, keepwarm ticks) are skipped.
+session_title() {
+    local f="$1" line content
+    while IFS= read -r line; do
+        case "$line" in *'"type"'*'"user"'*) ;; *) continue ;; esac
+        content=$(printf '%s' "$line" | grep -oE '"content"[[:space:]]*:[[:space:]]*"(\\.|[^"\\])*"' | head -1 | sed -E 's/^"content"[[:space:]]*:[[:space:]]*"//; s/"$//')
+        [ -n "$content" ] || continue
+        case "$content" in Caveat:*|'<'*|'[keepwarm-tick]'*|'Stop hook feedback:'*) continue ;; esac
+        content=$(printf '%s' "$content" | tr -s '[:space:]' ' ')
+        if [ "${#content}" -gt 60 ]; then content="${content:0:57}..."; fi
+        printf '%s' "$content"
+        return
+    done < <(head -n 50 "$f")
+    printf '(no user message)'
+}
+
+# Timestamp of the last entry two diverged copies still share - the fork happened after this moment.
+fork_point() {
+    local a="$1" b="$2" out byte common ts
+    out=$(cmp -- "$a" "$b" 2>&1) || true
+    byte=$(printf '%s' "$out" | grep -oE 'byte [0-9]+' | head -1 | grep -oE '[0-9]+') || true
+    [ -n "$byte" ] || return 0
+    # "differ: byte N" is the 1-based first difference; "EOF ... after byte N" means N common bytes.
+    common=$byte
+    case "$out" in *differ:*) common=$((byte - 1)) ;; esac
+    [ "$common" -gt 0 ] || return 0
+    ts=$(head -c "$common" "$a" | grep -oE '"timestamp"[[:space:]]*:[[:space:]]*"[^"]+"' | tail -1 | sed -E 's/.*"([^"]+)"$/\1/') || true
+    [ -n "$ts" ] || return 0
+    date -d "$ts" '+%Y-%m-%d %H:%M' 2>/dev/null || true
+}
+
 # Liveness per project dir - among equal-content copies the copy in the dir the user works in today
 # must survive, or the session disappears from the resume picker. Neither the cwd recorded inside a
 # copy (may point one or two migrations back) nor the file mtime (touched by pickers and sync tools)
@@ -123,18 +155,32 @@ while IFS= read -r dup_name; do
     )
     keeper=$(printf '%s\n' "$ranked" | head -1 | cut -d' ' -f4-)
     keeper_dir=$(basename "$(dirname "$keeper")")
+    # Compare each copy against ALL kept ones, not only the keeper: two identical old copies that both
+    # diverge from the keeper still contain each other.
+    kept_files=("$keeper")
     while IFS= read -r line; do
         other=$(printf '%s' "$line" | cut -d' ' -f4-)
         other_size=$(printf '%s' "$line" | cut -d' ' -f2)
-        # A copy is redundant when its full content is a byte prefix of the keeper.
-        if cmp -s -n "$other_size" "$other" "$keeper"; then
+        container=""
+        for k in "${kept_files[@]}"; do
+            # A copy is redundant when its full content is a byte prefix of a kept copy.
+            if cmp -s -n "$other_size" "$other" "$k"; then container=$k; break; fi
+        done
+        if [ -n "$container" ]; then
+            container_dir=$(basename "$(dirname "$container")")
             if [ "$DRY_RUN" = 1 ]; then
-                log "DRYRUN would trash duplicate $(basename "$(dirname "$other")")/$dup_name (contained in $keeper_dir)"
-            elif trash_session "$other" "duplicate, contained in $keeper_dir"; then
+                log "DRYRUN would trash duplicate $(basename "$(dirname "$other")")/$dup_name (contained in $container_dir)"
+            elif trash_session "$other" "duplicate, contained in $container_dir"; then
                 deduped=$((deduped + 1))
             fi
         else
-            log "kept diverged copy $(basename "$(dirname "$other")")/$dup_name (differs from $keeper_dir - review manually)"
+            size_mb=$((other_size / 1048576))
+            last=$(date -d "@$(last_activity_epoch "$other")" +%Y-%m-%d)
+            info="\"$(session_title "$other")\", ${size_mb}MB, last activity $last"
+            fork=$(fork_point "$other" "$keeper")
+            [ -n "$fork" ] && info="$info, forked from $keeper_dir copy after $fork"
+            log "kept diverged copy $(basename "$(dirname "$other")")/$dup_name ($info - review manually)"
+            kept_files+=("$other")
         fi
     done < <(printf '%s\n' "$ranked" | tail -n +2)
 done < <(find "$PROJECTS_DIR" -mindepth 2 -maxdepth 2 -type f -name '*.jsonl' -printf '%f\n' | sort | uniq -d)
