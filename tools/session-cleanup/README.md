@@ -1,10 +1,14 @@
 # Session Cleanup
 
-Verschiebt «leere» Claude-Code-Sessions täglich in einen Papierkorb und löscht Papierkorb-Einträge nach Ablauf der Aufbewahrungsfrist endgültig.
+Verschiebt «leere» Claude-Code-Sessions und redundante Duplikat-Kopien täglich in einen Papierkorb und löscht Papierkorb-Einträge nach Ablauf der Aufbewahrungsfrist endgültig.
 
-## Was als «leer» gilt
+## Duplikat-Bereinigung (Phase 1)
 
-Eine Top-Level-Session `~\.claude\projects\<projekt>\<uuid>.jsonl` gilt als leer, wenn Transkript plus Sidecar-Verzeichnis (`<uuid>\` mit Subagent-Transkripten) zusammen kleiner als 250 KB sind und die letzte Aktivität mehr als 3 Tage zurückliegt. Der Alters-Guard verhindert, dass frisch gestartete oder gerade offene Sessions angefasst werden; zusätzlich werden gesperrte (offene) Dateien übersprungen. `memory\`-Verzeichnisse und alle anderen Projekt-Inhalte werden nie berührt.
+Nach einem Projektumzug (z.B. via transfer-cc-sessions) liegt dieselbe Session-UUID in mehreren Projektordnern. Kopien, die byte-identisch mit der behaltenen Kopie sind oder ein striktes Präfix davon, tragen keine Information und wandern in den Papierkorb. Behalten wird die Kopie im «lebendigen» Ordner: Der gemungte Ordnername wird gegen das reale Dateisystem zurückdecodiert (existierende Verzeichnisse ablaufen, Komponenten matchen) — nur so bleibt die Session im `/resume`-Picker des aktuellen Pfads sichtbar. Weder die innere `cwd` (zeigt bei mehrfach migrierten Sessions auf einen Ur-Pfad) noch die mtime (wird von Picker/Sync getoucht) taugen als Signal. Divergierte Kopien werden nie angefasst, nur im Log gemeldet (`kept diverged copy … review manually`).
+
+## Was als «leer» gilt (Phase 2)
+
+Eine Top-Level-Session `~\.claude\projects\<projekt>\<uuid>.jsonl` gilt als leer, wenn Transkript plus Sidecar-Verzeichnis (`<uuid>\` mit Subagent-Transkripten) zusammen kleiner als 250 KB sind und die letzte Aktivität mehr als 3 Tage zurückliegt. Massgeblich ist der jüngste innere `"timestamp"` im Transkript, nicht die mtime — Picker, Cloud-Bridge und Sync-Tools touchen Dateien ohne Inhaltsänderung und würden alte Sessions sonst dauerhaft re-protecten. Der Alters-Guard verhindert, dass frisch gestartete oder gerade offene Sessions angefasst werden; zusätzlich werden gesperrte (offene) Dateien übersprungen. `memory\`-Verzeichnisse und alle anderen Projekt-Inhalte werden nie berührt.
 
 ## Papierkorb statt Hard-Delete
 

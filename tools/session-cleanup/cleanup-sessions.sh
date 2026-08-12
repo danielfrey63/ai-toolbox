@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Moves "empty" Claude Code sessions (small transcripts) into a trash folder and purges trash entries
-# past retention. Bash port of cleanup-sessions.ps1 — see that file for the full description.
-# Desired-state and idempotent: re-runs only act on sessions that currently match the criteria.
+# Moves "empty" Claude Code sessions (small transcripts) and redundant duplicate copies into a trash
+# folder and purges trash entries past retention. Bash port of cleanup-sessions.ps1 — see that file
+# for the full phase descriptions. Desired-state and idempotent: re-runs only act on sessions that
+# currently match the criteria.
 set -euo pipefail
 
 MAX_SIZE_BYTES=$((250 * 1024))
@@ -36,10 +37,111 @@ log() {
 }
 
 now=$(date +%s)
-cutoff=$((now - MIN_AGE_DAYS * 86400))
 today_batch="$TRASH_DIR/$(date +%Y-%m-%d)"
-moved=0
 
+# Last activity of a transcript: the newest inner "timestamp" beats the file mtime, because resume
+# pickers, cloud bridges and sync tools touch files without adding content - mtime alone would
+# re-protect old sessions forever. Files without inner timestamps (bridge stubs) fall back to mtime.
+last_activity_epoch() {
+    local f="$1" ts epoch
+    ts=$(tail -c 262144 "$f" | grep -oE '"timestamp"[[:space:]]*:[[:space:]]*"[^"]+"' | tail -1 | sed -E 's/.*"([^"]+)"$/\1/') || true
+    if [ -n "$ts" ] && epoch=$(date -d "$ts" +%s 2>/dev/null); then
+        echo "$epoch"
+    else
+        stat -c %Y "$f"
+    fi
+}
+
+# Moves a transcript plus its sidecar directory into today's trash batch. A locked/failed move means
+# the session is open right now and is left alone.
+trash_session() {
+    local transcript="$1" label="$2"
+    local project_name session_id sidecar target
+    project_name=$(basename "$(dirname "$transcript")")
+    session_id=$(basename "$transcript" .jsonl)
+    sidecar="$(dirname "$transcript")/$session_id"
+    target="$today_batch/$project_name"
+    mkdir -p "$target"
+    if mv -f "$transcript" "$target/"; then
+        if [ -d "$sidecar" ]; then
+            rm -rf "$target/$session_id"
+            mv -f "$sidecar" "$target/"
+        fi
+        log "trashed $project_name/$(basename "$transcript") ($label)"
+        return 0
+    fi
+    log "skipped $project_name/$(basename "$transcript"): move failed"
+    return 1
+}
+
+# Liveness per project dir - among equal-content copies the copy in the dir the user works in today
+# must survive, or the session disappears from the resume picker. Neither the cwd recorded inside a
+# copy (may point one or two migrations back) nor the file mtime (touched by pickers and sync tools)
+# identifies the current location. The munged dir name itself is the only ground truth: walk existing
+# directories from the filesystem root and match munged component names to see whether the dir still
+# corresponds to an openable path. Munged names are ambiguous ("-" may be "/", " ", "." ...), so
+# every child whose munged name is a component prefix of the remainder is followed.
+live_walk() {
+    local cur="$1" rest="$2" child base m
+    while IFS= read -r child; do
+        base=$(basename "$child")
+        m=$(printf '%s' "$base" | sed 's/[^A-Za-z0-9]/-/g')
+        if [ "$rest" = "$m" ]; then return 0; fi
+        case "$rest" in
+            "$m"-*) live_walk "$child" "${rest#"$m"-}" && return 0 ;;
+        esac
+    done < <(find "$cur" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+    return 1
+}
+declare -A dir_live_cache
+is_live_project_dir() {
+    local name="$1"
+    if [ -z "${dir_live_cache[$name]+x}" ]; then
+        # Absolute Linux paths munge to a leading "-" (/home/... -> -home-...).
+        if [ "${name#-}" != "$name" ] && live_walk / "${name#-}"; then
+            dir_live_cache[$name]=1
+        else
+            dir_live_cache[$name]=0
+        fi
+    fi
+    [ "${dir_live_cache[$name]}" = 1 ]
+}
+
+# --- Phase 1: duplicate copies of the same session across project dirs -------------------------------
+# Tree moves keep the old-path copy (transfer-cc-sessions). A copy that is byte-identical to - or a
+# strict prefix of - the kept copy carries no extra information and goes to trash. Diverged copies are
+# reported and left alone.
+deduped=0
+while IFS= read -r dup_name; do
+    ranked=$(
+        while IFS= read -r f; do
+            live=0
+            is_live_project_dir "$(basename "$(dirname "$f")")" && live=1
+            printf '%s %s %s %s\n' "$live" "$(stat -c %s "$f")" "$(stat -c %Y "$f")" "$f"
+        done < <(find "$PROJECTS_DIR" -mindepth 2 -maxdepth 2 -type f -name "$dup_name") \
+        | sort -k1,1nr -k2,2nr -k3,3nr
+    )
+    keeper=$(printf '%s\n' "$ranked" | head -1 | cut -d' ' -f4-)
+    keeper_dir=$(basename "$(dirname "$keeper")")
+    while IFS= read -r line; do
+        other=$(printf '%s' "$line" | cut -d' ' -f4-)
+        other_size=$(printf '%s' "$line" | cut -d' ' -f2)
+        # A copy is redundant when its full content is a byte prefix of the keeper.
+        if cmp -s -n "$other_size" "$other" "$keeper"; then
+            if [ "$DRY_RUN" = 1 ]; then
+                log "DRYRUN would trash duplicate $(basename "$(dirname "$other")")/$dup_name (contained in $keeper_dir)"
+            elif trash_session "$other" "duplicate, contained in $keeper_dir"; then
+                deduped=$((deduped + 1))
+            fi
+        else
+            log "kept diverged copy $(basename "$(dirname "$other")")/$dup_name (differs from $keeper_dir - review manually)"
+        fi
+    done < <(printf '%s\n' "$ranked" | tail -n +2)
+done < <(find "$PROJECTS_DIR" -mindepth 2 -maxdepth 2 -type f -name '*.jsonl' -printf '%f\n' | sort | uniq -d)
+
+# --- Phase 2: empty sessions -------------------------------------------------------------------------
+cutoff=$((now - MIN_AGE_DAYS * 86400))
+moved=0
 for project_dir in "$PROJECTS_DIR"/*/; do
     [ -d "$project_dir" ] || continue
     project_name=$(basename "$project_dir")
@@ -49,39 +151,29 @@ for project_dir in "$PROJECTS_DIR"/*/; do
         sidecar="$project_dir$session_id"
 
         total_size=$(stat -c %s "$transcript")
-        last_activity=$(stat -c %Y "$transcript")
+        sidecar_last=""
         if [ -d "$sidecar" ]; then
             total_size=$((total_size + $(du -sb "$sidecar" | cut -f1)))
             sidecar_last=$(find "$sidecar" -type f -printf '%T@\n' | sort -n | tail -1 | cut -d. -f1)
-            [ -n "$sidecar_last" ] && [ "$sidecar_last" -gt "$last_activity" ] && last_activity=$sidecar_last
         fi
-
+        # Size check first: parsing timestamps out of every large transcript would dominate the runtime.
         [ "$total_size" -ge "$MAX_SIZE_BYTES" ] && continue
+
+        last_activity=$(last_activity_epoch "$transcript")
+        [ -n "$sidecar_last" ] && [ "$sidecar_last" -gt "$last_activity" ] && last_activity=$sidecar_last
         [ "$last_activity" -ge "$cutoff" ] && continue
 
         size_kb=$((total_size / 1024))
-        last_str=$(date -d "@$last_activity" +%Y-%m-%d)
+        label="${size_kb}KB, last activity $(date -d "@$last_activity" +%Y-%m-%d)"
         if [ "$DRY_RUN" = 1 ]; then
-            log "DRYRUN would trash $project_name/$(basename "$transcript") (${size_kb}KB, last activity $last_str)"
-            continue
-        fi
-
-        target="$today_batch/$project_name"
-        mkdir -p "$target"
-        if mv -f "$transcript" "$target/"; then
-            if [ -d "$sidecar" ]; then
-                rm -rf "$target/$session_id"
-                mv -f "$sidecar" "$target/"
-            fi
-            log "trashed $project_name/$(basename "$transcript") (${size_kb}KB, last activity $last_str)"
+            log "DRYRUN would trash $project_name/$(basename "$transcript") ($label)"
+        elif trash_session "$transcript" "$label"; then
             moved=$((moved + 1))
-        else
-            log "skipped $project_name/$(basename "$transcript"): move failed"
         fi
     done
 done
 
-# Purge trash batches past retention. Batch folders are named yyyy-MM-dd (their trash date).
+# --- Phase 3: purge trash batches past retention. Batch folders are named yyyy-MM-dd (trash date). ---
 purge_cutoff=$(date -d "-$RETENTION_DAYS days" +%Y-%m-%d)
 purged=0
 for batch in "$TRASH_DIR"/*/; do
@@ -98,7 +190,7 @@ for batch in "$TRASH_DIR"/*/; do
     purged=$((purged + 1))
 done
 
-log "done: $moved session(s) trashed, $purged batch(es) purged"
+log "done: $deduped duplicate(s) and $moved empty session(s) trashed, $purged batch(es) purged"
 
 if [ "$DRY_RUN" != 1 ]; then
     printf '%s' "$log_lines" >> "$LOG_FILE"
