@@ -185,6 +185,40 @@ while IFS= read -r dup_name; do
     done < <(printf '%s\n' "$ranked" | tail -n +2)
 done < <(find "$PROJECTS_DIR" -mindepth 2 -maxdepth 2 -type f -name '*.jsonl' -printf '%f\n' | sort | uniq -d)
 
+# --- Phase 1b: distinct sessions sharing a custom title ----------------------------------------------
+# /rename titles live as "custom-title" entries inside the transcript and survive forks and bridge
+# continuations, so genuinely different sessions can show the same name in the resume picker. Their
+# contents are unrelated - nothing can be merged, so they are only reported for a manual rename or
+# trash decision.
+for project_dir in "$PROJECTS_DIR"/*/; do
+    [ -d "$project_dir" ] || continue
+    project_name=$(basename "$project_dir")
+    declare -A title_map=()
+    for transcript in "$project_dir"*.jsonl; do
+        [ -f "$transcript" ] || continue
+        # The last entry wins: a session can be renamed multiple times.
+        line=$(grep '"type"[[:space:]]*:[[:space:]]*"custom-title"' "$transcript" | tail -1) || true
+        [ -n "$line" ] || continue
+        title=$(printf '%s' "$line" | sed -nE 's/.*"customTitle"[[:space:]]*:[[:space:]]*"((\\.|[^"\\])*)".*/\1/p')
+        [ -n "$title" ] || continue
+        title_map[$title]="${title_map[$title]:-}${transcript}"$'\n'
+    done
+    for title in "${!title_map[@]}"; do
+        count=$(printf '%s' "${title_map[$title]}" | grep -c .) || true
+        [ "$count" -ge 2 ] || continue
+        list=""
+        while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            id=$(basename "$f" .jsonl)
+            size_mb=$(( $(stat -c %s "$f") / 1048576 ))
+            last=$(date -d "@$(last_activity_epoch "$f")" +%Y-%m-%d)
+            list="${list:+$list, }${id:0:8} (${size_mb}MB, last $last)"
+        done <<< "${title_map[$title]}"
+        log "same title \"$title\" in $project_name: $list - distinct sessions, rename or trash manually"
+    done
+    unset title_map
+done
+
 # --- Phase 2: empty sessions -------------------------------------------------------------------------
 cutoff=$((now - MIN_AGE_DAYS * 86400))
 moved=0

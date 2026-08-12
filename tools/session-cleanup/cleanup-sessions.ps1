@@ -205,6 +205,31 @@ foreach ($g in $dupGroups) {
     }
 }
 
+# --- Phase 1b: distinct sessions sharing a custom title ----------------------------------------------
+# /rename titles live as "custom-title" entries inside the transcript and survive forks and bridge
+# continuations, so genuinely different sessions can show the same name in the resume picker. Their
+# contents are unrelated - nothing can be merged, so they are only reported for a manual rename or
+# trash decision.
+foreach ($projectDir in Get-ChildItem $projectsDir -Directory) {
+    $titles = @{}
+    foreach ($transcript in Get-ChildItem $projectDir.FullName -Filter '*.jsonl' -File) {
+        $hits = @(Select-String -LiteralPath $transcript.FullName -Pattern '"type"\s*:\s*"custom-title"')
+        if (-not $hits) { continue }
+        # The last entry wins: a session can be renamed multiple times.
+        try { $title = ($hits[-1].Line | ConvertFrom-Json).customTitle } catch { continue }
+        if (-not $title) { continue }
+        if (-not $titles.ContainsKey($title)) { $titles[$title] = [Collections.Generic.List[object]]::new() }
+        $titles[$title].Add($transcript)
+    }
+    foreach ($t in $titles.GetEnumerator()) {
+        if ($t.Value.Count -lt 2) { continue }
+        $list = ($t.Value | ForEach-Object {
+            "$($_.Name.Substring(0, 8)) ($([math]::Round($_.Length / 1MB, 1))MB, last $((Get-LastActivity $_).ToString('yyyy-MM-dd')))"
+        }) -join ', '
+        Write-Log "same title `"$($t.Key)`" in $($projectDir.Name): $list - distinct sessions, rename or trash manually"
+    }
+}
+
 # --- Phase 2: empty sessions -------------------------------------------------------------------------
 $cutoff = (Get-Date).AddDays(-$MinAgeDays)
 $moved = 0
