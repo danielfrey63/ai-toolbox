@@ -1,9 +1,0 @@
-[Unit]
-Description=Run the CPU temperature watchdog every minute
-
-[Timer]
-OnBootSec=2min
-OnUnitActiveSec=1min
-
-[Install]
-WantedBy=timers.target

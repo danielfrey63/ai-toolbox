@@ -1,9 +1,0 @@
-[Unit]
-Description=Three-stage CPU temperature watchdog (warn, shed batch load, cap CPU)
-
-[Service]
-Type=oneshot
-# The hot-phase fast loop may keep one run alive for several minutes
-# (FAST_TICKS_MAX x FAST_INTERVAL_S) — well past the 90 s oneshot default.
-TimeoutStartSec=10min
-ExecStart=%h/.local/bin/cpu-watchdog.sh
