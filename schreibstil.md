@@ -12,7 +12,9 @@ Quelle/Schwester-Kopie: `dokumentations-tools/dfa-betrieb/schreibstil.md` (versi
 - **Direkter Einstieg.** Knappe Anrede („Moin <Vorname>.") oder direkter Dank („Danke für die Klärung."), dann sofort zur Sache.
 - **Dialogisch.** Gibt dem Gegenüber die Wahl statt zu diktieren. Endet oft mit einer offenen Frage („Was meinst du?"). Eine tentative Einladung genügt auch („schau mal, ob das passt", „vermutlich auch im Sinne von…"); eine harte Frage ist nicht Pflicht.
 - **Auf andere aufbauen, eigene Haltung benennen.** An Beiträge anderer anknüpfen, gern tentativ („im Sinne von Philips Kommentar"), und die eigene Grundhaltung dazu sagen („…, die auch meiner Grundhaltung entspricht"). Schafft Konsens, statt allein zu setzen.
-- **Plain statt Jargon.** Aktive, gemeinsame Verben statt abstrakter Adjektive („zusammen erarbeiten", nicht „vermittelnd"); deutsche statt latinische Kürzel („z.B.", nicht „vgl."). Zwei klare Varianten sauber als (A)/(B).
+- **Plain statt Jargon.** Aktive, gemeinsame Verben statt abstrakter Adjektive („zusammen erarbeiten", nicht „vermittelnd"); deutsche statt latinische Kürzel („z.B.", nicht „vgl."). Zwei klare Varianten im Fliesstext als „entweder … oder"; (A)/(B)-Etiketten nur, wenn später darauf verwiesen wird.
+- **Kontext einflechten statt voranstellen.** Einordnungen (Dokument-Status, Gültigkeit, Vorbehalte) nicht als eigenen Vorspann-Block („Zum Status vorweg …"), sondern in einem Halbsatz dort einflechten, wo das Argument sie braucht.
+- **Kurznamen fetten.** Wiederkehrende Dokument-/Fachbegriffe bei der Ersterwähnung fett markieren (**Zielbild**, **Handbuch**) und danach konsequent als Kurznamen verwenden.
 - **Begründungen knapp & strukturiert.** „…, weil" + kurze Stichpunkte, wenn es mehrere Gründe gibt.
 - **Konstruktiv & nummeriert.** Mehrere Punkte als „Verbesserungsvorschläge" framen, nicht als „Kritik", und durchnummerieren (1./2.). Schritte und Varianten ebenfalls (1.→2.→3. oder A/B).
 - **Lösungsorientiert.** Bietet den nächsten konkreten Schritt gleich mit an („Falls du dich für X entscheidest, würde ich Y…").
@@ -23,6 +25,7 @@ Quelle/Schwester-Kopie: `dokumentations-tools/dfa-betrieb/schreibstil.md` (versi
 - Per **Du**, mit Vorname. Höflich, aber unprätentiös; lockere Anrede („Moin") ist ok.
 - **Konjunktiv für Vorschläge** („würde ich", „wäre", „gerne"). Angebote, keine Befehle.
 - **„wir/uns"** fürs Team.
+- **Indikativ nur für Belegtes.** Hypothetische Folgen im Konjunktiv („besonders heikel würde das …"); milde Quantifizierer („einiges" statt „vieles").
 - **Kein Gedankenstrich (—).** In der Schweiz unüblich. Gedanken lieber in zwei einfache Sätze trennen. Wenn schon ein Strich, dann der einfache Bindestrich (-).
 
 ## Sprache
@@ -41,6 +44,8 @@ Standard ist der Stil oben. Bekannte Differenzierungen:
 - Keine ausschweifenden Briefings, keine Überschriften-/Tabellen-Wälder, wenn ein kurzer Absatz reicht.
 - Keine Floskel-Überladung, kein Marketing-Ton.
 - Den Empfänger nicht mit Optionen erschlagen. Nur die nötige Wahl.
+- Keine Absicherungs-Nebensätze, belehrenden Klammern oder doppelten Rückfallebenen („falls nicht gewollt: Variante B"). Eine Lösung, knapp begründet, reicht.
+- Keine vorschnellen Qualitätsurteile („trennt sauber", „klar geregelt"), die der eigene Befund danach relativiert. Erst beschreiben, werten erst im Fazit/Kern.
 
 ## Anker-Beispiel (Originalton Dani)
 
