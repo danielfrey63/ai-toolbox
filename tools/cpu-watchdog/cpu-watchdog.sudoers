@@ -1,0 +1,4 @@
+# managed-by: ai-toolbox/tools/cpu-watchdog/install.sh
+# Lets the watchdog user cap/restore the CPU performance ceiling without a
+# password. __USER__ is replaced by install.sh with the installing user.
+__USER__ ALL=(root) NOPASSWD: /usr/local/sbin/cpu-throttle
