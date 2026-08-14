@@ -17,6 +17,10 @@ Im heissen Zustand bleibt ein Lauf resident und misst alle 15 s nach (max. 16 Fa
 
 `./install.sh` — idempotent: Skript und Units werden auf den Repo-Stand gebracht, `stop-list.conf` und `smtp.env` nur beim Erstlauf gesät und danach nie überschrieben (dort stehen maschinenspezifische Prioritäten und Zugangsdaten; `smtp.env` chmod 600, gehört nicht ins Repo). Der Root-Teil (Helper `cpu-throttle` nach `/usr/local/sbin`, sudoers-Whitelist `/etc/sudoers.d/cpu-watchdog` nur für dieses eine Kommando) läuft, wenn sudo verfügbar ist; ohne sudo degradiert der Watchdog sauber auf Stufe 1+2. Danach Kanaltest: `cpu-watchdog.sh test-notify`.
 
+## Temperatur-Anzeige
+
+`cpu-temp` (in `/usr/local/bin`) zeigt eine Zusammenfassungszeile mit dem heissesten Sensor plus GPU, `cpu-temp -a` alle Sensoren einzeln. Dasselbe Skript hängt als `/etc/update-motd.d/92-cpu-temp` im SSH-Login-Banner — die Temperatur erscheint dort neben Load und Batteriezustand.
+
 ## Tuning
 
 Schwellen per Env in der Service-Unit übersteuerbar: `WARN_C` (85), `CRIT_C` (92), `EMERG_C` (95), `HYST_C` (5), `GRACE_S` (180), `THROTTLE_PCT` (30), `FAST_INTERVAL_S` (15), `FAST_TICKS_MAX` (16). Zum Testen versteht das Skript `TEMP_OVERRIDE`, `CONF`, `STATE_DIR`, `LOG`, `THROTTLE_HELPER`. Achtung bei pkill-Tests: das Muster nie wörtlich in die eigene Shell-Kommandozeile schreiben, sonst trifft `pkill -f` die Test-Shell selbst.

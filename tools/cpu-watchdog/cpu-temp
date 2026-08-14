@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Print current system temperature — one summary line by default (used by the
+# login MOTD next to the battery line), all sensors with -a/--all.
+# Reads the same sources as cpu-watchdog: every thermal zone plus NVIDIA GPU.
+set -euo pipefail
+
+all=0
+case "${1:-}" in -a|--all) all=1 ;; esac
+
+max=0 max_name=none detail=''
+for z in /sys/class/thermal/thermal_zone*; do
+  [ -r "$z/temp" ] || continue
+  t=$(( $(cat "$z/temp") / 1000 ))
+  n=$(cat "$z/type")
+  detail="${detail}  ${n}: ${t}°C\n"
+  if [ "$t" -gt "$max" ]; then max=$t; max_name=$n; fi
+done
+
+gpu=''
+if command -v nvidia-smi >/dev/null 2>&1; then
+  g=$(timeout 2 nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits 2>/dev/null | head -1 || true)
+  if [[ "$g" =~ ^[0-9]+$ ]]; then
+    gpu=", GPU ${g}°C"
+    detail="${detail}  gpu (nvidia): ${g}°C\n"
+    [ "$g" -gt "$max" ] && { max=$g; max_name="gpu"; }
+  fi
+fi
+
+printf '  Temperature:  %s°C (%s%s)\n' "$max" "$max_name" "$gpu"
+[ "$all" -eq 1 ] && printf '%b' "$detail"
+exit 0

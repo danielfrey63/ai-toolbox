@@ -1,0 +1,5 @@
+#!/bin/sh
+# managed-by: ai-toolbox/tools/cpu-watchdog/install.sh
+# Shows the current system temperature in the SSH login banner.
+[ -x /usr/local/bin/cpu-temp ] && exec /usr/local/bin/cpu-temp
+exit 0

@@ -31,6 +31,14 @@ if sudo -n true 2>/dev/null || [ -t 0 ]; then
   sudo install -m 440 -o root -g root "$tmp" /etc/sudoers.d/cpu-watchdog
   rm -f "$tmp"
   echo "cpu-throttle helper + sudoers rule installed (stage 3 active)"
+  # Temperature readout: CLI command + SSH login banner line (update-motd).
+  sudo install -D -m 755 "$HERE/cpu-temp" /usr/local/bin/cpu-temp
+  if [ -d /etc/update-motd.d ]; then
+    sudo install -D -m 755 "$HERE/cpu-temp.motd" /etc/update-motd.d/92-cpu-temp
+    echo "cpu-temp installed (CLI: cpu-temp, login banner: /etc/update-motd.d/92-cpu-temp)"
+  else
+    echo "cpu-temp installed (CLI only — no /etc/update-motd.d on this system)"
+  fi
 else
   echo "WARN: sudo unavailable — stage 3 (cpu-throttle) not installed, watchdog runs warn+shed only" >&2
 fi
