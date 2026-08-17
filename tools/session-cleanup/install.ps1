@@ -3,7 +3,7 @@
 # -Status reports the install state via exit code (0 = installed, 1 = not).
 [CmdletBinding()]
 param(
-    [string]$Time = '05:30',
+    [string[]]$Times = @('05:30', '11:30', '17:30'),
     [switch]$Uninstall,
     [switch]$Status
 )
@@ -32,8 +32,8 @@ $shell = (Get-Command pwsh -ErrorAction SilentlyContinue)?.Source
 if (-not $shell) { $shell = (Get-Command powershell).Source }
 
 $action = New-ScheduledTaskAction -Execute $shell -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`""
-$trigger = New-ScheduledTaskTrigger -Daily -At $Time
+$triggers = foreach ($t in $Times) { New-ScheduledTaskTrigger -Daily -At $t }
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description 'Moves empty Claude Code sessions to ~/.claude/projects-trash and purges old trash batches (ai-toolbox tools/session-cleanup).' -Force | Out-Null
-Write-Host "Registered scheduled task '$taskName' (daily at $Time, catch-up on missed runs) running $scriptPath"
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers -Settings $settings -Description 'Moves empty Claude Code sessions to ~/.claude/projects-trash and purges old trash batches (ai-toolbox tools/session-cleanup).' -Force | Out-Null
+Write-Host "Registered scheduled task '$taskName' (daily at $($Times -join ', '), catch-up on missed runs) running $scriptPath"

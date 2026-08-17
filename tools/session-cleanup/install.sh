@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs (or removes) the daily systemd user timer that trashes empty Claude Code sessions.
+# Installs (or removes) the systemd user timer (3x daily) that trashes empty Claude Code sessions.
 # Idempotent: re-running rewrites the units to the current definition.
 # Modes: install (default) | --uninstall | --status (exit 0 = installed, 1 = not)
 set -euo pipefail
@@ -35,6 +35,8 @@ Description=Daily Claude Code session cleanup (ai-toolbox)
 
 [Timer]
 OnCalendar=*-*-* 05:30:00
+OnCalendar=*-*-* 11:30:00
+OnCalendar=*-*-* 17:30:00
 Persistent=true
 
 [Install]
@@ -42,7 +44,7 @@ WantedBy=timers.target
 EOF
         systemctl --user daemon-reload
         systemctl --user enable --now "$UNIT.timer" >/dev/null
-        echo "Installed $UNIT timer (daily at 05:30, catch-up on missed runs)."
+        echo "Installed $UNIT timer (daily at 05:30, 11:30, 17:30, catch-up on missed runs)."
         ;;
     *)
         echo "usage: install.sh [--uninstall|--status]" >&2; exit 2

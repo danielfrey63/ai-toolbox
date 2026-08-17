@@ -6,23 +6,19 @@
 set -euo pipefail
 
 MAX_SIZE_BYTES=$((250 * 1024))
-MIN_AGE_DAYS=3
-# Contentless stub transcripts (cloud-bridge anchors, aborted starts) at or below this size get a
-# much shorter guard - they accumulate daily and carry nothing worth protecting for days.
-STUB_MAX_SIZE_BYTES=1024
-STUB_MIN_AGE_HOURS=24
+# Whether a session is worth keeping is clear within a day; sessions worth keeping carry a /rename
+# title and are protected regardless of age.
+MIN_AGE_HOURS=24
 RETENTION_DAYS=30
 DRY_RUN=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --max-size-bytes)      MAX_SIZE_BYTES=$2; shift 2 ;;
-        --min-age-days)        MIN_AGE_DAYS=$2; shift 2 ;;
-        --stub-max-size-bytes) STUB_MAX_SIZE_BYTES=$2; shift 2 ;;
-        --stub-min-age-hours)  STUB_MIN_AGE_HOURS=$2; shift 2 ;;
-        --retention-days)      RETENTION_DAYS=$2; shift 2 ;;
-        --dry-run)             DRY_RUN=1; shift ;;
-        *) echo "usage: cleanup-sessions.sh [--max-size-bytes N] [--min-age-days N] [--stub-max-size-bytes N] [--stub-min-age-hours N] [--retention-days N] [--dry-run]" >&2; exit 2 ;;
+        --max-size-bytes) MAX_SIZE_BYTES=$2; shift 2 ;;
+        --min-age-hours)  MIN_AGE_HOURS=$2; shift 2 ;;
+        --retention-days) RETENTION_DAYS=$2; shift 2 ;;
+        --dry-run)        DRY_RUN=1; shift ;;
+        *) echo "usage: cleanup-sessions.sh [--max-size-bytes N] [--min-age-hours N] [--retention-days N] [--dry-run]" >&2; exit 2 ;;
     esac
 done
 
@@ -226,8 +222,7 @@ for project_dir in "$PROJECTS_DIR"/*/; do
 done
 
 # --- Phase 2: empty sessions -------------------------------------------------------------------------
-cutoff=$((now - MIN_AGE_DAYS * 86400))
-stub_cutoff=$((now - STUB_MIN_AGE_HOURS * 3600))
+cutoff=$((now - MIN_AGE_HOURS * 3600))
 moved=0
 for project_dir in "$PROJECTS_DIR"/*/; do
     [ -d "$project_dir" ] || continue
@@ -248,9 +243,9 @@ for project_dir in "$PROJECTS_DIR"/*/; do
 
         last_activity=$(last_activity_epoch "$transcript")
         [ -n "$sidecar_last" ] && [ "$sidecar_last" -gt "$last_activity" ] && last_activity=$sidecar_last
-        effective_cutoff=$cutoff
-        [ "$total_size" -le "$STUB_MAX_SIZE_BYTES" ] && effective_cutoff=$stub_cutoff
-        [ "$last_activity" -ge "$effective_cutoff" ] && continue
+        [ "$last_activity" -ge "$cutoff" ] && continue
+        # A /rename title marks a session the user intends to keep - never auto-trash those.
+        grep -q '"type"[[:space:]]*:[[:space:]]*"custom-title"' "$transcript" && continue
 
         size_kb=$((total_size / 1024))
         label="${size_kb}KB, last activity $(date -d "@$last_activity" +%Y-%m-%d)"

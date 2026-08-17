@@ -8,12 +8,10 @@
 param(
     # Sessions whose transcript + sidecar total is below this size count as "empty".
     [long]$MaxSizeBytes = 250KB,
-    # Never touch sessions with activity within this window (they may still be in use).
-    [int]$MinAgeDays = 3,
-    # Contentless stub transcripts (cloud-bridge anchors, aborted starts) at or below this size get a
-    # much shorter guard - they accumulate daily and carry nothing worth protecting for days.
-    [long]$StubMaxSizeBytes = 1KB,
-    [int]$StubMinAgeHours = 24,
+    # Never touch sessions with activity within this window (they may still be in use). Whether a
+    # session is worth keeping is clear within a day; sessions worth keeping carry a /rename title
+    # and are protected regardless of age.
+    [int]$MinAgeHours = 24,
     # Trash entries older than this are deleted permanently.
     [int]$RetentionDays = 30,
     # Report what would happen without moving or deleting anything.
@@ -235,8 +233,7 @@ foreach ($projectDir in Get-ChildItem $projectsDir -Directory) {
 }
 
 # --- Phase 2: empty sessions -------------------------------------------------------------------------
-$cutoff = (Get-Date).AddDays(-$MinAgeDays)
-$stubCutoff = (Get-Date).AddHours(-$StubMinAgeHours)
+$cutoff = (Get-Date).AddHours(-$MinAgeHours)
 $moved = 0
 foreach ($projectDir in Get-ChildItem $projectsDir -Directory) {
     foreach ($transcript in Get-ChildItem $projectDir.FullName -Filter '*.jsonl' -File) {
@@ -253,8 +250,9 @@ foreach ($projectDir in Get-ChildItem $projectsDir -Directory) {
         }
 
         if ($totalSize -ge $MaxSizeBytes) { continue }
-        $effectiveCutoff = if ($totalSize -le $StubMaxSizeBytes) { $stubCutoff } else { $cutoff }
-        if ($lastActivity -ge $effectiveCutoff) { continue }
+        if ($lastActivity -ge $cutoff) { continue }
+        # A /rename title marks a session the user intends to keep - never auto-trash those.
+        if (Select-String -LiteralPath $transcript.FullName -Pattern '"type"\s*:\s*"custom-title"' -Quiet) { continue }
 
         $sizeKB = [math]::Round($totalSize / 1KB, 1)
         $label = "${sizeKB}KB, last activity $($lastActivity.ToString('yyyy-MM-dd'))"
