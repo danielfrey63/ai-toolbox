@@ -314,33 +314,26 @@ foreach ($batch in Get-ChildItem $trashDir -Directory) {
 
 Write-Log "done: $deduped duplicate(s) and $moved empty session(s) trashed, $purged batch(es) purged"
 
-# --- Toast notification ------------------------------------------------------------------------------
-# Findings that need a human decision (diverged copies, title collisions) surface as a Windows toast,
-# because scheduled runs have no visible console. pwsh 7 cannot project WinRT types, so the toast is
-# raised via Windows PowerShell 5.1. A failed toast never breaks the run.
+# --- Findings notification ---------------------------------------------------------------------------
+# Findings that need a human decision (diverged copies, title collisions) are written to findings.txt
+# and surfaced as a system-modal popup (topmost, stays until dismissed), because scheduled runs have
+# no visible console. The popup is launched detached so the run never blocks on it; a failed popup
+# never breaks the run.
 if (-not $DryRun) {
     $review = @($script:logLines | Where-Object { $_ -match 'kept diverged copy|same title' })
+    $findingsFile = Join-Path $trashDir 'findings.txt'
     if ($review.Count -gt 0) {
         try {
-            $lines = @($review | Select-Object -First 3 | ForEach-Object {
-                $t = $_ -replace '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ', ''
-                if ($t.Length -gt 130) { $t.Substring(0, 127) + '...' } else { $t }
-            })
-            if ($review.Count -gt 3) { $lines += "+$($review.Count - 3) more (see cleanup.log)" }
-            $escTitle = [Security.SecurityElement]::Escape("Session Cleanup: $($review.Count) finding(s) to review")
-            $escBody = [Security.SecurityElement]::Escape(($lines -join "`n"))
-            $toastScript = @"
-[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
-`$xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-`$xml.LoadXml('<toast duration="long"><visual><binding template="ToastText02"><text id="1">$escTitle</text><text id="2">$escBody</text></binding></visual></toast>')
-`$appId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier(`$appId).Show([Windows.UI.Notifications.ToastNotification]::new(`$xml))
-"@
-            $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($toastScript))
-            & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -EncodedCommand $encoded | Out-Null
+            $header = "Session-Cleanup-Befunde vom $(Get-Date -Format 'yyyy-MM-dd HH:mm') - Aufloesung: Session umbenennen (/rename) oder wegwerfen`n"
+            $body = ($review | ForEach-Object { $_ -replace '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ', '' }) -join "`n`n"
+            Set-Content -LiteralPath $findingsFile -Value ($header + "`n" + $body) -Encoding UTF8
+            # 0x40 = information icon, 0x1000 = system-modal (topmost). Popup reads the file itself to
+            # avoid any argument-encoding pitfalls.
+            $popupScript = "`$t = Get-Content -Raw '$findingsFile'; (New-Object -ComObject WScript.Shell).Popup(`$t, 0, 'AI-Toolbox Session Cleanup: $($review.Count) Befund(e)', 0x40 -bor 0x1000) | Out-Null"
+            $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($popupScript))
+            Start-Process (Get-Process -Id $PID).Path -WindowStyle Hidden -ArgumentList '-NoProfile', '-EncodedCommand', $encoded
         } catch {
-            Write-Log "toast failed: $($_.Exception.Message)"
+            Write-Log "notification failed: $($_.Exception.Message)"
         }
     }
 }
