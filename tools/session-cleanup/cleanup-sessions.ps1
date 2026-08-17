@@ -8,10 +8,10 @@
 param(
     # Sessions whose transcript + sidecar total is below this size count as "empty".
     [long]$MaxSizeBytes = 250KB,
-    # Never touch sessions with activity within this window (they may still be in use). Whether a
-    # session is worth keeping is clear within a day; sessions worth keeping carry a /rename title
-    # and are protected regardless of age.
-    [int]$MinAgeHours = 24,
+    # Never touch sessions with activity within this window (0 = no age guard). Sessions worth
+    # keeping carry a /rename title and are protected regardless of age; open sessions are skipped
+    # via their file lock.
+    [int]$MinAgeHours = 0,
     # Trash entries older than this are deleted permanently.
     [int]$RetentionDays = 30,
     # Report what would happen without moving or deleting anything.
@@ -207,28 +207,60 @@ foreach ($g in $dupGroups) {
     }
 }
 
-# --- Phase 1b: distinct sessions sharing a custom title ----------------------------------------------
+# --- Phase 1b: sessions sharing (or containing) a custom title ---------------------------------------
 # /rename titles live as "custom-title" entries inside the transcript and survive forks and bridge
-# continuations, so genuinely different sessions can show the same name in the resume picker. Their
-# contents are unrelated - nothing can be merged, so they are only reported for a manual rename or
-# trash decision.
+# continuations, so different session files can show the same name in the resume picker. For every
+# pair whose titles are equal or literal substrings of each other, a merge is attempted: with the own
+# sessionId neutralized (every entry embeds it, so raw bytes can never match across files), an exact
+# prefix overlap proves one file carries nothing beyond the other and it goes to trash. Pairs without
+# exact overlap are genuinely different conversations - those are only reported for a manual rename
+# or trash decision.
 foreach ($projectDir in Get-ChildItem $projectsDir -Directory) {
-    $titles = @{}
+    $titled = @()
     foreach ($transcript in Get-ChildItem $projectDir.FullName -Filter '*.jsonl' -File) {
         $hits = @(Select-String -LiteralPath $transcript.FullName -Pattern '"type"\s*:\s*"custom-title"')
         if (-not $hits) { continue }
         # The last entry wins: a session can be renamed multiple times.
         try { $title = ($hits[-1].Line | ConvertFrom-Json).customTitle } catch { continue }
         if (-not $title) { continue }
-        if (-not $titles.ContainsKey($title)) { $titles[$title] = [Collections.Generic.List[object]]::new() }
-        $titles[$title].Add($transcript)
+        $titled += ,@{ File = $transcript; Title = $title }
+    }
+    $gone = @{}
+    for ($i = 0; $i -lt $titled.Count; $i++) {
+        for ($j = $i + 1; $j -lt $titled.Count; $j++) {
+            if ($gone[$i] -or $gone[$j]) { continue }
+            $ti = $titled[$i].Title; $tj = $titled[$j].Title
+            if ($ti -ne $tj -and -not $ti.Contains($tj) -and -not $tj.Contains($ti)) { continue }
+            $pair = @($titled[$i], $titled[$j]) | Sort-Object { $_.File.Length }
+            $small = $pair[0]; $big = $pair[1]
+            try {
+                $ns = [IO.File]::ReadAllText($small.File.FullName).Replace($small.File.BaseName, 'SID')
+                $nb = [IO.File]::ReadAllText($big.File.FullName).Replace($big.File.BaseName, 'SID')
+            } catch { continue }
+            if (-not $nb.StartsWith($ns)) { continue }
+            $label = "titled `"$($small.Title)`", content prefix of $($big.File.Name.Substring(0, 8)) `"$($big.Title)`""
+            if ($DryRun) {
+                Write-Log "DRYRUN would trash duplicate $($projectDir.Name)\$($small.File.Name) ($label)"
+                $gone[$(if ($small -eq $titled[$i]) { $i } else { $j })] = $true
+            } elseif (Move-SessionToTrash $small.File $label) {
+                $deduped++
+                $gone[$(if ($small -eq $titled[$i]) { $i } else { $j })] = $true
+            }
+        }
+    }
+    $titles = @{}
+    for ($i = 0; $i -lt $titled.Count; $i++) {
+        if ($gone[$i]) { continue }
+        $t = $titled[$i].Title
+        if (-not $titles.ContainsKey($t)) { $titles[$t] = [Collections.Generic.List[object]]::new() }
+        $titles[$t].Add($titled[$i].File)
     }
     foreach ($t in $titles.GetEnumerator()) {
         if ($t.Value.Count -lt 2) { continue }
         $list = ($t.Value | ForEach-Object {
             "$($_.Name.Substring(0, 8)) ($([math]::Round($_.Length / 1MB, 1))MB, last $((Get-LastActivity $_).ToString('yyyy-MM-dd')))"
         }) -join ', '
-        Write-Log "same title `"$($t.Key)`" in $($projectDir.Name): $list - distinct sessions, rename or trash manually"
+        Write-Log "same title `"$($t.Key)`" in $($projectDir.Name): $list - no exact overlap, rename or trash manually"
     }
 }
 

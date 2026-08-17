@@ -6,9 +6,9 @@
 set -euo pipefail
 
 MAX_SIZE_BYTES=$((250 * 1024))
-# Whether a session is worth keeping is clear within a day; sessions worth keeping carry a /rename
-# title and are protected regardless of age.
-MIN_AGE_HOURS=24
+# Never touch sessions with activity within this window (0 = no age guard). Sessions worth keeping
+# carry a /rename title and are protected regardless of age.
+MIN_AGE_HOURS=0
 RETENTION_DAYS=30
 DRY_RUN=0
 
@@ -187,15 +187,18 @@ while IFS= read -r dup_name; do
     done < <(printf '%s\n' "$ranked" | tail -n +2)
 done < <(find "$PROJECTS_DIR" -mindepth 2 -maxdepth 2 -type f -name '*.jsonl' -printf '%f\n' | sort | uniq -d)
 
-# --- Phase 1b: distinct sessions sharing a custom title ----------------------------------------------
+# --- Phase 1b: sessions sharing (or containing) a custom title ---------------------------------------
 # /rename titles live as "custom-title" entries inside the transcript and survive forks and bridge
-# continuations, so genuinely different sessions can show the same name in the resume picker. Their
-# contents are unrelated - nothing can be merged, so they are only reported for a manual rename or
-# trash decision.
+# continuations, so different session files can show the same name in the resume picker. For every
+# pair whose titles are equal or literal substrings of each other, a merge is attempted: with the own
+# sessionId neutralized (every entry embeds it, so raw bytes can never match across files), an exact
+# prefix overlap proves one file carries nothing beyond the other and it goes to trash. Pairs without
+# exact overlap are genuinely different conversations - those are only reported for a manual rename
+# or trash decision.
 for project_dir in "$PROJECTS_DIR"/*/; do
     [ -d "$project_dir" ] || continue
     project_name=$(basename "$project_dir")
-    declare -A title_map=()
+    titled_files=(); titled_titles=()
     for transcript in "$project_dir"*.jsonl; do
         [ -f "$transcript" ] || continue
         # The last entry wins: a session can be renamed multiple times.
@@ -203,7 +206,47 @@ for project_dir in "$PROJECTS_DIR"/*/; do
         [ -n "$line" ] || continue
         title=$(printf '%s' "$line" | sed -nE 's/.*"customTitle"[[:space:]]*:[[:space:]]*"((\\.|[^"\\])*)".*/\1/p')
         [ -n "$title" ] || continue
-        title_map[$title]="${title_map[$title]:-}${transcript}"$'\n'
+        titled_files+=("$transcript"); titled_titles+=("$title")
+    done
+    declare -A gone=()
+    for ((i = 0; i < ${#titled_files[@]}; i++)); do
+        for ((j = i + 1; j < ${#titled_files[@]}; j++)); do
+            [ -z "${gone[$i]:-}" ] && [ -z "${gone[$j]:-}" ] || continue
+            ti=${titled_titles[$i]}; tj=${titled_titles[$j]}
+            rel=0
+            [ "$ti" = "$tj" ] && rel=1
+            case "$ti" in *"$tj"*) rel=1 ;; esac
+            case "$tj" in *"$ti"*) rel=1 ;; esac
+            [ "$rel" = 1 ] || continue
+            if [ "$(stat -c %s "${titled_files[$i]}")" -le "$(stat -c %s "${titled_files[$j]}")" ]; then
+                si=$i; bi=$j
+            else
+                si=$j; bi=$i
+            fi
+            small=${titled_files[$si]}; big=${titled_files[$bi]}
+            tmp_s=$(mktemp); tmp_b=$(mktemp)
+            sed "s/$(basename "$small" .jsonl)/SID/g" "$small" > "$tmp_s"
+            sed "s/$(basename "$big" .jsonl)/SID/g" "$big" > "$tmp_b"
+            overlap=0
+            cmp -s -n "$(stat -c %s "$tmp_s")" "$tmp_s" "$tmp_b" && overlap=1
+            rm -f "$tmp_s" "$tmp_b"
+            [ "$overlap" = 1 ] || continue
+            big_id=$(basename "$big" .jsonl)
+            label="titled \"${titled_titles[$si]}\", content prefix of ${big_id:0:8} \"${titled_titles[$bi]}\""
+            if [ "$DRY_RUN" = 1 ]; then
+                log "DRYRUN would trash duplicate $project_name/$(basename "$small") ($label)"
+                gone[$si]=1
+            elif trash_session "$small" "$label"; then
+                deduped=$((deduped + 1))
+                gone[$si]=1
+            fi
+        done
+    done
+    declare -A title_map=()
+    for ((i = 0; i < ${#titled_files[@]}; i++)); do
+        [ -z "${gone[$i]:-}" ] || continue
+        title=${titled_titles[$i]}
+        title_map[$title]="${title_map[$title]:-}${titled_files[$i]}"$'\n'
     done
     for title in "${!title_map[@]}"; do
         count=$(printf '%s' "${title_map[$title]}" | grep -c .) || true
@@ -216,9 +259,9 @@ for project_dir in "$PROJECTS_DIR"/*/; do
             last=$(date -d "@$(last_activity_epoch "$f")" +%Y-%m-%d)
             list="${list:+$list, }${id:0:8} (${size_mb}MB, last $last)"
         done <<< "${title_map[$title]}"
-        log "same title \"$title\" in $project_name: $list - distinct sessions, rename or trash manually"
+        log "same title \"$title\" in $project_name: $list - no exact overlap, rename or trash manually"
     done
-    unset title_map
+    unset title_map gone
 done
 
 # --- Phase 2: empty sessions -------------------------------------------------------------------------
