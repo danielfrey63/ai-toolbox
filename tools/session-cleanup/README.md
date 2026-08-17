@@ -12,7 +12,7 @@ Nach einem Projektumzug (z.B. via transfer-cc-sessions) liegt dieselbe Session-U
 
 ## Was als «leer» gilt (Phase 2)
 
-Eine Top-Level-Session `~\.claude\projects\<projekt>\<uuid>.jsonl` gilt als leer, wenn Transkript plus Sidecar-Verzeichnis (`<uuid>\` mit Subagent-Transkripten) zusammen kleiner als 250 KB sind und die letzte Aktivität mehr als 3 Tage zurückliegt. Massgeblich ist der jüngste innere `"timestamp"` im Transkript, nicht die mtime — Picker, Cloud-Bridge und Sync-Tools touchen Dateien ohne Inhaltsänderung und würden alte Sessions sonst dauerhaft re-protecten. Der Alters-Guard verhindert, dass frisch gestartete oder gerade offene Sessions angefasst werden; zusätzlich werden gesperrte (offene) Dateien übersprungen. `memory\`-Verzeichnisse und alle anderen Projekt-Inhalte werden nie berührt.
+Eine Top-Level-Session `~\.claude\projects\<projekt>\<uuid>.jsonl` gilt als leer, wenn Transkript plus Sidecar-Verzeichnis (`<uuid>\` mit Subagent-Transkripten) zusammen kleiner als 250 KB sind und die letzte Aktivität mehr als 3 Tage zurückliegt. Massgeblich ist der jüngste innere `"timestamp"` im Transkript, nicht die mtime — Picker, Cloud-Bridge und Sync-Tools touchen Dateien ohne Inhaltsänderung und würden alte Sessions sonst dauerhaft re-protecten. Der Alters-Guard verhindert, dass frisch gestartete oder gerade offene Sessions angefasst werden; zusätzlich werden gesperrte (offene) Dateien übersprungen. Inhaltsleere Stubs bis 1 KB (Cloud-Bridge-Anker, abgebrochene Starts) haben eine kürzere Schonfrist von 24 Stunden — sie entstehen täglich neu und würden mit dem 3-Tage-Guard den Picker dauerhaft zumüllen. `memory\`-Verzeichnisse und alle anderen Projekt-Inhalte werden nie berührt.
 
 ## Papierkorb statt Hard-Delete
 

@@ -1,5 +1,5 @@
 {
-  "enabled": true,
+  "enabled": false,
   "minTranscriptKB": 200,
   "delaySeconds": 3300,
   "maxTicks": 10,
