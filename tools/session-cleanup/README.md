@@ -16,7 +16,7 @@ Eine Top-Level-Session `~\.claude\projects\<projekt>\<uuid>.jsonl` gilt als leer
 
 ## Papierkorb statt Hard-Delete
 
-Verschobene Sessions landen unter `~\.claude\projects-trash\<yyyy-MM-dd>\<projekt>\` (Datum = Tag der Verschiebung). Batches, die älter als 30 Tage sind, werden beim nächsten Lauf endgültig gelöscht. Zum Wiederherstellen einfach die Datei (und ggf. das Sidecar-Verzeichnis) zurück in den Projekt-Ordner verschieben. Jeder Lauf protokolliert nach `~\.claude\projects-trash\cleanup.log`.
+Verschobene Sessions landen unter `~\.claude\projects-trash\<yyyy-MM-dd>\<projekt>\` (Datum = Tag der Verschiebung). Batches, die älter als 30 Tage sind, werden beim nächsten Lauf endgültig gelöscht. Zum Wiederherstellen einfach die Datei (und ggf. das Sidecar-Verzeichnis) zurück in den Projekt-Ordner verschieben. Jeder Lauf protokolliert nach `~\.claude\projects-trash\cleanup.log`. Meldungen, die eine menschliche Entscheidung brauchen (divergierte Kopien, Namens-Kollisionen), erscheinen zusätzlich als Desktop-Notification: unter Windows als Toast (via Windows PowerShell 5.1, da pwsh 7 keine WinRT-Toasts kann), unter Linux via `notify-send`, falls vorhanden.
 
 ## Installation
 

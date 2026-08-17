@@ -314,6 +314,37 @@ foreach ($batch in Get-ChildItem $trashDir -Directory) {
 
 Write-Log "done: $deduped duplicate(s) and $moved empty session(s) trashed, $purged batch(es) purged"
 
+# --- Toast notification ------------------------------------------------------------------------------
+# Findings that need a human decision (diverged copies, title collisions) surface as a Windows toast,
+# because scheduled runs have no visible console. pwsh 7 cannot project WinRT types, so the toast is
+# raised via Windows PowerShell 5.1. A failed toast never breaks the run.
+if (-not $DryRun) {
+    $review = @($script:logLines | Where-Object { $_ -match 'kept diverged copy|same title' })
+    if ($review.Count -gt 0) {
+        try {
+            $lines = @($review | Select-Object -First 3 | ForEach-Object {
+                $t = $_ -replace '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ', ''
+                if ($t.Length -gt 130) { $t.Substring(0, 127) + '...' } else { $t }
+            })
+            if ($review.Count -gt 3) { $lines += "+$($review.Count - 3) more (see cleanup.log)" }
+            $escTitle = [Security.SecurityElement]::Escape("Session Cleanup: $($review.Count) finding(s) to review")
+            $escBody = [Security.SecurityElement]::Escape(($lines -join "`n"))
+            $toastScript = @"
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+`$xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+`$xml.LoadXml('<toast duration="long"><visual><binding template="ToastText02"><text id="1">$escTitle</text><text id="2">$escBody</text></binding></visual></toast>')
+`$appId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier(`$appId).Show([Windows.UI.Notifications.ToastNotification]::new(`$xml))
+"@
+            $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($toastScript))
+            & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -EncodedCommand $encoded | Out-Null
+        } catch {
+            Write-Log "toast failed: $($_.Exception.Message)"
+        }
+    }
+}
+
 if (-not $DryRun) {
     Add-Content -LiteralPath $logFile -Value $script:logLines
     # Keep the log bounded.

@@ -319,6 +319,17 @@ done
 
 log "done: $deduped duplicate(s) and $moved empty session(s) trashed, $purged batch(es) purged"
 
+# Findings that need a human decision (diverged copies, title collisions) surface as a desktop
+# notification, because scheduled runs have no visible console. A failed notification never breaks
+# the run.
+if [ "$DRY_RUN" != 1 ] && command -v notify-send >/dev/null 2>&1; then
+    review_count=$(printf '%s' "$log_lines" | grep -cE 'kept diverged copy|same title') || true
+    if [ "${review_count:-0}" -gt 0 ]; then
+        review=$(printf '%s' "$log_lines" | grep -E 'kept diverged copy|same title' | sed -E 's/^[0-9-]+ [0-9:]+ //' | head -3) || true
+        notify-send "Session Cleanup: $review_count finding(s) to review" "$review" 2>/dev/null || true
+    fi
+fi
+
 if [ "$DRY_RUN" != 1 ]; then
     printf '%s' "$log_lines" >> "$LOG_FILE"
     # Keep the log bounded.
