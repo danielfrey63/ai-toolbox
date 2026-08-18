@@ -19,6 +19,7 @@ Design:
 """
 from __future__ import annotations
 
+import datetime
 import functools
 import json
 import os
@@ -47,6 +48,14 @@ IS_WINDOWS = platform.system() == "Windows"
 # binaries (chmod +x on Unix, .exe on Windows), not config. Same directory on
 # both platforms so the path scripts hand to subprocess is trivially portable.
 TRANSCRIBE_BIN_DIR = Path.home() / ".transcribe" / "bin"
+
+# yt-dlp ages badly: sites change their extraction surface constantly, and a
+# build older than a couple of months reliably starts failing on YouTube
+# (HTTP 403, missing formats, PO-token demands). Its version string IS the
+# release date (YYYY.MM.DD), so staleness is computable offline - no release
+# feed, no network call in the preflight.
+YTDLP_STALE_DAYS = 60
+YTDLP_VERSION_CACHE = TRANSCRIBE_BIN_DIR.parent / "ytdlp-version.json"
 
 # ===========================================================================
 # Managed venv for the local ML backends (pyannote-local, whisper-local).
@@ -176,6 +185,81 @@ def _which(name: str) -> str | None:
 
 def _check_binaries() -> list[str]:
     return [b for b in REQUIRED_BINARIES if not find_tool(b)]
+
+
+def _parse_ytdlp_version(version: str) -> datetime.date | None:
+    """`2026.03.17` (or a nightly's `2026.03.17.232319`) -> date."""
+    parts = version.strip().split(".")
+    if len(parts) < 3:
+        return None
+    try:
+        return datetime.date(int(parts[0]), int(parts[1]), int(parts[2]))
+    except ValueError:
+        return None
+
+
+def ytdlp_status() -> dict:
+    """Report which yt-dlp is in play and how old it is.
+
+    Returns `{path, version, release_date, age_days, stale}`; every field is
+    None when yt-dlp is missing or won't report a parseable version (a
+    distro build with a patched version string, say) - unknown age is never
+    reported as stale, so the check stays quiet unless it has evidence.
+
+    `yt-dlp --version` costs ~1s on the PyInstaller build and the preflight
+    runs on *every* /transcribe invocation, so the answer is cached against
+    the binary's (path, mtime, size) and re-probed only when that changes.
+    """
+    unknown = {"path": None, "version": None, "release_date": None,
+               "age_days": None, "stale": False}
+    path = find_tool("yt-dlp")
+    if not path:
+        return unknown
+    try:
+        st = Path(path).stat()
+        fingerprint = f"{path}:{int(st.st_mtime)}:{st.st_size}"
+    except OSError:
+        return {**unknown, "path": path}
+
+    version: str | None = None
+    try:
+        cached = json.loads(YTDLP_VERSION_CACHE.read_text(encoding="utf-8"))
+        if cached.get("fingerprint") == fingerprint:
+            version = cached.get("version")
+    except (OSError, ValueError):
+        pass
+
+    if version is None:
+        try:
+            result = subprocess.run(
+                [path, "--version"], capture_output=True, text=True, timeout=30
+            )
+            version = (result.stdout or "").strip().splitlines()[0].strip() if result.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError, IndexError):
+            version = None
+        if version:
+            try:
+                YTDLP_VERSION_CACHE.parent.mkdir(parents=True, exist_ok=True)
+                YTDLP_VERSION_CACHE.write_text(
+                    json.dumps({"fingerprint": fingerprint, "version": version}),
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass  # cache is an optimization, never a requirement
+
+    if not version:
+        return {**unknown, "path": path}
+    released = _parse_ytdlp_version(version)
+    if released is None:
+        return {**unknown, "path": path, "version": version}
+    age_days = (datetime.date.today() - released).days
+    return {
+        "path": path,
+        "version": version,
+        "release_date": released.isoformat(),
+        "age_days": age_days,
+        "stale": age_days > YTDLP_STALE_DAYS,
+    }
 
 
 def _detect_target() -> str | None:
@@ -1201,6 +1285,9 @@ def _status() -> dict:
         "status": status,
         "first_run": is_first_run(),
         "missing_binaries": missing,
+        # Age of the resolved yt-dlp. Advisory only - never affects `status`
+        # or the exit code, same contract as `recommended_missing`.
+        "ytdlp": ytdlp_status(),
         # Recommended-but-optional binaries (currently just deno, yt-dlp's JS
         # runtime for YouTube). Never affects `status` or exit codes.
         "recommended_missing": [] if find_tool("deno") else ["deno"],
@@ -1253,9 +1340,16 @@ def cmd_check() -> int:
     # the installer has dropped deno into ~/.transcribe/bin/.
     deno_missing = bool(s["recommended_missing"])
 
+    # A yt-dlp older than YTDLP_STALE_DAYS is the single most common cause of
+    # "the download just fails" on YouTube (403s, missing formats, PO-token
+    # demands). Advisory like deno: it reports and points at the refresh, but
+    # keeps exit 0 - local files transcribe fine with an ancient yt-dlp.
+    ytdlp = s["ytdlp"]
+    ytdlp_stale = bool(ytdlp.get("stale"))
+
     # Fully ready -> stay silent (Claude's per-turn preflight shouldn't spam).
     if (not s["missing_binaries"] and not needs_transcription
-            and not suggest_diarize and not deno_missing):
+            and not suggest_diarize and not deno_missing and not ytdlp_stale):
         return 0
 
     installer = Path(__file__).resolve()
@@ -1264,6 +1358,17 @@ def cmd_check() -> int:
         sys.stderr.write(
             "[transcribe] missing binaries: "
             f"{', '.join(s['missing_binaries'])}. Run: python3 {installer}\n"
+        )
+
+    if ytdlp_stale:
+        sys.stderr.write(
+            f"[transcribe] yt-dlp is {ytdlp['age_days']} days old "
+            f"(version {ytdlp['version']}, at {ytdlp['path']}). Builds older "
+            f"than {YTDLP_STALE_DAYS} days routinely fail on YouTube with 403s, "
+            "missing formats or PO-token demands. Refresh: "
+            f"python3 {installer} --install-binaries --force  (--force is "
+            "required when the stale copy is the one on PATH - a plain "
+            "--install-binaries skips anything already resolvable)\n"
         )
 
     if deno_missing:
@@ -1513,21 +1618,65 @@ def cmd_skip_diarize() -> int:
     return 0
 
 
+USAGE = """usage: setup.py [<command>] [--force]
+
+Commands (one at a time; no command = the interactive installer):
+  --check             preflight: report anything missing, silent when ready
+  --json              same snapshot as --check, machine-readable on stdout
+  --install-binaries  fetch standalone ffmpeg/ffprobe/yt-dlp (+ deno) into
+                      ~/.transcribe/bin/
+  --venv              provision the managed ML venv (whisper-local, pyannote)
+  --skip-diarize      stop --check from suggesting diarization keys
+
+Flags:
+  --force             with --install-binaries / --venv: redo the install even
+                      when the target already resolves (the escape hatch for a
+                      stale or broken copy on PATH)
+  -h, --help          this text
+"""
+
+COMMANDS = {
+    "--check": lambda force: cmd_check(),
+    "--json": lambda force: cmd_json(),
+    "--install-binaries": lambda force: cmd_install_binaries(force=force),
+    "--venv": lambda force: cmd_provision_venv(force=force),
+    "--skip-diarize": lambda force: cmd_skip_diarize(),
+}
+
+
 def main() -> int:
-    if len(sys.argv) > 1:
-        arg = sys.argv[1]
-        if arg == "--check":
-            return cmd_check()
-        if arg == "--json":
-            return cmd_json()
-        if arg == "--install-binaries":
-            force = "--force" in sys.argv[2:]
-            return cmd_install_binaries(force=force)
-        if arg == "--venv":
-            force = "--force" in sys.argv[2:]
-            return cmd_provision_venv(force=force)
-        if arg == "--skip-diarize":
-            return cmd_skip_diarize()
+    """Parse argv position-independently.
+
+    The old parser only looked at argv[1], so `--force --install-binaries`
+    matched no command and fell through to the interactive installer - which
+    skips everything already present, making it look like --force had been
+    ignored. Flags are now order-free and anything unrecognized is an error
+    instead of a silent fallback.
+    """
+    args = sys.argv[1:]
+    if "-h" in args or "--help" in args:
+        sys.stderr.write(USAGE)
+        return 0
+    force = "--force" in args
+    commands = [a for a in args if a != "--force"]
+    unknown = [a for a in commands if a not in COMMANDS]
+    if unknown:
+        sys.stderr.write(f"[setup] unknown argument(s): {' '.join(unknown)}\n\n")
+        sys.stderr.write(USAGE)
+        return 2
+    if len(commands) > 1:
+        sys.stderr.write(
+            f"[setup] pick one command at a time, got: {' '.join(commands)}\n\n"
+        )
+        sys.stderr.write(USAGE)
+        return 2
+    if commands:
+        return COMMANDS[commands[0]](force)
+    if force:
+        sys.stderr.write(
+            "[setup] --force applies to --install-binaries / --venv; the "
+            "interactive installer has nothing to force. Running it normally.\n"
+        )
     return cmd_install()
 
 
