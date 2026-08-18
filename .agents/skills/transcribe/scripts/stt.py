@@ -796,6 +796,11 @@ class STTBackend:
     #   "global"    - labels are already consistent across the whole file
     diarization = "none"
 
+    # Domain glossary ("Weicheneditor, TopoRail, ..."), set by the caller via
+    # load_hotwords(). Backends that can bias decoding toward these terms use
+    # it; the rest ignore it silently.
+    hotwords: str | None = None
+
     def available(self) -> tuple[bool, str]:
         """Return (configured, reason). `reason` is a human hint when the
         backend cannot run (e.g. a missing key) and "" when it can."""
@@ -925,7 +930,10 @@ class WhisperLocalBackend(STTBackend):
 
         from setup import run_venv_worker
 
-        stdout = run_venv_worker("whisper_local_worker.py", [str(audio_path)])
+        worker_args = [str(audio_path)]
+        if self.hotwords:
+            worker_args += ["--hotwords", self.hotwords]
+        stdout = run_venv_worker("whisper_local_worker.py", worker_args)
         try:
             return _json.loads(stdout)
         except ValueError as exc:
@@ -1114,6 +1122,43 @@ def preflight(backend: STTBackend, audio_seconds: float) -> list[str]:
     return problems
 
 
+GLOSSARY_NAME = "transcribe-glossary.txt"
+
+
+def load_hotwords(media_dir: Path | None = None) -> str | None:
+    """Collect domain glossary terms for hotword biasing.
+
+    Merges, in order, `~/.config/transcribe/glossary.txt` (global) and
+    `<media_dir>/transcribe-glossary.txt` (per recording folder). One term
+    per line, `#` starts a comment, blank lines ignored. Returns a
+    comma-separated string (faster-whisper's hotwords format) or None when
+    no glossary exists. Keep glossaries lean (~50 terms): hotwords ride in
+    every decoding window's prompt, which caps out around 224 tokens.
+    """
+    from setup import CONFIG_DIR
+
+    candidates = [CONFIG_DIR / "glossary.txt"]
+    if media_dir is not None:
+        candidates.append(Path(media_dir) / GLOSSARY_NAME)
+
+    terms: list[str] = []
+    for path in candidates:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            term = line.split("#", 1)[0].strip()
+            if term and term not in terms:
+                terms.append(term)
+        print(f"[transcribe] glossary: {path} loaded", file=sys.stderr)
+    if not terms:
+        return None
+    print(f"[transcribe] hotword biasing with {len(terms)} glossary terms",
+          file=sys.stderr)
+    return ", ".join(terms)
+
+
 def transcribe_audio(
     audio_path: Path,
     backend: STTBackend,
@@ -1165,13 +1210,15 @@ def transcribe_video(
     backend: str | None = None,
     api_key: str | None = None,
     parallel_uploads: int | None = None,
+    hotwords: str | None = None,
 ) -> tuple[list[dict], str]:
     """Extract audio from a video, then transcribe it.
 
     Thin convenience wrapper over `transcribe_audio` for callers that start
     from a video file (run.py). `backend` is a backend name; when given
-    with `api_key`, that key is injected so .env is not re-read. Returns
-    (segments, backend_name). Raises SystemExit on any failure.
+    with `api_key`, that key is injected so .env is not re-read. `hotwords`
+    (see load_hotwords) biases capable backends toward domain vocabulary.
+    Returns (segments, backend_name). Raises SystemExit on any failure.
     """
     if backend in ("groq", "openai"):
         stt: STTBackend | None = WhisperBackend(backend, api_key=api_key)
@@ -1188,6 +1235,7 @@ def transcribe_video(
             f"Run `python3 {setup_py}` to configure."
         )
 
+    stt.hotwords = hotwords
     print(f"[transcribe] extracting audio for transcription ({stt.name})...", file=sys.stderr)
     audio_path = extract_audio(video_path, audio_out)
     segments = transcribe_audio(

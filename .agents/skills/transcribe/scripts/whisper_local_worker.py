@@ -6,6 +6,12 @@ Contract: argv[1] = audio path, optional argv[2] = language code (e.g. "de";
 omit for auto-detect). JSON segments [{start, end, text}] on stdout,
 progress on stderr.
 
+Optional flag `--hotwords "term1, term2, ..."` biases decoding toward
+domain vocabulary: faster-whisper injects the string into every window's
+prompt, so rare proper nouns (product names, people) win over acoustically
+similar everyday words. Unlike initial_prompt it applies to ALL windows,
+not just the first.
+
 Optional flag `--no-carryover` (anywhere in argv) disables Whisper's
 condition_on_previous_text. Whisper normally feeds each 30s window's output
 into the next one as a prompt, which keeps sentences and terminology
@@ -36,6 +42,11 @@ def main() -> int:
     carryover = "--no-carryover" not in argv
     if not carryover:
         argv.remove("--no-carryover")
+    hotwords = None
+    if "--hotwords" in argv:
+        idx = argv.index("--hotwords")
+        hotwords = argv[idx + 1]
+        del argv[idx:idx + 2]
     audio_path = Path(argv[0])
     language = argv[1] if len(argv) > 1 else None
 
@@ -51,11 +62,14 @@ def main() -> int:
                              cpu_threads=threads)
         desc = f"medium / cpu int8 ({threads} threads)"
 
+    n_hotwords = len(hotwords.split(",")) if hotwords else 0
     log(f"transcribing {audio_path.name} with faster-whisper {desc}"
-        f"{'' if carryover else ' (no context carryover)'} "
+        f"{'' if carryover else ' (no context carryover)'}"
+        f"{f' ({n_hotwords} hotwords)' if n_hotwords else ''} "
         f"(first run downloads the model)...")
     segments, info = model.transcribe(str(audio_path), language=language,
                                       vad_filter=True,
+                                      hotwords=hotwords,
                                       condition_on_previous_text=carryover)
     out = [
         {

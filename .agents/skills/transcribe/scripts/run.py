@@ -218,7 +218,7 @@ from transcribe import (  # noqa: E402
     format_vtt,
     parse_vtt,
 )
-from stt import extract_audio, select_backend, select_backends, transcribe_video  # noqa: E402
+from stt import extract_audio, load_hotwords, select_backend, select_backends, transcribe_video  # noqa: E402
 
 
 def main() -> int:
@@ -468,6 +468,13 @@ def main() -> int:
     )
     dl = download(args.source, work / "download")
     video_path = dl["video_path"]
+
+    # Domain glossary for hotword biasing: global config glossary plus a
+    # transcribe-glossary.txt next to a local source file (URL sources have
+    # no stable folder, so only the global one applies there).
+    hotwords = load_hotwords(
+        Path(args.source).resolve().parent if not is_url(args.source) else None
+    )
 
     # URL-source default: ./transcribe/<YYYY-MM-DD>-<slug>/<slug>.md. Per-video
     # subfolder + date prefix keeps multiple runs sortable; folder leaves room
@@ -752,6 +759,7 @@ def main() -> int:
                     work / "audio.mp3",
                     backend=stt_backend.name,
                     parallel_uploads=args.whisper_workers,
+                    hotwords=hotwords,
                 )
                 seg_cache.parent.mkdir(parents=True, exist_ok=True)
                 seg_cache.write_text(
@@ -802,7 +810,7 @@ def main() -> int:
             fixed, repair_report = repair_segments(
                 all_segments or transcript_segments, audio_path,
                 language=args.language, duration=full_duration,
-                skip_spans=skip_spans,
+                skip_spans=skip_spans, hotwords=hotwords,
             )
             if any(r.get("applied") for r in repair_report):
                 all_segments = fixed

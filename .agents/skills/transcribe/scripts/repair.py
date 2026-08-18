@@ -247,6 +247,7 @@ def repair_segments(segments: list[dict], audio: Path,
                     dry_run: bool = False,
                     skip_spans: list[tuple[float, float]] | None = None,
                     max_passes: int = 2,
+                    hotwords: str | None = None,
                     ) -> tuple[list[dict], list[dict]]:
     """Re-transcribe collapsed windows. Returns (segments, report).
 
@@ -296,7 +297,8 @@ def repair_segments(segments: list[dict], audio: Path,
 
         if tmp is None:
             tmp = Path(tempfile.mkdtemp(prefix="transcribe-repair-"))
-        out, new_report = _repair_windows(out, windows, audio, language, tmp)
+        out, new_report = _repair_windows(out, windows, audio, language, tmp,
+                                          hotwords=hotwords)
         report.extend(new_report)
         done.extend((w["padded_start"], w["padded_end"]) for w in windows)
 
@@ -306,7 +308,8 @@ def repair_segments(segments: list[dict], audio: Path,
 
 def _repair_windows(segments: list[dict], windows: list[dict], audio: Path,
                     language: str | None,
-                    tmp: Path) -> tuple[list[dict], list[dict]]:
+                    tmp: Path,
+                    hotwords: str | None = None) -> tuple[list[dict], list[dict]]:
     """Re-transcribe each window and splice in whatever passes both gates."""
     from setup import run_venv_worker
 
@@ -323,6 +326,8 @@ def _repair_windows(segments: list[dict], windows: list[dict], audio: Path,
         if language:
             args.append(language)
         args.append("--no-carryover")
+        if hotwords:
+            args += ["--hotwords", hotwords]
         try:
             fresh = json.loads(run_venv_worker("whisper_local_worker.py", args))
         except (SystemExit, ValueError) as exc:
@@ -373,6 +378,10 @@ def main() -> int:
     ap.add_argument("--audio", help="audio file (mp3/wav)")
     ap.add_argument("--video", help="source video - audio is cut from it directly")
     ap.add_argument("--language", default=None, help='e.g. "de"')
+    ap.add_argument("--hotwords", default=None,
+                    help='comma-separated domain terms to bias decoding '
+                         '(default: glossaries next to the audio/video and in '
+                         '~/.config/transcribe/, via stt.load_hotwords)')
     ap.add_argument("--dry-run", action="store_true",
                     help="only list the suspect passages, change nothing")
     ap.add_argument("-o", "--out", help="write result here (default: in place)")
@@ -394,8 +403,13 @@ def main() -> int:
     if not args.dry_run and source is None:
         ap.error("--audio or --video is required unless --dry-run is set")
 
+    hotwords = args.hotwords
+    if hotwords is None and source is not None:
+        from stt import load_hotwords
+        hotwords = load_hotwords(source.resolve().parent)
+
     fixed, report = repair_segments(segments, source, language=args.language,
-                                    dry_run=args.dry_run)
+                                    dry_run=args.dry_run, hotwords=hotwords)
 
     for r in report:
         mark = "REPARIERT" if r.get("applied") else "unveraendert"
