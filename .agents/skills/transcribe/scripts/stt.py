@@ -1123,23 +1123,33 @@ def preflight(backend: STTBackend, audio_seconds: float) -> list[str]:
 
 
 GLOSSARY_NAME = "transcribe-glossary.txt"
+# Hotwords share the decoder's 448-token prompt budget with the context
+# carryover (faster-whisper clamps each to 223 tokens), so an unbounded
+# glossary leaves no decoding room and the run dies with "The maximum
+# decoding length must be > 0" - a real 970 MB run died exactly this way
+# on a 58-term glossary (297 tokens). At ~3 chars/token on German
+# compounds this budget keeps hotwords near 115 tokens, which leaves
+# ~105 tokens of decoding room next to a full carryover. Raising it
+# trades transcript quality (truncated long segments) for glossary size.
+HOTWORDS_CHAR_BUDGET = 300
 
 
 def load_hotwords(media_dir: Path | None = None) -> str | None:
     """Collect domain glossary terms for hotword biasing.
 
-    Merges, in order, `~/.config/transcribe/glossary.txt` (global) and
-    `<media_dir>/transcribe-glossary.txt` (per recording folder). One term
-    per line, `#` starts a comment, blank lines ignored. Returns a
-    comma-separated string (faster-whisper's hotwords format) or None when
-    no glossary exists. Keep glossaries lean (~50 terms): hotwords ride in
-    every decoding window's prompt, which caps out around 224 tokens.
+    Merges `<media_dir>/transcribe-glossary.txt` (per recording folder)
+    first, then `~/.config/transcribe/glossary.txt` (global) - the
+    recording-specific terms matter more, so they survive when the budget
+    truncates. One term per line, `#` starts a comment, blank lines
+    ignored. Returns a comma-separated string (faster-whisper's hotwords
+    format) or None when no glossary exists.
     """
     from setup import CONFIG_DIR
 
-    candidates = [CONFIG_DIR / "glossary.txt"]
+    candidates = []
     if media_dir is not None:
         candidates.append(Path(media_dir) / GLOSSARY_NAME)
+    candidates.append(CONFIG_DIR / "glossary.txt")
 
     terms: list[str] = []
     for path in candidates:
@@ -1154,9 +1164,22 @@ def load_hotwords(media_dir: Path | None = None) -> str | None:
         print(f"[transcribe] glossary: {path} loaded", file=sys.stderr)
     if not terms:
         return None
-    print(f"[transcribe] hotword biasing with {len(terms)} glossary terms",
+
+    kept, used = [], 0
+    for term in terms:
+        if used + len(term) + 2 > HOTWORDS_CHAR_BUDGET:
+            break
+        kept.append(term)
+        used += len(term) + 2
+    if len(kept) < len(terms):
+        print(
+            f"[transcribe] glossary over budget: using the first {len(kept)} of "
+            f"{len(terms)} terms (list the most-misheard ones first)",
+            file=sys.stderr,
+        )
+    print(f"[transcribe] hotword biasing with {len(kept)} glossary terms",
           file=sys.stderr)
-    return ", ".join(terms)
+    return ", ".join(kept)
 
 
 def transcribe_audio(

@@ -12,6 +12,13 @@ prompt, so rare proper nouns (product names, people) win over acoustically
 similar everyday words. Unlike initial_prompt it applies to ALL windows,
 not just the first.
 
+Hotwords compete for the same 448-token prompt budget as the context
+carryover: faster-whisper clamps EACH to max_length//2 - 1 = 223 tokens,
+so a long glossary plus a full carryover leaves no decoding room and
+ctranslate2 raises "The maximum decoding length must be > 0". We cap the
+string at HOTWORDS_CHAR_BUDGET and, as a last resort, retry the whole
+transcription without hotwords rather than lose the run.
+
 Optional flag `--no-carryover` (anywhere in argv) disables Whisper's
 condition_on_previous_text. Whisper normally feeds each 30s window's output
 into the next one as a prompt, which keeps sentences and terminology
@@ -33,8 +40,32 @@ import sys
 from pathlib import Path
 
 
+# Mirrors stt.HOTWORDS_CHAR_BUDGET - the worker is also called directly
+# (repair.py, manual runs), so it enforces the same cap independently.
+HOTWORDS_CHAR_BUDGET = 300
+
+
 def log(msg: str) -> None:
     print(f"[transcribe] {msg}", file=sys.stderr, flush=True)
+
+
+def clamp_hotwords(hotwords: str | None) -> str | None:
+    """Trim the glossary to whole terms within the char budget."""
+    if not hotwords or len(hotwords) <= HOTWORDS_CHAR_BUDGET:
+        return hotwords
+    kept: list[str] = []
+    used = 0
+    for term in (t.strip() for t in hotwords.split(",")):
+        if not term:
+            continue
+        if used + len(term) + 2 > HOTWORDS_CHAR_BUDGET:
+            break
+        kept.append(term)
+        used += len(term) + 2
+    dropped = len(hotwords.split(",")) - len(kept)
+    log(f"hotwords over budget - keeping the first {len(kept)} terms, "
+        f"dropping {dropped} (put the most-misheard terms first)")
+    return ", ".join(kept)
 
 
 def main() -> int:
@@ -62,25 +93,40 @@ def main() -> int:
                              cpu_threads=threads)
         desc = f"medium / cpu int8 ({threads} threads)"
 
+    hotwords = clamp_hotwords(hotwords)
     n_hotwords = len(hotwords.split(",")) if hotwords else 0
     log(f"transcribing {audio_path.name} with faster-whisper {desc}"
         f"{'' if carryover else ' (no context carryover)'}"
         f"{f' ({n_hotwords} hotwords)' if n_hotwords else ''} "
         f"(first run downloads the model)...")
-    segments, info = model.transcribe(str(audio_path), language=language,
-                                      vad_filter=True,
-                                      hotwords=hotwords,
-                                      condition_on_previous_text=carryover)
-    out = [
-        {
-            "start": round(float(seg.start), 2),
-            "end": round(float(seg.end), 2),
-            "text": seg.text.strip(),
-        }
-        for seg in segments
-    ]
-    log(f"transcription done: {len(out)} segments, "
-        f"language={info.language} ({info.language_probability:.0%})")
+
+    def run(hw: str | None) -> list[dict]:
+        segments, info = model.transcribe(str(audio_path), language=language,
+                                          vad_filter=True, hotwords=hw,
+                                          condition_on_previous_text=carryover)
+        # Generation is lazy - the prompt-budget error surfaces here, not
+        # at the transcribe() call, so the list must be built inside.
+        result = [
+            {
+                "start": round(float(seg.start), 2),
+                "end": round(float(seg.end), 2),
+                "text": seg.text.strip(),
+            }
+            for seg in segments
+        ]
+        log(f"transcription done: {len(result)} segments, "
+            f"language={info.language} ({info.language_probability:.0%})")
+        return result
+
+    try:
+        out = run(hotwords)
+    except ValueError as exc:
+        if not hotwords:
+            raise
+        # Prompt budget blown despite the clamp - a transcript without
+        # glossary biasing beats no transcript at all.
+        log(f"hotword biasing failed ({exc}) - retrying without glossary")
+        out = run(None)
     json.dump(out, sys.stdout)
     return 0
 
