@@ -468,6 +468,14 @@ def main() -> int:
     )
     dl = download(args.source, work / "download")
     video_path = dl["video_path"]
+    # yt-dlp can lose the media stream while the caption tracks still land
+    # (YouTube DRM / PO-token gating). The transcript is fully reachable from
+    # those captions, so the run degrades to a frames-less mode instead of
+    # dying - every stage that needs audio or video is skipped below, and the
+    # report header says so.
+    captions_only = bool(dl.get("captions_only"))
+    download_error = dl.get("download_error")
+    has_media = video_path is not None
 
     # Domain glossary for hotword biasing: global config glossary plus a
     # transcribe-glossary.txt next to a local source file (URL sources have
@@ -501,7 +509,19 @@ def main() -> int:
         seg_store = save_md_path.parent / f"{base}.segments.json"
         turns_store = save_md_path.parent / f"{base}.turns.json"
 
-    meta = get_metadata(video_path)
+    if has_media:
+        meta = get_metadata(video_path)
+    else:
+        # No media file to probe - take the duration from yt-dlp's info json,
+        # falling back to the last caption cue.
+        duration = float((dl.get("info") or {}).get("duration") or 0)
+        if duration <= 0 and dl.get("subtitle_path"):
+            try:
+                cues = parse_vtt(dl["subtitle_path"])
+                duration = max((c["end"] for c in cues), default=0.0)
+            except Exception as exc:  # noqa: BLE001 - duration is cosmetic here
+                print(f"[transcribe] caption duration unknown ({exc})", file=sys.stderr)
+        meta = {"duration_seconds": duration, "has_video": False}
     full_duration = meta["duration_seconds"]
 
     # Audio-only sources (.m4a voice memos, .mp3, podcast files, ...) carry
@@ -509,7 +529,14 @@ def main() -> int:
     # would fail on them. Skip frames wholesale; the transcript + diarization
     # + report pipeline is fully functional without them.
     audio_only = not meta.get("has_video", True)
-    if audio_only:
+    if captions_only:
+        print(
+            "[transcribe] captions-only mode - no media file, so frames, "
+            "Whisper and diarization are all skipped; the platform captions "
+            "carry the transcript",
+            file=sys.stderr,
+        )
+    elif audio_only:
         print(
             "[transcribe] audio-only source (no video stream) - skipping frame "
             "extraction; transcript/diarization pipeline runs normally",
@@ -616,20 +643,22 @@ def main() -> int:
         ", dedup will filter after extraction"
         if not args.no_dedup else ""
     )
-    print(
-        f"[transcribe] sampling {len(regular_timestamps)} regular frame candidates "
-        f"(gap-filled across {len(cut_times)} cuts) over {scope}{dedup_hint}...",
-        file=sys.stderr,
-    )
-    frames = extract_at_timestamps(
-        video_path,
-        work / "frames",
-        regular_timestamps,
-        kind="regular",
-        resolution=args.resolution,
-        workers=args.frame_workers,
-        dedup_threshold=None if args.no_dedup else args.dedup_threshold,
-    )
+    frames: list[dict] = []
+    if not audio_only:
+        print(
+            f"[transcribe] sampling {len(regular_timestamps)} regular frame candidates "
+            f"(gap-filled across {len(cut_times)} cuts) over {scope}{dedup_hint}...",
+            file=sys.stderr,
+        )
+        frames = extract_at_timestamps(
+            video_path,
+            work / "frames",
+            regular_timestamps,
+            kind="regular",
+            resolution=args.resolution,
+            workers=args.frame_workers,
+            dedup_threshold=None if args.no_dedup else args.dedup_threshold,
+        )
 
     cut_frames: list[dict] = []
     if cut_times:
@@ -685,7 +714,7 @@ def main() -> int:
         except Exception as exc:
             print(f"[transcribe] subtitle parse failed: {exc}", file=sys.stderr)
 
-    if not transcript_segments and diarize_backend == "assemblyai":
+    if not transcript_segments and has_media and diarize_backend == "assemblyai":
         # AssemblyAI returns transcript + speaker labels in one call.
         try:
             audio_path = extract_audio(video_path, work / "audio.mp3")
@@ -735,7 +764,7 @@ def main() -> int:
         except (ValueError, KeyError) as exc:
             print(f"[transcribe] ignoring corrupt {seg_cache.name} ({exc})", file=sys.stderr)
 
-    if not transcript_segments and not args.no_whisper:
+    if not transcript_segments and has_media and not args.no_whisper:
         stt_cascade: list = []
         try:
             stt_cascade = select_backends(args.whisper or None)
@@ -789,7 +818,7 @@ def main() -> int:
     # meaningful for ASR output - VTT captions come from the platform, not a
     # decoder, and have no such failure mode.
     repair_report: list[dict] = []
-    if (transcript_segments and not args.no_repair
+    if (transcript_segments and has_media and not args.no_repair
             and (transcript_source or "").startswith("transcript")):
         try:
             from repair import repair_segments
@@ -838,7 +867,8 @@ def main() -> int:
 
     # Pyannote runs alongside Whisper and aligns to the transcript;
     # AssemblyAI already delivered speakers above.
-    if transcript_segments and diarize_backend in ("pyannote-api", "pyannote-local"):
+    if (transcript_segments and has_media
+            and diarize_backend in ("pyannote-api", "pyannote-local")):
         # Cascade: the chosen backend first, then - in auto mode only - the
         # other configured pyannote variant. An explicit --diarize pin never
         # degrades silently. (AssemblyAI is not a post-hoc candidate: it
@@ -900,6 +930,20 @@ def main() -> int:
                 f"transcript kept without speaker labels",
                 file=sys.stderr,
             )
+
+    if captions_only and not transcript_segments:
+        raise SystemExit(
+            f"video download failed ({download_error}) and the subtitles that "
+            "landed could not be parsed - nothing left to transcribe. Refresh "
+            "yt-dlp with `python3 scripts/setup.py --install-binaries --force` "
+            "and retry."
+        )
+    if captions_only and diarize_backend:
+        print(
+            "[transcribe] diarization needs audio - unavailable in captions-only "
+            "mode; transcript stays without speaker labels",
+            file=sys.stderr,
+        )
 
     if transcript_segments:
         transcript_text = format_transcript(transcript_segments)
@@ -1056,6 +1100,13 @@ def main() -> int:
     if info.get("uploader"):
         emit(f"- **Uploader:** {info['uploader']}")
     emit(f"- **Duration:** {format_time(full_duration)} ({full_duration:.1f}s)")
+    if captions_only:
+        emit(
+            "- **Degraded run:** captions-only - the media download failed "
+            f"({download_error}), so there are no frames, no Whisper pass and no "
+            "diarization. The transcript below comes from the platform captions "
+            "and is complete; anything shown on screen is not covered."
+        )
     if focused:
         emit(
             f"- **Focus range:** {format_time(effective_start)} -> {format_time(effective_end)} "
@@ -1064,7 +1115,9 @@ def main() -> int:
     if meta.get("width") and meta.get("height"):
         emit(f"- **Resolution:** {meta['width']}x{meta['height']} ({meta.get('codec') or 'unknown codec'})")
 
-    date_candidates = _detect_dates(args.source, info, meta, is_url(args.source), video_path)
+    date_candidates = _detect_dates(
+        args.source, info, meta, is_url(args.source), video_path or ""
+    )
     if date_candidates:
         if len(date_candidates) == 1:
             d, srcs = date_candidates[0]
@@ -1080,7 +1133,13 @@ def main() -> int:
         f", {len(chunks)} chunks x ~{chunks[0][1]-chunks[0][0]:.0f}s"
         if chunked else ""
     )
-    if cut_frames:
+    if not all_frames and (captions_only or audio_only):
+        why = (
+            "no media file was downloaded"
+            if captions_only else "the source carries no video stream"
+        )
+        emit(f"- **Frames:** none - {why}")
+    elif cut_frames:
         thr_show = (
             f"{cut_threshold:.1f} auto"
             if threshold_is_auto else f"{cut_threshold:.1f}"
@@ -1100,7 +1159,8 @@ def main() -> int:
             f"{mode} mode{chunk_note} "
             f"(budget {total_target}, max {max_frames}/chunk){scene_note}"
         )
-    emit(f"- **Frame size:** {args.resolution}px wide")
+    if all_frames:
+        emit(f"- **Frame size:** {args.resolution}px wide")
     if transcript_segments:
         in_range = " in range" if focused else ""
         emit(
@@ -1134,22 +1194,36 @@ def main() -> int:
     emit()
     emit("## Frames")
     emit()
-    if cut_frames:
+    if not all_frames:
+        emit(
+            "_No frames in this run - "
+            + (
+                "the media download failed, so only the captions are available. "
+                "Base the analysis on the transcript alone and say so where "
+                "on-screen content would have been needed."
+                if captions_only else
+                "the source has no video stream. Base the analysis on the "
+                "transcript alone."
+            )
+            + "_"
+        )
+    elif cut_frames:
         emit(f"Regular frames live at: `{work / 'frames'}`")
         emit(f"Cut frames live at: `{work / 'cuts'}`")
     else:
         emit(f"Frames live at: `{work / 'frames'}`")
-    emit()
-    emit(
-        "**Read each frame path below with the Read tool to view the image.** "
-        "Frames are in chronological order; `t=MM:SS` is the absolute timestamp "
-        "in the source video. Tag `[REG]` = regular interval sampling, "
-        "`[CUT]` = scene-cut detected by scdet."
-        if cut_frames else
-        "**Read each frame path below with the Read tool to view the image.** "
-        "Frames are in chronological order; `t=MM:SS` is the absolute timestamp in the source video."
-    )
-    emit()
+    if all_frames:
+        emit()
+        emit(
+            "**Read each frame path below with the Read tool to view the image.** "
+            "Frames are in chronological order; `t=MM:SS` is the absolute timestamp "
+            "in the source video. Tag `[REG]` = regular interval sampling, "
+            "`[CUT]` = scene-cut detected by scdet."
+            if cut_frames else
+            "**Read each frame path below with the Read tool to view the image.** "
+            "Frames are in chronological order; `t=MM:SS` is the absolute timestamp in the source video."
+        )
+        emit()
     for frame in all_frames:
         kind = frame.get("kind", "regular")
         tag = "[CUT]" if kind == "cut" else "[REG]"

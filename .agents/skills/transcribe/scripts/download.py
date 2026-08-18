@@ -6,6 +6,7 @@ transcribe.py can parse them without needing Whisper.
 """
 from __future__ import annotations
 
+import collections
 import json
 import os
 import subprocess
@@ -77,6 +78,8 @@ def resolve_local(path: str) -> dict:
         "subtitle_path": None,
         "info": {"title": p.name, "url": str(p)},
         "downloaded": False,
+        "captions_only": False,
+        "download_error": None,
     }
 
 
@@ -96,6 +99,66 @@ def _pick_video(out_dir: Path) -> Path | None:
         if candidate.suffix.lower() in VIDEO_EXTS:
             return candidate
     return None
+
+
+# Fingerprints for the ways a media download dies while the caption tracks
+# still land. Captions are separate small files fetched over a different
+# path, so a gated/DRM'd media stream doesn't take them down with it - which
+# is exactly when the frames-less degradation below is worth having.
+DOWNLOAD_FAILURE_HINTS: list[tuple[str, str]] = [
+    ("po_token", "YouTube demanded a PO token for the media streams"),
+    ("po token", "YouTube demanded a PO token for the media streams"),
+    ("drm", "the media streams are DRM-protected"),
+    ("sign in to confirm", "YouTube asked for a signed-in session (bot check)"),
+    ("confirm your age", "the source requires an age-confirmed session"),
+    ("private video", "the video is private"),
+    ("members-only", "the video is members-only"),
+    ("http error 403", "the media URLs returned HTTP 403 (often an outdated yt-dlp)"),
+    ("http error 429", "the source rate-limited the download (HTTP 429)"),
+    ("requested format is not available", "no downloadable format matched the request"),
+    ("unable to download", "yt-dlp could not fetch the media streams"),
+]
+
+
+def _classify_failure(log_tail: list[str]) -> str:
+    """Turn yt-dlp's last output lines into one short human-readable reason.
+
+    Falls back to the last ERROR line, then to a generic message - the
+    caller puts this into the report header, so it must never be empty.
+    """
+    haystack = "\n".join(log_tail).lower()
+    for needle, reason in DOWNLOAD_FAILURE_HINTS:
+        if needle in haystack:
+            return reason
+    for line in reversed(log_tail):
+        if "error" in line.lower():
+            return line.strip()[:200]
+    return "yt-dlp produced no media file"
+
+
+def _run_yt_dlp(cmd: list[str], env: dict) -> tuple[int, list[str]]:
+    """Run yt-dlp, streaming its output to stderr and keeping the tail.
+
+    Output has to stay live (downloads run for minutes), so it's echoed
+    line by line rather than captured wholesale; only the last lines are
+    retained for failure classification.
+    """
+    tail: collections.deque[str] = collections.deque(maxlen=60)
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=env,
+        text=True,
+        errors="replace",
+        bufsize=1,
+    )
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        sys.stderr.write(line)
+        tail.append(line.rstrip())
+    proc.stdout.close()
+    return proc.wait(), list(tail)
 
 
 def download_url(url: str, out_dir: Path) -> dict:
@@ -135,14 +198,31 @@ def download_url(url: str, out_dir: Path) -> dict:
 
     # yt-dlp may exit non-zero if a subtitle variant fails (e.g. 429) even when
     # the video itself downloaded fine. Treat "video file present" as success.
-    result = subprocess.run(cmd, stdout=sys.stderr, stderr=sys.stderr, env=env)
+    returncode, log_tail = _run_yt_dlp(cmd, env)
     video = _pick_video(out_dir)
+    subtitle = _pick_subtitle(out_dir)
+    captions_only = False
+    download_error: str | None = None
     if video is None:
-        raise SystemExit(
-            f"yt-dlp did not produce a video file in {out_dir} (exit {result.returncode})"
+        # Media stream lost, captions present: a full transcript is still
+        # reachable, only the frames are gone. Degrade instead of failing -
+        # the caller drops the frame stages and notes the reason in the
+        # report header.
+        download_error = _classify_failure(log_tail)
+        if subtitle is None:
+            raise SystemExit(
+                f"yt-dlp produced neither a video file nor subtitles in {out_dir} "
+                f"(exit {returncode}): {download_error}. If this is YouTube, an "
+                "outdated yt-dlp is the usual cause - refresh it with "
+                "`python3 scripts/setup.py --install-binaries --force`."
+            )
+        captions_only = True
+        print(
+            f"[transcribe] video download failed ({download_error}) but subtitles "
+            "landed - continuing captions-only, without frames",
+            file=sys.stderr,
         )
 
-    subtitle = _pick_subtitle(out_dir)
     info_path = out_dir / "video.info.json"
     info: dict = {}
     if info_path.exists():
@@ -159,10 +239,12 @@ def download_url(url: str, out_dir: Path) -> dict:
             info = {"url": url}
 
     return {
-        "video_path": str(video),
+        "video_path": str(video) if video else None,
         "subtitle_path": str(subtitle) if subtitle else None,
         "info": info or {"url": url},
         "downloaded": True,
+        "captions_only": captions_only,
+        "download_error": download_error,
     }
 
 
