@@ -120,26 +120,36 @@ live_walk() {
     while IFS= read -r child; do
         base=$(basename "$child")
         m=$(printf '%s' "$base" | sed 's/[^A-Za-z0-9]/-/g')
-        if [ "$rest" = "$m" ]; then return 0; fi
+        if [ "$rest" = "$m" ]; then printf '%s' "$child"; return 0; fi
         case "$rest" in
             "$m"-*) live_walk "$child" "${rest#"$m"-}" && return 0 ;;
         esac
     done < <(find "$cur" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
     return 1
 }
-declare -A dir_live_cache
-is_live_project_dir() {
-    local name="$1"
-    if [ -z "${dir_live_cache[$name]+x}" ]; then
+declare -A dir_path_cache
+# Prints the decoded repo path of a munged project dir name (empty when the path no longer exists);
+# exit status mirrors whether it resolved.
+resolve_project_dir() {
+    local name="$1" p
+    if [ -z "${dir_path_cache[$name]+x}" ]; then
+        p=""
         # Absolute Linux paths munge to a leading "-" (/home/... -> -home-...).
-        if [ "${name#-}" != "$name" ] && live_walk / "${name#-}"; then
-            dir_live_cache[$name]=1
-        else
-            dir_live_cache[$name]=0
-        fi
+        if [ "${name#-}" != "$name" ]; then p=$(live_walk / "${name#-}") || p=""; fi
+        dir_path_cache[$name]=$p
     fi
-    [ "${dir_live_cache[$name]}" = 1 ]
+    printf '%s' "${dir_path_cache[$name]}"
+    [ -n "${dir_path_cache[$name]}" ]
 }
+is_live_project_dir() { resolve_project_dir "$1" >/dev/null; }
+# Human-readable location of a project dir: the decoded repo path when it still exists.
+dir_display() {
+    local p
+    p=$(resolve_project_dir "$1") || true
+    if [ -n "$p" ]; then printf '%s' "$p"; else printf '%s' "$1"; fi
+}
+# Findings needing a human decision, collected for the desktop notification.
+findings_titles=(); findings_bodies=()
 
 # --- Phase 1: duplicate copies of the same session across project dirs -------------------------------
 # Tree moves keep the old-path copy (transfer-cc-sessions). A copy that is byte-identical to - or a
@@ -178,10 +188,14 @@ while IFS= read -r dup_name; do
         else
             size_mb=$((other_size / 1048576))
             last=$(date -d "@$(last_activity_epoch "$other")" +%Y-%m-%d)
-            info="\"$(session_title "$other")\", ${size_mb}MB, last activity $last"
+            stitle=$(session_title "$other")
+            info="\"$stitle\", ${size_mb}MB, last activity $last"
             fork=$(fork_point "$other" "$keeper")
             [ -n "$fork" ] && info="$info, forked from $keeper_dir copy after $fork"
             log "kept diverged copy $(basename "$(dirname "$other")")/$dup_name ($info - review manually)"
+            keeper_mb=$(( $(stat -c %s "$keeper") / 1048576 ))
+            findings_titles+=("Divergiert: \"$stitle\"")
+            findings_bodies+=("${dup_name:0:8} in $(dir_display "$(basename "$(dirname "$other")")") (${size_mb}MB) vs $(dir_display "$keeper_dir") (${keeper_mb}MB)${fork:+, Fork nach $fork}")
             kept_files+=("$other")
         fi
     done < <(printf '%s\n' "$ranked" | tail -n +2)
@@ -260,6 +274,9 @@ for project_dir in "$PROJECTS_DIR"/*/; do
             list="${list:+$list, }${id:0:8} (${size_mb}MB, last $last)"
         done <<< "${title_map[$title]}"
         log "same title \"$title\" in $project_name: $list - no exact overlap, rename or trash manually"
+        findings_titles+=("Gleicher Name: \"$title\"")
+        findings_bodies+=("$(dir_display "$project_name")
+$list")
     done
     unset title_map gone
 done
@@ -319,14 +336,20 @@ done
 
 log "done: $deduped duplicate(s) and $moved empty session(s) trashed, $purged batch(es) purged"
 
-# Findings that need a human decision (diverged copies, title collisions) surface as a desktop
-# notification, because scheduled runs have no visible console. A failed notification never breaks
-# the run.
-if [ "$DRY_RUN" != 1 ] && command -v notify-send >/dev/null 2>&1; then
-    review_count=$(printf '%s' "$log_lines" | grep -cE 'kept diverged copy|same title') || true
-    if [ "${review_count:-0}" -gt 0 ]; then
-        review=$(printf '%s' "$log_lines" | grep -E 'kept diverged copy|same title' | sed -E 's/^[0-9-]+ [0-9:]+ //' | head -3) || true
-        notify-send "Session Cleanup: $review_count finding(s) to review" "$review" 2>/dev/null || true
+# Findings that need a human decision (diverged copies, title collisions) are written to findings.txt
+# and raised as desktop notifications (one per finding), because scheduled runs have no visible
+# console. A failed notification never breaks the run.
+if [ "$DRY_RUN" != 1 ] && [ "${#findings_titles[@]}" -gt 0 ]; then
+    {
+        echo "Session-Cleanup-Befunde vom $(date '+%Y-%m-%d %H:%M') - Aufloesung: Session umbenennen (/rename) oder wegwerfen"
+        for ((i = 0; i < ${#findings_titles[@]}; i++)); do
+            printf '\n%s\n%s\n' "${findings_titles[$i]}" "${findings_bodies[$i]}"
+        done
+    } > "$TRASH_DIR/findings.txt"
+    if command -v notify-send >/dev/null 2>&1; then
+        for ((i = 0; i < ${#findings_titles[@]} && i < 5; i++)); do
+            notify-send "${findings_titles[$i]}" "${findings_bodies[$i]}" 2>/dev/null || true
+        done
     fi
 fi
 

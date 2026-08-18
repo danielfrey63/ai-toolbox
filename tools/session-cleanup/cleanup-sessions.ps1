@@ -28,6 +28,8 @@ if (-not (Test-Path $projectsDir)) { Write-Host "No projects directory at $proje
 if (-not (Test-Path $trashDir)) { New-Item -ItemType Directory -Path $trashDir | Out-Null }
 
 $script:logLines = @()
+# Findings needing a human decision, collected as { Title; Body } for the desktop notification.
+$script:findings = @()
 function Write-Log([string]$Message) {
     $line = "{0:yyyy-MM-dd HH:mm:ss} {1}" -f (Get-Date), $Message
     $script:logLines += $line
@@ -153,17 +155,17 @@ $deduped = 0
 # identifies the current location. The munged dir name itself is the only ground truth: walk existing
 # directories from the drive root and match munged component names to see whether the dir still
 # corresponds to an openable path.
-function Test-LiveProjectDir([string]$name) {
-    if ($name -notmatch '^([A-Za-z])--(.+)$') { return $false }
+function Resolve-ProjectDir([string]$name) {
+    if ($name -notmatch '^([A-Za-z])--(.+)$') { return $null }
     $root = "$($matches[1]):\"
-    if (-not (Test-Path -LiteralPath $root)) { return $false }
+    if (-not (Test-Path -LiteralPath $root)) { return $null }
     $stack = [Collections.Generic.Stack[object[]]]::new()
     $stack.Push(@($root, $matches[2]))
     while ($stack.Count -gt 0) {
         $cur, $rest = $stack.Pop()
         foreach ($child in Get-ChildItem -LiteralPath $cur -Directory -Force -ErrorAction SilentlyContinue) {
             $m = $child.Name -replace '[^A-Za-z0-9]', '-'
-            if ($rest -ieq $m) { return $true }
+            if ($rest -ieq $m) { return $child.FullName }
             # Munged names are ambiguous ("-" may be "\", " ", "." ...), so follow every child whose
             # munged name is a component prefix of the remainder.
             if ($rest.Length -gt $m.Length -and $rest.StartsWith("$m-", 'OrdinalIgnoreCase')) {
@@ -171,12 +173,16 @@ function Test-LiveProjectDir([string]$name) {
             }
         }
     }
-    return $false
+    return $null
 }
 $dirScore = @{}
+$dirPath = @{}
 foreach ($d in Get-ChildItem $projectsDir -Directory) {
-    $dirScore[$d.Name] = if (Test-LiveProjectDir $d.Name) { 1 } else { 0 }
+    $dirPath[$d.Name] = Resolve-ProjectDir $d.Name
+    $dirScore[$d.Name] = if ($dirPath[$d.Name]) { 1 } else { 0 }
 }
+# Human-readable location of a project dir: the decoded repo path when it still exists.
+function Get-DirDisplay([string]$name) { if ($dirPath[$name]) { $dirPath[$name] } else { $name } }
 $dupGroups = Get-ChildItem "$projectsDir\*\*.jsonl" -File | Group-Object Name | Where-Object Count -gt 1
 foreach ($g in $dupGroups) {
     $ranked = @($g.Group | Sort-Object -Property `
@@ -202,6 +208,10 @@ foreach ($g in $dupGroups) {
             $fork = Get-ForkPoint $other $keeper
             $forkTxt = if ($fork) { ", forked from $($keeper.Directory.Name) copy after $fork" } else { '' }
             Write-Log "kept diverged copy $($other.Directory.Name)\$($other.Name) ($info$forkTxt - review manually)"
+            $script:findings += ,@{
+                Title = "Divergiert: `"$(Get-SessionTitle $other)`""
+                Body  = "$($other.Name.Substring(0, 8)) in $(Get-DirDisplay $other.Directory.Name) (${sizeMB}MB) vs $(Get-DirDisplay $keeper.Directory.Name) ($([math]::Round($keeper.Length / 1MB, 1))MB)$(if ($fork) { ", Fork nach $fork" })"
+            }
             $kept.Add($other)
         }
     }
@@ -261,6 +271,10 @@ foreach ($projectDir in Get-ChildItem $projectsDir -Directory) {
             "$($_.Name.Substring(0, 8)) ($([math]::Round($_.Length / 1MB, 1))MB, last $((Get-LastActivity $_).ToString('yyyy-MM-dd')))"
         }) -join ', '
         Write-Log "same title `"$($t.Key)`" in $($projectDir.Name): $list - no exact overlap, rename or trash manually"
+        $script:findings += ,@{
+            Title = "Gleicher Name: `"$($t.Key)`""
+            Body  = "$(Get-DirDisplay $projectDir.Name)`n$list"
+        }
     }
 }
 
@@ -316,25 +330,44 @@ Write-Log "done: $deduped duplicate(s) and $moved empty session(s) trashed, $pur
 
 # --- Findings notification ---------------------------------------------------------------------------
 # Findings that need a human decision (diverged copies, title collisions) are written to findings.txt
-# and surfaced as a system-modal popup (topmost, stays until dismissed), because scheduled runs have
-# no visible console. The popup is launched detached so the run never blocks on it; a failed popup
-# never breaks the run.
-if (-not $DryRun) {
-    $review = @($script:logLines | Where-Object { $_ -match 'kept diverged copy|same title' })
-    $findingsFile = Join-Path $trashDir 'findings.txt'
-    if ($review.Count -gt 0) {
-        try {
-            $header = "Session-Cleanup-Befunde vom $(Get-Date -Format 'yyyy-MM-dd HH:mm') - Aufloesung: Session umbenennen (/rename) oder wegwerfen`n"
-            $body = ($review | ForEach-Object { $_ -replace '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ', '' }) -join "`n`n"
-            Set-Content -LiteralPath $findingsFile -Value ($header + "`n" + $body) -Encoding UTF8
-            # 0x40 = information icon, 0x1000 = system-modal (topmost). Popup reads the file itself to
-            # avoid any argument-encoding pitfalls.
-            $popupScript = "`$t = Get-Content -Raw '$findingsFile'; (New-Object -ComObject WScript.Shell).Popup(`$t, 0, 'AI-Toolbox Session Cleanup: $($review.Count) Befund(e)', 0x40 -bor 0x1000) | Out-Null"
-            $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($popupScript))
-            Start-Process (Get-Process -Id $PID).Path -WindowStyle Hidden -ArgumentList '-NoProfile', '-EncodedCommand', $encoded
-        } catch {
-            Write-Log "notification failed: $($_.Exception.Message)"
+# and raised as regular Windows toast notifications (one per finding, visible in the Action Center),
+# because scheduled runs have no visible console. Toasts from unpackaged scripts need a registered
+# AppUserModelID (HKCU, no admin required); pwsh 7 cannot project WinRT types, so the toasts are shown
+# via Windows PowerShell 5.1. A failed notification never breaks the run.
+if (-not $DryRun -and $script:findings.Count -gt 0) {
+    try {
+        $findingsFile = Join-Path $trashDir 'findings.txt'
+        $header = "Session-Cleanup-Befunde vom $(Get-Date -Format 'yyyy-MM-dd HH:mm') - Aufloesung: Session umbenennen (/rename) oder wegwerfen"
+        $body = ($script:findings | ForEach-Object { "$($_.Title)`n$($_.Body)" }) -join "`n`n"
+        Set-Content -LiteralPath $findingsFile -Value ($header + "`n`n" + $body) -Encoding UTF8
+
+        $appId = 'AIToolbox.SessionCleanup'
+        $reg = "HKCU:\Software\Classes\AppUserModelId\$appId"
+        if (-not (Test-Path $reg)) { New-Item -Path $reg -Force | Out-Null }
+        if ((Get-ItemProperty -Path $reg -Name DisplayName -ErrorAction SilentlyContinue).DisplayName -ne 'AI-Toolbox Session Cleanup') {
+            New-ItemProperty -Path $reg -Name DisplayName -Value 'AI-Toolbox Session Cleanup' -PropertyType String -Force | Out-Null
         }
+
+        $toastCalls = foreach ($f in ($script:findings | Select-Object -First 5)) {
+            $t = [Security.SecurityElement]::Escape($f.Title)
+            $b = [Security.SecurityElement]::Escape($f.Body)
+            "Show-Toast '<toast duration=`"long`"><visual><binding template=`"ToastGeneric`"><text>$t</text><text>$b</text></binding></visual></toast>'"
+        }
+        $toastScript = @"
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+function Show-Toast([string]`$xmlText) {
+    `$xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+    `$xml.LoadXml(`$xmlText)
+    [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('$appId').Show([Windows.UI.Notifications.ToastNotification]::new(`$xml))
+    Start-Sleep -Milliseconds 500
+}
+$($toastCalls -join "`n")
+"@
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($toastScript))
+        & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -EncodedCommand $encoded | Out-Null
+    } catch {
+        Write-Log "notification failed: $($_.Exception.Message)"
     }
 }
 
