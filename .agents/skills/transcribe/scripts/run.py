@@ -211,7 +211,13 @@ from frames import (  # noqa: E402
     parse_time,
 )
 from resources import collect as collect_resources, format_section as format_resources  # noqa: E402
-from transcribe import filter_range, format_transcript, parse_vtt  # noqa: E402
+from transcribe import (  # noqa: E402
+    VTT_GENERATOR_NOTE,
+    filter_range,
+    format_transcript,
+    format_vtt,
+    parse_vtt,
+)
 from stt import extract_audio, select_backend, select_backends, transcribe_video  # noqa: E402
 
 
@@ -945,6 +951,36 @@ def main() -> int:
             _write_best_effort(protocol_path, "\n".join(protocol_lines), "protocol")
         if transcript_lines:
             _write_best_effort(transcript_path, "\n".join(transcript_lines), "transcript")
+
+        # WebVTT companion (<base>.vtt): per-segment subtitle cues with
+        # speaker voice-tags when diarized. A pre-existing foreign VTT
+        # (e.g. a Teams export copied next to the video) is preserved as
+        # <base>.original.vtt before the generated one takes its place;
+        # skill-generated VTTs (identified by the generator NOTE) are
+        # simply overwritten on re-runs.
+        if transcript_segments:
+            vtt_path = save_md_path.parent / f"{base}.vtt"
+            try:
+                foreign = vtt_path.exists() and VTT_GENERATOR_NOTE not in vtt_path.read_text(
+                    encoding="utf-8", errors="replace"
+                )[:400]
+                if foreign:
+                    original = save_md_path.parent / f"{base}.original.vtt"
+                    if original.exists():
+                        sys.stderr.write(
+                            f"[transcribe] WARNING: {vtt_path.name} is not skill-generated "
+                            f"and {original.name} already exists - leaving both untouched\n"
+                        )
+                        vtt_path = None
+                    else:
+                        vtt_path.rename(original)
+                        sys.stderr.write(
+                            f"[transcribe] platform VTT preserved as {original.name}\n"
+                        )
+                if vtt_path is not None:
+                    _write_best_effort(vtt_path, format_vtt(transcript_segments), "vtt")
+            except OSError as exc:
+                sys.stderr.write(f"[transcribe] WARNING: VTT handling failed ({exc})\n")
 
         # Main analysis-target file is a stub with cross-links; Claude
         # appends Summary + Analysis sections later.
