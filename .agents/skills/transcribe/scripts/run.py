@@ -990,6 +990,34 @@ def main() -> int:
             except OSError as exc:
                 sys.stderr.write(f"[transcribe] WARNING: VTT handling failed ({exc})\n")
 
+        # Cross-check against platform captions: a Whisper transcript and a
+        # platform VTT both mishear, but rarely in the same way - windows
+        # where they diverge are exactly the passages worth re-listening to.
+        # The review list (<base>.crosscheck.md) feeds Claude's validation
+        # pass; see SKILL.md "Cross-check against platform captions".
+        if transcript_segments:
+            ref_vtt = save_md_path.parent / f"{base}.original.vtt"
+            if ref_vtt.exists():
+                try:
+                    from crosscheck import crosscheck_report
+
+                    cc_text, n_flagged, n_windows = crosscheck_report(
+                        transcript_segments, ref_vtt,
+                        transcript_name=transcript_path.name,
+                    )
+                    _write_best_effort(
+                        save_md_path.parent / f"{base}.crosscheck.md", cc_text,
+                        "crosscheck",
+                    )
+                    sys.stderr.write(
+                        f"[transcribe] crosscheck: {n_flagged} of {n_windows} "
+                        f"windows diverge from {ref_vtt.name}\n"
+                    )
+                except Exception as exc:  # noqa: BLE001 - never sink the report
+                    sys.stderr.write(
+                        f"[transcribe] WARNING: crosscheck failed ({exc})\n"
+                    )
+
         # Main analysis-target file is a stub with cross-links; Claude
         # appends Summary + Analysis sections later.
         title = info.get("title") or Path(args.source).name

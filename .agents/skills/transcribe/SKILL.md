@@ -121,7 +121,7 @@ Optional flags:
 - `--scene-min-gap S` — minimum seconds between consecutive cut frames (default `2.0`, de-clusters animation/B-roll bursts)
 - `--scene-max-frames N` — cap on additional cut frames (default `80`, applied separately from `--max-frames`)
 - `--scene-settle-seconds S` — seconds after a detected cut to wait before extracting (default `1.0`). Lets UI transitions / dialogs / launcher windows render before capture, so cut frames don't land on loading-state / black mid-transition pixels. Capped at `next_cut - 0.3s` so we never bleed into the following shot. Set to `0` to revert to the old just-before-cut behavior. Higher values (~2–4 s) help apps that take longer to render but risk bleeding into transient flashes.
-- `--save-md PATH` — save the report as **three companion files**: PATH itself (the main file — a stub for Claude to append `## Summary` and `## Analysis`), plus `<base>.protocol.md` (metadata + frame list + resources + footer) and `<base>.transcript.md` (full transcript) as siblings, where `<base>` is PATH with `.md` (or legacy `.transcribe.md`) stripped. Defaults:
+- `--save-md PATH` — save the report as **companion files**: PATH itself (the main file — a stub for Claude to append `## Summary` and `## Analysis`), plus `<base>.protocol.md` (metadata + frame list + resources + footer) and `<base>.transcript.md` (full transcript) as siblings, where `<base>` is PATH with `.md` (or legacy `.transcribe.md`) stripped. Also written next to them: `<base>.vtt` (WebVTT with speaker voice-tags, one cue per segment; a pre-existing foreign VTT — e.g. a Teams export — is preserved as `<base>.original.vtt` first, skill-generated ones are simply overwritten on re-runs) and, when a `<base>.original.vtt` exists, `<base>.crosscheck.md` (divergence review list — see "Cross-check against platform captions" below). Defaults:
   - **Local-file sources** → `<video-stem>.md` next to the source (e.g. `videos/test.mp4` → `videos/test.{md,protocol.md,transcript.md}`).
   - **URL sources** (YouTube, Vimeo, etc.) → `./transcribe/<YYYY-MM-DD>-<slug>/<slug>.md` in the current working directory, where `<slug>` is a sanitized form of the video title returned by yt-dlp (lowercase ASCII, non-alphanumeric → `-`, ~60 chars max). The per-video subfolder keeps multiple runs tidy and leaves room for retained video / frame snapshots. `.gitignore`-friendly via a single `transcribe/` entry.
   - Pass `--no-save-md` to disable auto-save entirely (frames + transcript stay only in the temp work_dir until Step 6 cleanup).
@@ -294,6 +294,19 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/repair.py" --segments "<base>.segments.json
 ```
 
 Note the repaired `segments.json` is the *input* to rendering — after a standalone repair, re-run `run.py` (it resumes from the cache in ~1 s) to regenerate the transcript and protocol files.
+
+### Cross-check against platform captions (default on)
+
+Meeting platforms often ship their own captions next to the recording (Teams exports a `.vtt`). Both that transcript and Whisper mishear — but rarely in the same way, so **divergence between the two is a cheap, reliable pointer to the passages worth re-listening to** (real case: Whisper's «welche Editen» vs. Teams' «eine Weichen … respektive strecken» — the divergence flagged exactly the sentence where both had garbled *Weicheneditor/Streckeneditor*).
+
+Whenever a platform VTT was preserved as `<base>.original.vtt` (see the WebVTT companion above), `run.py` automatically runs `crosscheck.py`: it slices the timeline into 45-second windows, normalizes both texts (casefold, ß→ss, hyphens joined, punctuation dropped), scores each window with a token-level SequenceMatcher ratio, and writes the divergent windows to **`<base>.crosscheck.md`** — each with the Whisper text and the caption text side by side. The threshold is **adaptive** (`min(0.55, mean − stdev)` over the recording's own ratios): a well-matching pair is judged against the absolute ceiling, while a broadly-diverging pair (poor room-mic captions) only flags the outliers below its own baseline instead of half the meeting. Windows where one source has substantial text and the other (near) none are flagged as `missing in captions/transcript`. The list is capped at the 25 worst windows.
+
+The tool never decides which side is right. During the Konsistenz-Check (Step 4), work through the flagged windows: resolve what frames/context/glossary settle, and put the rest in front of the user as the **«unsichere Stellen»** for targeted re-listening (see `references/report-writing.md`, Konsistenz-Check item 8). Standalone re-run:
+
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/crosscheck.py" --segments "<base>.segments.json" \
+    --vtt "<base>.original.vtt" -o "<base>.crosscheck.md"
+```
 
 ## Transcription
 
