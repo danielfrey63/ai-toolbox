@@ -19,7 +19,8 @@ param(
     [Parameter(Mandatory)] [string]$SessionId,
     [Parameter(Mandatory)] [string]$From,
     [Parameter(Mandatory)] [string]$To,
-    [string]$Title
+    [string]$Title,
+    [switch]$Force  # skip the freshness guard (e.g. keepwarm ticks touch closed sessions)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,9 +44,11 @@ if (-not (Test-Path -LiteralPath $transcript)) {
 }
 
 # Refuse to touch a session that is likely still open (writer appends continuously).
+# Note: session-keepwarm ticks re-invoke closed sessions for up to ~3h, so a closed
+# session may still look fresh - use -Force once you are sure the window is closed.
 $age = (Get-Date) - (Get-Item -LiteralPath $transcript).LastWriteTime
-if ($age.TotalMinutes -lt 2) {
-    throw "transcript was written $([int]$age.TotalSeconds)s ago - close the session first, then re-run"
+if (-not $Force -and $age.TotalMinutes -lt 2) {
+    throw "transcript was written $([int]$age.TotalSeconds)s ago - close the session first, then re-run (or -Force if only keepwarm is touching it)"
 }
 
 # --- title (append a custom-title line unless the last one already matches) ---
