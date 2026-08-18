@@ -128,9 +128,9 @@ In `~/.claude/settings.json` sind ungenutzte Built-in-Tools abgeschaltet (Analys
 - **`permissions.deny`** (bare Name = Schema komplett aus dem Kontext): EnterPlanMode/ExitPlanMode (Plan Mode), DesignSync, NotebookEdit (Jupyter), PushNotification, RemoteTrigger, CronCreate/CronDelete/CronList (geplante Jobs), Monitor, EnterWorktree/ExitWorktree, ListMcpResourcesTool/ReadMcpResourceTool/ReadMcpResourceDirTool (MCP-Ressourcen), EndConversation.
 - **`disableWorkflows: true`** — Multi-Agent-Workflows/ultracode und `/deep-research` sind aus. Reaktivieren, wenn orchestrierte Fan-outs gewünscht sind.
 - **`disableArtifact: true`** — kein Publizieren von Artifacts auf claude.ai. Reaktivieren für teilbare HTML-Reports/Seiten.
-- **Bewusst AKTIV gelassen**: AskUserQuestion (häufig genutzt, von dieser CLAUDE.md verlangt), Task-Tools, Agent/Skill/ToolSearch, ScheduleWakeup (für `/loop` und den session-keepwarm Stop-Hook, siehe `tools/session-keepwarm/`), SendUserFile, ReportFindings (für `/code-review`), Bundled Skills (`/loop`, `/update-config` in Nutzung), Remote Control (remoteControlAtStartup), claude.ai-Connectoren (gdrive-Skill braucht Google Drive; abschaltbar nur alle zusammen via `disableClaudeAiConnectors`).
+- **Bewusst AKTIV gelassen**: AskUserQuestion (häufig genutzt, von dieser CLAUDE.md verlangt), Task-Tools, Agent/Skill/ToolSearch, ScheduleWakeup (für `/loop`; der frühere session-keepwarm Stop-Hook ist seit 2026-08-18 ausgebaut), SendUserFile, ReportFindings (für `/code-review`), Bundled Skills (`/loop`, `/update-config` in Nutzung), Remote Control (remoteControlAtStartup), claude.ai-Connectoren (gdrive-Skill braucht Google Drive; abschaltbar nur alle zusammen via `disableClaudeAiConnectors`).
 
-<!-- APP_VERSION: 0.11.18 -->
+<!-- APP_VERSION: 0.12.20 -->
 # graphify
 - **graphify** (`~/.claude/skills/graphify/SKILL.md`) - any input to knowledge graph. Trigger: `/graphify`
 When the user types `/graphify`, invoke the Skill tool with `skill: "graphify"` before doing anything else.
