@@ -80,6 +80,7 @@ def resolve_local(path: str) -> dict:
         "downloaded": False,
         "captions_only": False,
         "download_error": None,
+        "media_kind": "video",
     }
 
 
@@ -101,6 +102,18 @@ def _pick_video(out_dir: Path) -> Path | None:
     return None
 
 
+def _pick_audio(out_dir: Path) -> Path | None:
+    """Audio-only download result, for sources whose video streams are gated.
+
+    Audio still carries the whole transcript (Whisper runs normally); only
+    the frame stages fall away - the same shape as an .m4a voice memo.
+    """
+    for ext in (".m4a", ".mp3", ".opus", ".webm", ".ogg", ".wav", ".aac"):
+        for candidate in out_dir.glob(f"video*{ext}"):
+            return candidate
+    return None
+
+
 # Fingerprints for the ways a media download dies while the caption tracks
 # still land. Captions are separate small files fetched over a different
 # path, so a gated/DRM'd media stream doesn't take them down with it - which
@@ -118,6 +131,23 @@ DOWNLOAD_FAILURE_HINTS: list[tuple[str, str]] = [
     ("requested format is not available", "no downloadable format matched the request"),
     ("unable to download", "yt-dlp could not fetch the media streams"),
 ]
+
+
+YOUTUBE_HOSTS = {
+    "youtube.com", "www.youtube.com", "m.youtube.com",
+    "music.youtube.com", "youtu.be", "www.youtu.be",
+}
+
+# Player clients that, per yt-dlp's PO Token Guide, still return plain HTTPS
+# format URLs without a Proof-of-Origin token - the retry when the default
+# clients hand back SABR-only formats (no URL) or demand a PO token. `tv`
+# falls back to itag 18 (360p H.264+AAC), which is plenty: this skill samples
+# 512px frames and transcribes audio, it isn't archiving the video.
+NO_POT_PLAYER_CLIENTS = "tv,web_embedded,android_vr"
+
+
+def _is_youtube(url: str) -> bool:
+    return (urlparse(url).hostname or "").lower() in YOUTUBE_HOSTS
 
 
 def _classify_failure(log_tail: list[str]) -> str:
@@ -172,22 +202,31 @@ def download_url(url: str, out_dir: Path) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     output_template = str(out_dir / "video.%(ext)s")
 
-    cmd = [
-        yt_dlp,
-        "-N", "8",
-        "-f", "bv*[height<=720]+ba/b[height<=720]/bv+ba/b",
-        "--merge-output-format", "mp4",
-        "--write-info-json",
-        "--write-subs",
-        "--write-auto-subs",
-        "--sub-langs", "en,en-US,en-GB,en-orig",
-        "--sub-format", "vtt",
-        "--convert-subs", "vtt",
-        "--no-playlist",
-        "--ignore-errors",
-        "-o", output_template,
-        url,
-    ]
+    def build_cmd(fmt: str, extractor_args: str | None, want_subs: bool) -> list[str]:
+        cmd = [
+            yt_dlp,
+            "-N", "8",
+            "-f", fmt,
+            "--merge-output-format", "mp4",
+            "--write-info-json",
+        ]
+        if want_subs:
+            cmd += [
+                "--write-subs",
+                "--write-auto-subs",
+                "--sub-langs", "en,en-US,en-GB,en-orig",
+                "--sub-format", "vtt",
+                "--convert-subs", "vtt",
+            ]
+        if extractor_args:
+            cmd += ["--extractor-args", extractor_args]
+        cmd += [
+            "--no-playlist",
+            "--ignore-errors",
+            "-o", output_template,
+            url,
+        ]
+        return cmd
 
     # yt-dlp discovers its JS runtime (deno, needed for YouTube's EJS
     # challenges) via PATH. The standalone deno from setup.py lives in
@@ -196,19 +235,72 @@ def download_url(url: str, out_dir: Path) -> dict:
     env = dict(os.environ)
     env["PATH"] = str(TRANSCRIBE_BIN_DIR) + os.pathsep + env.get("PATH", "")
 
-    # yt-dlp may exit non-zero if a subtitle variant fails (e.g. 429) even when
-    # the video itself downloaded fine. Treat "video file present" as success.
-    returncode, log_tail = _run_yt_dlp(cmd, env)
-    video = _pick_video(out_dir)
+    # Escalation ladder, each rung only paid for when the previous one came
+    # back without a media file:
+    #   1. the normal 720p video+audio pull
+    #   2. (YouTube) the same, through player clients that need no PO token
+    #   3. audio only - no frames, but Whisper and diarization run in full
+    # A first-rung success costs exactly one yt-dlp call, as before.
+    video_fmt = "bv*[height<=720]+ba/b[height<=720]/bv+ba/b"
+    yt_args = (
+        f"youtube:player_client={NO_POT_PLAYER_CLIENTS}"
+        if _is_youtube(url) else None
+    )
+    strategies: list[tuple[str, str, str | None]] = [
+        ("default clients", video_fmt, None),
+    ]
+    if yt_args:
+        strategies.append(
+            (f"player_client={NO_POT_PLAYER_CLIENTS}", video_fmt, yt_args)
+        )
+    strategies.append(("audio-only fallback", "bestaudio/best", yt_args))
+
+    video: Path | None = None
+    audio: Path | None = None
+    log_tail: list[str] = []
+    # The reason worth reporting comes from the *first* attempt - later rungs
+    # either succeed (and log nothing useful) or fail for downstream reasons.
+    failure_tail: list[str] = []
+    returncode = 0
+    for i, (label, fmt, extractor_args) in enumerate(strategies):
+        if i:
+            print(
+                f"[transcribe] no media file yet - retrying with {label}...",
+                file=sys.stderr,
+            )
+        # Subtitles land on the first attempt; re-requesting them on a retry
+        # only re-fetches what's already on disk.
+        want_subs = _pick_subtitle(out_dir) is None
+        # yt-dlp may exit non-zero if a subtitle variant fails (e.g. 429) even
+        # when the video itself downloaded fine. Treat "media file present" as
+        # success regardless of the exit code.
+        returncode, log_tail = _run_yt_dlp(build_cmd(fmt, extractor_args, want_subs), env)
+        video = _pick_video(out_dir)
+        if video is not None:
+            break
+        if not failure_tail:
+            failure_tail = log_tail
+        audio = _pick_audio(out_dir)
+        if audio is not None:
+            break
+
     subtitle = _pick_subtitle(out_dir)
     captions_only = False
     download_error: str | None = None
-    if video is None:
+    if video is None and audio is not None:
+        # Video streams gated, audio through: full transcript, no frames.
+        download_error = _classify_failure(failure_tail or log_tail)
+        print(
+            f"[transcribe] video streams unavailable ({download_error}) - "
+            "downloaded audio only; transcript runs in full, frames are skipped",
+            file=sys.stderr,
+        )
+    if video is None and audio is None:
         # Media stream lost, captions present: a full transcript is still
         # reachable, only the frames are gone. Degrade instead of failing -
         # the caller drops the frame stages and notes the reason in the
         # report header.
-        download_error = _classify_failure(log_tail)
+        download_error = _classify_failure(failure_tail or log_tail)
         if subtitle is None:
             raise SystemExit(
                 f"yt-dlp produced neither a video file nor subtitles in {out_dir} "
@@ -238,13 +330,17 @@ def download_url(url: str, out_dir: Path) -> dict:
         except Exception:
             info = {"url": url}
 
+    media = video or audio
     return {
-        "video_path": str(video) if video else None,
+        "video_path": str(media) if media else None,
         "subtitle_path": str(subtitle) if subtitle else None,
         "info": info or {"url": url},
         "downloaded": True,
         "captions_only": captions_only,
         "download_error": download_error,
+        # "video" | "audio" | None - run.py turns an "audio" result plus a
+        # download_error into the audio-only degradation note.
+        "media_kind": "video" if video else ("audio" if audio else None),
     }
 
 

@@ -476,6 +476,10 @@ def main() -> int:
     captions_only = bool(dl.get("captions_only"))
     download_error = dl.get("download_error")
     has_media = video_path is not None
+    # Video streams gated but audio through: everything except the frame
+    # stages runs normally, so this is a much milder degradation than
+    # captions-only - but it still belongs in the report header.
+    gated_audio = bool(download_error) and dl.get("media_kind") == "audio"
 
     # Domain glossary for hotword biasing: global config glossary plus a
     # transcribe-glossary.txt next to a local source file (URL sources have
@@ -537,9 +541,13 @@ def main() -> int:
             file=sys.stderr,
         )
     elif audio_only:
+        why = (
+            "video streams were gated, audio only"
+            if gated_audio else "audio-only source (no video stream)"
+        )
         print(
-            "[transcribe] audio-only source (no video stream) - skipping frame "
-            "extraction; transcript/diarization pipeline runs normally",
+            f"[transcribe] {why} - skipping frame extraction; "
+            "transcript/diarization pipeline runs normally",
             file=sys.stderr,
         )
 
@@ -1107,6 +1115,12 @@ def main() -> int:
             "diarization. The transcript below comes from the platform captions "
             "and is complete; anything shown on screen is not covered."
         )
+    elif gated_audio:
+        emit(
+            "- **Degraded run:** audio-only - the video streams were unavailable "
+            f"({download_error}), so there are no frames. Transcript and "
+            "diarization ran in full; anything shown on screen is not covered."
+        )
     if focused:
         emit(
             f"- **Focus range:** {format_time(effective_start)} -> {format_time(effective_end)} "
@@ -1134,10 +1148,12 @@ def main() -> int:
         if chunked else ""
     )
     if not all_frames and (captions_only or audio_only):
-        why = (
-            "no media file was downloaded"
-            if captions_only else "the source carries no video stream"
-        )
+        if captions_only:
+            why = "no media file was downloaded"
+        elif gated_audio:
+            why = "only the audio stream was downloadable"
+        else:
+            why = "the source carries no video stream"
         emit(f"- **Frames:** none - {why}")
     elif cut_frames:
         thr_show = (
@@ -1195,18 +1211,25 @@ def main() -> int:
     emit("## Frames")
     emit()
     if not all_frames:
-        emit(
-            "_No frames in this run - "
-            + (
+        if captions_only:
+            why = (
                 "the media download failed, so only the captions are available. "
                 "Base the analysis on the transcript alone and say so where "
                 "on-screen content would have been needed."
-                if captions_only else
+            )
+        elif gated_audio:
+            why = (
+                "the video streams were unavailable, so only audio was "
+                "downloaded. The transcript is complete; base the analysis on "
+                "it alone and say so where on-screen content would have been "
+                "needed."
+            )
+        else:
+            why = (
                 "the source has no video stream. Base the analysis on the "
                 "transcript alone."
             )
-            + "_"
-        )
+        emit(f"_No frames in this run - {why}_")
     elif cut_frames:
         emit(f"Regular frames live at: `{work / 'frames'}`")
         emit(f"Cut frames live at: `{work / 'cuts'}`")
