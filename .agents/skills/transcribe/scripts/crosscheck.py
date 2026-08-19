@@ -187,6 +187,14 @@ def crosscheck_report(segments: list[dict], vtt_path: Path,
 
 
 def main() -> int:
+    # Before parse_args, not after: --help prints and exits inside parse_args,
+    # so a later reconfigure never runs for it (see repair.py, same fix).
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--segments", required=True, help="<base>.segments.json")
@@ -195,12 +203,6 @@ def main() -> int:
     ap.add_argument("--window", type=float, default=DEFAULT_WINDOW)
     ap.add_argument("-o", "--out", help="write the review file here (default: stdout)")
     args = ap.parse_args()
-
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, ValueError):
-            pass
 
     payload = json.loads(Path(args.segments).read_text(encoding="utf-8"))
     segments = payload["segments"] if isinstance(payload, dict) else payload

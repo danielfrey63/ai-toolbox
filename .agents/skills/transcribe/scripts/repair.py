@@ -372,6 +372,15 @@ def _repair_windows(segments: list[dict], windows: list[dict], audio: Path,
 
 
 def main() -> int:
+    # Before parse_args: --help renders this module's docstring (which carries
+    # the cyrillic collapse example) and exits *inside* parse_args, so a
+    # reconfigure placed after it would come too late on a cp1252 console.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--segments", required=True, help="<base>.segments.json")
@@ -386,14 +395,6 @@ def main() -> int:
                     help="only list the suspect passages, change nothing")
     ap.add_argument("-o", "--out", help="write result here (default: in place)")
     args = ap.parse_args()
-
-    # The whole point of this tool is printing text the console choked on;
-    # a cp1252 stdout would raise UnicodeEncodeError on exactly those lines.
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, ValueError):
-            pass
 
     store = Path(args.segments)
     payload = json.loads(store.read_text(encoding="utf-8"))
