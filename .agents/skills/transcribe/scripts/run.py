@@ -219,12 +219,19 @@ from transcribe import (  # noqa: E402
     parse_vtt,
 )
 from stt import extract_audio, load_hotwords, select_backend, select_backends, transcribe_video  # noqa: E402
+from version import APP_VERSION  # noqa: E402
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(
         prog="transcribe",
         description="Download a video, extract auto-scaled frames, and surface the transcript.",
+    )
+    ap.add_argument(
+        "--version",
+        action="version",
+        version=f"transcribe {APP_VERSION}",
+        help="Print the skill version and exit.",
     )
     ap.add_argument("source", help="Video URL or local file path")
     ap.add_argument("--max-frames", type=int, default=80, help="Cap on frame count (default 80, hard max 100)")
@@ -712,6 +719,9 @@ def main() -> int:
     transcript_text: str | None = None
     transcript_source: str | None = None
     audio_path: Path | None = None  # populated on first audio extraction
+    # Set when segments come from a cache written by a *different* version -
+    # the report must not claim this build produced that transcript.
+    resumed_version: str | None = None
 
     # Transcript path: VTT captions → AssemblyAI → Whisper.
     if dl.get("subtitle_path"):
@@ -760,13 +770,25 @@ def main() -> int:
             cached = json.loads(seg_cache.read_text(encoding="utf-8"))
             all_segments = cached["segments"]
             used_backend = cached.get("backend", "unknown")
+            cached_version = cached.get("skill_version", "unknown")
             transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
             transcript_source = f"transcript ({used_backend}, resumed)"
+            resumed_version = cached_version
             print(
                 f"[transcribe] resuming from {seg_cache.name} ({len(all_segments)} "
                 f"segments, {used_backend}) - skipping transcription",
                 file=sys.stderr,
             )
+            # A cache written by a different build carries that build's
+            # decoding quirks into today's report - worth flagging, since
+            # --fresh is the only way to re-derive it under this version.
+            if cached_version != APP_VERSION:
+                print(
+                    f"[transcribe] note: cache was written by transcribe "
+                    f"{cached_version}, this is {APP_VERSION} "
+                    f"(use --fresh to re-transcribe under the current version)",
+                    file=sys.stderr,
+                )
             if (work / "audio.mp3").exists():
                 audio_path = work / "audio.mp3"
         except (ValueError, KeyError) as exc:
@@ -800,7 +822,11 @@ def main() -> int:
                 )
                 seg_cache.parent.mkdir(parents=True, exist_ok=True)
                 seg_cache.write_text(
-                    json.dumps({"backend": used_backend, "segments": all_segments}),
+                    json.dumps({
+                        "skill_version": APP_VERSION,
+                        "backend": used_backend,
+                        "segments": all_segments,
+                    }),
                     encoding="utf-8",
                 )
                 transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
@@ -1102,6 +1128,18 @@ def main() -> int:
     emit()
     emit("# transcribe: video report")
     emit()
+    # Provenance: which build of the skill produced this report. Pipeline
+    # behaviour (repair pass, glossary, crosscheck, ...) shifts between
+    # versions, so a report read months later needs to say what made it.
+    if resumed_version and resumed_version != APP_VERSION:
+        emit(
+            f"- **Skill version:** transcribe {APP_VERSION}, but the transcript "
+            f"was resumed from a cache written by {resumed_version} "
+            f"(re-run with `--fresh` to re-transcribe under this version)"
+        )
+    else:
+        emit(f"- **Skill version:** transcribe {APP_VERSION}")
+    emit(f"- **Generated:** {datetime.datetime.now().astimezone().strftime('%Y-%m-%d %H:%M %z')}")
     emit(f"- **Source:** {args.source}")
     if info.get("title"):
         emit(f"- **Title:** {info['title']}")
