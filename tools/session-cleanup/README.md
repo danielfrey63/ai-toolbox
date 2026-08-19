@@ -8,7 +8,12 @@ Ein `/rename`-Titel schützt eine Session sonst dauerhaft, deshalb braucht die u
 
 ## Duplikat-Bereinigung (Phase 1)
 
-Nach einem Projektumzug (z.B. via transfer-cc-sessions) liegt dieselbe Session-UUID in mehreren Projektordnern. Kopien, die byte-identisch mit der behaltenen Kopie sind oder ein striktes Präfix davon, tragen keine Information und wandern in den Papierkorb. Behalten wird die Kopie im «lebendigen» Ordner: Der gemungte Ordnername wird gegen das reale Dateisystem zurückdecodiert (existierende Verzeichnisse ablaufen, Komponenten matchen) — nur so bleibt die Session im `/resume`-Picker des aktuellen Pfads sichtbar. Weder die innere `cwd` (zeigt bei mehrfach migrierten Sessions auf einen Ur-Pfad) noch die mtime (wird von Picker/Sync getoucht) taugen als Signal. Divergierte Kopien werden nie angefasst, nur im Log gemeldet — präzis benannt mit Session-Titel (erste echte User-Message, wie im Picker), Grösse, letzter Aktivität und Fork-Zeitpunkt (letzter gemeinsamer Timestamp beider Kopien), z.B. `kept diverged copy <ordner>\<uuid>.jsonl ("Titel…", 7.7MB, last activity 2026-08-06, forked from <keeper-ordner> copy after 2026-08-06 22:49 - review manually)`. Verglichen wird gegen alle behaltenen Kopien, nicht nur den Keeper — zwei identische Alt-Kopien, die beide vom Keeper abweichen, werden so trotzdem dedupliziert.
+Nach einem Projektumzug (z.B. via transfer-cc-sessions) liegt dieselbe Session-UUID in mehreren Projektordnern. Kopien, die byte-identisch mit der behaltenen Kopie sind oder ein striktes Präfix davon, tragen keine Information und wandern in den Papierkorb. Behalten wird die Kopie im «lebendigen» Ordner: Der gemungte Ordnername wird gegen das reale Dateisystem zurückdecodiert (existierende Verzeichnisse ablaufen, Komponenten matchen) — nur so bleibt die Session im `/resume`-Picker des aktuellen Pfads sichtbar. Weder die innere `cwd` (zeigt bei mehrfach migrierten Sessions auf einen Ur-Pfad) noch die mtime (wird von Picker/Sync getoucht) taugen als Signal. Verglichen wird gegen alle behaltenen Kopien, nicht nur den Keeper — zwei identische Alt-Kopien, die beide vom Keeper abweichen, werden so trotzdem dedupliziert.
+
+Kopien, die nicht enthalten sind, haben sich an einem Punkt getrennt — dahinter stecken zwei verschiedene Situationen, die das Skript anhand der eigenen Einträge nach dem Trennpunkt unterscheidet:
+
+- **Umzugs-Rest**: Die alte Kopie endet, bevor der eigene Zweig der neuen Kopie beginnt — nach dem Umzug wurde hier nichts mehr geschrieben. Solche Reste wandern automatisch in den Papierkorb, solange sie höchstens `-MaxHandoverMessages` (Default 10) eigene Nachrichten über den Trennpunkt hinaus tragen. Log: `leftover of "<Name>" after the move to <ziel> - 3 own message(s) up to 2026-08-19 16:56`.
+- **Echte Parallelarbeit**: In beiden Kopien wurde nach der Trennung eigenständig weitergearbeitet — beide Seiten tragen einmaligen Verlauf, keine wird angefasst. Die Meldung nennt den Session-Namen (`/rename`-Titel, sonst erste User-Message), den Trennzeitpunkt und pro Kopie die Zahl eigener Nachrichten samt letzter Aktivität, damit entscheidbar ist, welche Kopie behalten wird.
 
 ## Gleich- und ähnlich benannte Sessions (Phase 1b)
 
@@ -40,7 +45,7 @@ Oder direkt: unter Windows `.\install.ps1` (Scheduled Task «AI-Toolbox Session 
 .\cleanup-sessions.ps1           # führt aus
 ```
 
-Parameter: `-MaxSizeBytes` (Default 250 KB), `-MinAgeHours` (Default 0 = kein Alters-Guard), `-RetentionDays` (Default 30), `-DeleteMarker` (Default `DELETE`). Die Bash-Variante kennt dieselben Optionen als `--max-size-bytes`, `--min-age-hours`, `--retention-days`, `--delete-marker`, `--dry-run`.
+Parameter: `-MaxSizeBytes` (Default 250 KB), `-MinAgeHours` (Default 0 = kein Alters-Guard), `-RetentionDays` (Default 30), `-DeleteMarker` (Default `DELETE`), `-MaxHandoverMessages` (Default 10). Die Bash-Variante kennt dieselben Optionen als `--max-size-bytes`, `--min-age-hours`, `--retention-days`, `--delete-marker`, `--max-handover-messages`, `--dry-run`.
 
 ## Abgrenzung
 

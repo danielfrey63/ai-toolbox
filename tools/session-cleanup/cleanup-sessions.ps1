@@ -16,11 +16,16 @@ param(
     [int]$RetentionDays = 30,
     # A session renamed to exactly this title is trashed on the next run, regardless of size and age.
     [string]$DeleteMarker = 'DELETE',
+    # A leftover copy from a project handover is trashed when it carries at most this many own
+    # messages beyond the split. Larger leftovers are reported instead.
+    [int]$MaxHandoverMessages = 10,
     # Report what would happen without moving or deleting anything.
     [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
+# Console output carries German umlauts; without this the default OEM codepage mangles them.
+try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
 
 $projectsDir = Join-Path $env:USERPROFILE '.claude\projects'
 $trashDir = Join-Path $env:USERPROFILE '.claude\projects-trash'
@@ -122,28 +127,49 @@ function Get-CustomTitle([System.IO.FileInfo]$file) {
     return $title
 }
 
-# Timestamp of the last entry two diverged copies still share - the fork happened after this moment.
-function Get-ForkPoint([System.IO.FileInfo]$a, [System.IO.FileInfo]$b) {
-    try {
-        $bytesA = [IO.File]::ReadAllBytes($a.FullName)
-        $bytesB = [IO.File]::ReadAllBytes($b.FullName)
-        $max = [Math]::Min($bytesA.Length, $bytesB.Length)
-        $common = 0
-        # Block compare first, then byte-scan inside the first differing block.
-        while ($common -lt $max) {
-            $len = [int][Math]::Min(65536, $max - $common)
-            $segA = [ArraySegment[byte]]::new($bytesA, $common, $len)
-            $segB = [ArraySegment[byte]]::new($bytesB, $common, $len)
-            if (-not [Linq.Enumerable]::SequenceEqual($segA, $segB)) { break }
-            $common += $len
+# What to call a session in a message: its /rename title when it has one, otherwise the first user
+# message (what the resume picker falls back to). A renamed session must never be reported under its
+# opening line - that line is usually a stale one-off and unrecognizable months later.
+function Get-DisplayName([System.IO.FileInfo]$file) {
+    $t = Get-CustomTitle $file
+    if ($t) { return $t }
+    return Get-SessionTitle $file
+}
+
+# How two copies of the same session relate: where they split, and what each side carries beyond that
+# point. Transcripts are append-only JSONL, so the shared history ends at the last line both files
+# have in common. Per side the own entries are counted (messages, and the timestamps that bracket
+# them) - that is what tells a handover leftover apart from a branch that was really worked on.
+# Message counting is a line match, not a JSON parse: an embedded '"type": "user"' inside a tool
+# result can inflate the count, which only ever makes the handover check below more conservative.
+function Get-Divergence([System.IO.FileInfo]$a, [System.IO.FileInfo]$b) {
+    $la = [IO.File]::ReadAllLines($a.FullName)
+    $lb = [IO.File]::ReadAllLines($b.FullName)
+    $common = 0
+    $min = [Math]::Min($la.Count, $lb.Count)
+    while ($common -lt $min -and $la[$common] -ceq $lb[$common]) { $common++ }
+    $info = @{ Fork = $null }
+    for ($k = $common - 1; $k -ge 0; $k--) {
+        $m = [regex]::Match($la[$k], '"timestamp"\s*:\s*"([^"]+)"')
+        if ($m.Success) { $info.Fork = ([datetime]$m.Groups[1].Value).ToLocalTime(); break }
+    }
+    foreach ($side in @(@('A', $la), @('B', $lb))) {
+        $key = $side[0]; $lines = $side[1]
+        $messages = 0; $first = $null; $last = $null
+        for ($k = $common; $k -lt $lines.Count; $k++) {
+            if ($lines[$k] -match '"type"\s*:\s*"(user|assistant)"') { $messages++ }
+            $m = [regex]::Match($lines[$k], '"timestamp"\s*:\s*"([^"]+)"')
+            if ($m.Success) {
+                $t = ([datetime]$m.Groups[1].Value).ToLocalTime()
+                if (-not $first) { $first = $t }
+                $last = $t
+            }
         }
-        $end = [Math]::Min($common + 65536, $max)
-        while ($common -lt $end -and $bytesA[$common] -eq $bytesB[$common]) { $common++ }
-        if ($common -eq 0) { return $null }
-        $m = [regex]::Matches([Text.Encoding]::UTF8.GetString($bytesA, 0, $common), '"timestamp"\s*:\s*"([^"]+)"')
-        if ($m.Count -gt 0) { return ([datetime]$m[$m.Count - 1].Groups[1].Value).ToLocalTime().ToString('yyyy-MM-dd HH:mm') }
-    } catch {}
-    return $null
+        $info["${key}Messages"] = $messages
+        $info["${key}First"] = $first
+        $info["${key}Last"] = $last
+    }
+    return $info
 }
 
 # True when $small's full content is a byte prefix of $big (identical files included).
@@ -222,8 +248,14 @@ foreach ($d in Get-ChildItem $projectsDir -Directory) {
     $dirPath[$d.Name] = Resolve-ProjectDir $d.Name
     $dirScore[$d.Name] = if ($dirPath[$d.Name]) { 1 } else { 0 }
 }
-# Human-readable location of a project dir: the decoded repo path when it still exists.
-function Get-DirDisplay([string]$name) { if ($dirPath[$name]) { $dirPath[$name] } else { $name } }
+# Short, human-readable location of a project dir: the last two components of the decoded repo path
+# (the full path does not fit a toast), or the munged dir name when the path no longer exists.
+function Get-DirShort([string]$name) {
+    if (-not $dirPath[$name]) { return $name }
+    $parts = $dirPath[$name].TrimEnd('\') -split '\\'
+    if ($parts.Count -ge 2) { return ($parts[-2..-1] -join '\') }
+    return $dirPath[$name]
+}
 $dupGroups = Get-ChildItem "$projectsDir\*\*.jsonl" -File | Group-Object Name | Where-Object Count -gt 1
 foreach ($g in $dupGroups) {
     $ranked = @($g.Group | Sort-Object -Property `
@@ -244,14 +276,39 @@ foreach ($g in $dupGroups) {
                 $deduped++
             }
         } else {
-            $sizeMB = [math]::Round($other.Length / 1MB, 1)
-            $info = "`"$(Get-SessionTitle $other)`", ${sizeMB}MB, last activity $((Get-LastActivity $other).ToString('yyyy-MM-dd'))"
-            $fork = Get-ForkPoint $other $keeper
-            $forkTxt = if ($fork) { ", forked from $($keeper.Directory.Name) copy after $fork" } else { '' }
-            Write-Log "kept diverged copy $($other.Directory.Name)\$($other.Name) ($info$forkTxt - review manually)"
+            # Not contained, so the copies split at some point. Two very different situations look the
+            # same here: a session that was moved to another project (the old copy stops at the move,
+            # the new one continues) and a session that was genuinely worked on in both places. The
+            # first kind is a leftover and can go; the second holds unique history on both sides.
+            $div = Get-Divergence $other $keeper
+            $name = Get-DisplayName $other
+            $otherDir = Get-DirShort $other.Directory.Name
+            $keeperDir = Get-DirShort $keeper.Directory.Name
+            $fork = if ($div.Fork) { $div.Fork.ToString('yyyy-MM-dd HH:mm') } else { 'unknown' }
+            # Handover: everything this copy holds beyond the split predates the kept copy's own
+            # branch, so nothing was written here after the session moved on.
+            $isHandover = -not $div.ALast -or ($div.BFirst -and $div.ALast -le $div.BFirst)
+            if ($isHandover -and $div.AMessages -le $MaxHandoverMessages) {
+                $until = if ($div.ALast) { $div.ALast.ToString('yyyy-MM-dd HH:mm') } else { $fork }
+                $label = "leftover of `"$name`" after the move to $keeperDir - $($div.AMessages) own message(s) up to $until"
+                if ($DryRun) {
+                    Write-Log "DRYRUN would trash $($other.Directory.Name)\$($other.Name) ($label)"
+                } elseif (Move-SessionToTrash $other $label) {
+                    $deduped++
+                }
+                continue
+            }
+            $lastA = if ($div.ALast) { $div.ALast.ToString('yyyy-MM-dd') } else { '?' }
+            $lastB = if ($div.BLast) { $div.BLast.ToString('yyyy-MM-dd') } else { '?' }
+            Write-Log ("diverged copies of `"$name`" ($($other.Name.Substring(0, 8))) split on ${fork}: " +
+                "$otherDir has $($div.AMessages) own message(s) up to $lastA, " +
+                "$keeperDir has $($div.BMessages) up to $lastB - keep one, trash the other")
             $script:findings += ,@{
-                Title = "Divergiert: `"$(Get-SessionTitle $other)`""
-                Body  = "$($other.Name.Substring(0, 8)) in $(Get-DirDisplay $other.Directory.Name) (${sizeMB}MB) vs $(Get-DirDisplay $keeper.Directory.Name) ($([math]::Round($keeper.Length / 1MB, 1))MB)$(if ($fork) { ", Fork nach $fork" })"
+                Title = "Session `"$name`" liegt zweimal vor"
+                Body  = "Seit $fork wurde in beiden Kopien eigenständig weitergearbeitet:`n" +
+                    "$otherDir - $($div.AMessages) eigene Nachrichten, zuletzt $lastA`n" +
+                    "$keeperDir - $($div.BMessages) eigene Nachrichten, zuletzt $lastB`n" +
+                    "Eine Kopie behalten, die andere wegwerfen."
             }
             $kept.Add($other)
         }
@@ -308,10 +365,11 @@ foreach ($projectDir in Get-ChildItem $projectsDir -Directory) {
         $list = ($t.Value | ForEach-Object {
             "$($_.Name.Substring(0, 8)) ($([math]::Round($_.Length / 1MB, 1))MB, last $((Get-LastActivity $_).ToString('yyyy-MM-dd')))"
         }) -join ', '
-        Write-Log "same title `"$($t.Key)`" in $($projectDir.Name): $list - no exact overlap, rename or trash manually"
+        Write-Log "same title `"$($t.Key)`" in $($projectDir.Name): $list - different histories, rename or trash manually"
         $script:findings += ,@{
-            Title = "Gleicher Name: `"$($t.Key)`""
-            Body  = "$(Get-DirDisplay $projectDir.Name)`n$list"
+            Title = "Zwei Sessions heissen `"$($t.Key)`""
+            Body  = "In $(Get-DirShort $projectDir.Name): $list`n" +
+                "Unterschiedlicher Verlauf, keine ist in der anderen enthalten. Eine umbenennen oder wegwerfen."
         }
     }
 }
@@ -375,7 +433,7 @@ Write-Log "done: $marked marked, $deduped duplicate(s) and $moved empty session(
 if (-not $DryRun -and $script:findings.Count -gt 0) {
     try {
         $findingsFile = Join-Path $trashDir 'findings.txt'
-        $header = "Session-Cleanup-Befunde vom $(Get-Date -Format 'yyyy-MM-dd HH:mm') - Aufloesung: Session umbenennen (/rename) oder wegwerfen"
+        $header = "Session-Cleanup-Befunde vom $(Get-Date -Format 'yyyy-MM-dd HH:mm') - Auflösung: Session umbenennen (/rename) oder wegwerfen"
         $body = ($script:findings | ForEach-Object { "$($_.Title)`n$($_.Body)" }) -join "`n`n"
         Set-Content -LiteralPath $findingsFile -Value ($header + "`n`n" + $body) -Encoding UTF8
 

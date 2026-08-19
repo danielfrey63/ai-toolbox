@@ -12,6 +12,9 @@ MIN_AGE_HOURS=0
 RETENTION_DAYS=30
 # A session renamed to exactly this title is trashed on the next run, regardless of size and age.
 DELETE_MARKER=DELETE
+# A leftover copy from a project handover is trashed when it carries at most this many own messages
+# beyond the split. Larger leftovers are reported instead.
+MAX_HANDOVER_MESSAGES=10
 DRY_RUN=0
 
 while [ $# -gt 0 ]; do
@@ -20,8 +23,9 @@ while [ $# -gt 0 ]; do
         --min-age-hours)  MIN_AGE_HOURS=$2; shift 2 ;;
         --retention-days) RETENTION_DAYS=$2; shift 2 ;;
         --delete-marker)  DELETE_MARKER=$2; shift 2 ;;
+        --max-handover-messages) MAX_HANDOVER_MESSAGES=$2; shift 2 ;;
         --dry-run)        DRY_RUN=1; shift ;;
-        *) echo "usage: cleanup-sessions.sh [--max-size-bytes N] [--min-age-hours N] [--retention-days N] [--delete-marker TITLE] [--dry-run]" >&2; exit 2 ;;
+        *) echo "usage: cleanup-sessions.sh [--max-size-bytes N] [--min-age-hours N] [--retention-days N] [--delete-marker TITLE] [--max-handover-messages N] [--dry-run]" >&2; exit 2 ;;
     esac
 done
 
@@ -122,19 +126,58 @@ custom_title() {
     return 1
 }
 
-# Timestamp of the last entry two diverged copies still share - the fork happened after this moment.
-fork_point() {
-    local a="$1" b="$2" out byte common ts
+# What to call a session in a message: its /rename title when it has one, otherwise the first user
+# message (what the resume picker falls back to). A renamed session must never be reported under its
+# opening line - that line is usually a stale one-off and unrecognizable months later.
+display_name() {
+    local f="$1"
+    if custom_title "$f" && [ -n "$CUSTOM_TITLE" ]; then printf '%s' "$CUSTOM_TITLE"; else session_title "$f"; fi
+}
+
+# How two copies of the same session relate: where they split, and what each side carries beyond that
+# point. Transcripts are append-only JSONL, so the shared history ends with the common byte prefix
+# (cmp); per side the own entries beyond it are counted (messages, and the timestamps that bracket
+# them) - that is what tells a handover leftover apart from a branch that was really worked on.
+# Message counting is a line match, not a JSON parse: an embedded '"type": "user"' inside a tool
+# result can inflate the count, which only ever makes the handover check below more conservative.
+# Results land in DIV_FORK / DIV_{A,B}_{MSGS,FIRST,LAST} (raw ISO timestamps - sortable as strings).
+DIV_FORK=""; DIV_A_MSGS=0; DIV_A_FIRST=""; DIV_A_LAST=""; DIV_B_MSGS=0; DIV_B_FIRST=""; DIV_B_LAST=""
+divergence() {
+    local a="$1" b="$2" out byte common side f stats
     out=$(cmp -- "$a" "$b" 2>&1) || true
     byte=$(printf '%s' "$out" | grep -oE 'byte [0-9]+' | head -1 | grep -oE '[0-9]+') || true
-    [ -n "$byte" ] || return 0
-    # "differ: byte N" is the 1-based first difference; "EOF ... after byte N" means N common bytes.
-    common=$byte
-    case "$out" in *differ:*) common=$((byte - 1)) ;; esac
-    [ "$common" -gt 0 ] || return 0
-    ts=$(head -c "$common" "$a" | grep -oE '"timestamp"[[:space:]]*:[[:space:]]*"[^"]+"' | tail -1 | sed -E 's/.*"([^"]+)"$/\1/') || true
-    [ -n "$ts" ] || return 0
-    date -d "$ts" '+%Y-%m-%d %H:%M' 2>/dev/null || true
+    if [ -z "$byte" ]; then
+        common=$(stat -c %s "$a")
+    else
+        # "differ: byte N" is the 1-based first difference; "EOF ... after byte N" means N common bytes.
+        common=$byte
+        case "$out" in *differ:*) common=$((byte - 1)) ;; esac
+    fi
+    DIV_FORK=$(head -c "$common" "$a" | grep -oE '"timestamp"[[:space:]]*:[[:space:]]*"[^"]+"' | tail -1 | sed -E 's/.*"([^"]+)"$/\1/') || true
+    for side in A B; do
+        if [ "$side" = A ]; then f=$a; else f=$b; fi
+        # Lines fully inside the common prefix are shared history; everything after is this side's own.
+        stats=$(LC_ALL=C awk -v limit="$common" '
+            BEGIN { pos = 0; msgs = 0; first = ""; last = "" }
+            {
+                len = length($0) + 1
+                if (pos + len <= limit) { pos += len; next }
+                pos += len
+                if ($0 ~ /"type"[[:space:]]*:[[:space:]]*"(user|assistant)"/) msgs++
+                if (match($0, /"timestamp"[[:space:]]*:[[:space:]]*"[^"]+"/)) {
+                    ts = substr($0, RSTART, RLENGTH)
+                    gsub(/^.*:[[:space:]]*"|"$/, "", ts)
+                    if (first == "") first = ts
+                    last = ts
+                }
+            }
+            END { printf "%d\t%s\t%s", msgs, first, last }' "$f")
+        if [ "$side" = A ]; then
+            IFS=$'\t' read -r DIV_A_MSGS DIV_A_FIRST DIV_A_LAST <<< "$stats"
+        else
+            IFS=$'\t' read -r DIV_B_MSGS DIV_B_FIRST DIV_B_LAST <<< "$stats"
+        fi
+    done
 }
 
 # Liveness per project dir - among equal-content copies the copy in the dir the user works in today
@@ -171,11 +214,14 @@ resolve_project_dir() {
     [ -n "${dir_path_cache[$name]}" ]
 }
 is_live_project_dir() { resolve_project_dir "$1" >/dev/null; }
-# Human-readable location of a project dir: the decoded repo path when it still exists.
-dir_display() {
+# Short, human-readable location of a project dir: the last two components of the decoded repo path
+# (the full path does not fit a notification), or the munged dir name when the path no longer exists.
+dir_short() {
     local p
     p=$(resolve_project_dir "$1") || true
-    if [ -n "$p" ]; then printf '%s' "$p"; else printf '%s' "$1"; fi
+    if [ -z "$p" ]; then printf '%s' "$1"; return; fi
+    p=${p%/}
+    printf '%s/%s' "$(basename "$(dirname "$p")")" "$(basename "$p")"
 }
 # Findings needing a human decision, collected for the desktop notification.
 findings_titles=(); findings_bodies=()
@@ -241,17 +287,41 @@ while IFS= read -r dup_name; do
                 deduped=$((deduped + 1))
             fi
         else
-            size_mb=$((other_size / 1048576))
-            last=$(date -d "@$(last_activity_epoch "$other")" +%Y-%m-%d)
-            stitle=$(session_title "$other")
-            info="\"$stitle\", ${size_mb}MB, last activity $last"
-            fork=$(fork_point "$other" "$keeper")
-            [ -n "$fork" ] && info="$info, forked from $keeper_dir copy after $fork"
-            log "kept diverged copy $(basename "$(dirname "$other")")/$dup_name ($info - review manually)"
-            keeper_mb=$(( $(stat -c %s "$keeper") / 1048576 ))
-            findings_titles+=("Divergiert: \"$stitle\"")
-            findings_bodies+=("${dup_name:0:8} in $(dir_display "$(basename "$(dirname "$other")")") (${size_mb}MB) vs $(dir_display "$keeper_dir") (${keeper_mb}MB)${fork:+, Fork nach $fork}")
+            # Not contained, so the copies split at some point. Two very different situations look the
+            # same here: a session that was moved to another project (the old copy stops at the move,
+            # the new one continues) and a session that was genuinely worked on in both places. The
+            # first kind is a leftover and can go; the second holds unique history on both sides.
+            divergence "$other" "$keeper"
+            name=$(display_name "$other")
+            other_short=$(dir_short "$(basename "$(dirname "$other")")")
+            keeper_short=$(dir_short "$keeper_dir")
+            fork=$(date -d "$DIV_FORK" '+%Y-%m-%d %H:%M' 2>/dev/null || printf 'unknown')
+            # Handover: everything this copy holds beyond the split predates the kept copy's own
+            # branch, so nothing was written here after the session moved on. Raw ISO timestamps
+            # compare correctly as strings.
+            handover=0
+            if [ -z "$DIV_A_LAST" ]; then handover=1
+            elif [ -n "$DIV_B_FIRST" ] && [[ "$DIV_A_LAST" < "$DIV_B_FIRST" || "$DIV_A_LAST" == "$DIV_B_FIRST" ]]; then handover=1; fi
+            if [ "$handover" = 1 ] && [ "${DIV_A_MSGS:-0}" -le "$MAX_HANDOVER_MESSAGES" ]; then
+                until=$(date -d "$DIV_A_LAST" '+%Y-%m-%d %H:%M' 2>/dev/null || printf '%s' "$fork")
+                label="leftover of \"$name\" after the move to $keeper_short - $DIV_A_MSGS own message(s) up to $until"
+                if [ "$DRY_RUN" = 1 ]; then
+                    log "DRYRUN would trash $(basename "$(dirname "$other")")/$dup_name ($label)"
+                elif trash_session "$other" "$label"; then
+                    deduped=$((deduped + 1))
+                fi
+                continue
+            fi
+            last_a=$(date -d "$DIV_A_LAST" +%Y-%m-%d 2>/dev/null || printf '?')
+            last_b=$(date -d "$DIV_B_LAST" +%Y-%m-%d 2>/dev/null || printf '?')
+            log "diverged copies of \"$name\" (${dup_name:0:8}) split on $fork: $other_short has $DIV_A_MSGS own message(s) up to $last_a, $keeper_short has $DIV_B_MSGS up to $last_b - keep one, trash the other"
+            findings_titles+=("Session \"$name\" liegt zweimal vor")
+            findings_bodies+=("Seit $fork wurde in beiden Kopien eigenständig weitergearbeitet:
+$other_short - $DIV_A_MSGS eigene Nachrichten, zuletzt $last_a
+$keeper_short - $DIV_B_MSGS eigene Nachrichten, zuletzt $last_b
+Eine Kopie behalten, die andere wegwerfen.")
             kept_files+=("$other")
+        files+=("$other")
         fi
     done < <(printf '%s\n' "$ranked" | tail -n +2)
 done < <(find "$PROJECTS_DIR" -mindepth 2 -maxdepth 2 -type f -name '*.jsonl' -printf '%f\n' | sort | uniq -d)
@@ -325,10 +395,10 @@ for project_dir in "$PROJECTS_DIR"/*/; do
             last=$(date -d "@$(last_activity_epoch "$f")" +%Y-%m-%d)
             list="${list:+$list, }${id:0:8} (${size_mb}MB, last $last)"
         done <<< "${title_map[$title]}"
-        log "same title \"$title\" in $project_name: $list - no exact overlap, rename or trash manually"
-        findings_titles+=("Gleicher Name: \"$title\"")
-        findings_bodies+=("$(dir_display "$project_name")
-$list")
+        log "same title \"$title\" in $project_name: $list - different histories, rename or trash manually"
+        findings_titles+=("Zwei Sessions heissen \"$title\"")
+        findings_bodies+=("In $(dir_short "$project_name"): $list
+Unterschiedlicher Verlauf, keine ist in der anderen enthalten. Eine umbenennen oder wegwerfen.")
     done
     unset title_map gone
 done
@@ -393,7 +463,7 @@ log "done: $marked marked, $deduped duplicate(s) and $moved empty session(s) tra
 # console. A failed notification never breaks the run.
 if [ "$DRY_RUN" != 1 ] && [ "${#findings_titles[@]}" -gt 0 ]; then
     {
-        echo "Session-Cleanup-Befunde vom $(date '+%Y-%m-%d %H:%M') - Aufloesung: Session umbenennen (/rename) oder wegwerfen"
+        echo "Session-Cleanup-Befunde vom $(date '+%Y-%m-%d %H:%M') - Auflösung: Session umbenennen (/rename) oder wegwerfen"
         for ((i = 0; i < ${#findings_titles[@]}; i++)); do
             printf '\n%s\n%s\n' "${findings_titles[$i]}" "${findings_bodies[$i]}"
         done
