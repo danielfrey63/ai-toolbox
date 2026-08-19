@@ -230,7 +230,7 @@
       "name": "session-cleanup",
       "type": "installer",
       "path": "tools/session-cleanup",
-      "description": "Daily trash of empty Claude Code sessions (scheduled task / systemd user timer)."
+      "description": "Daily trash of empty, DELETE-marked and duplicate Claude Code sessions (scheduled task / systemd user timer)."
     },
     {
       "name": "session-keepwarm",

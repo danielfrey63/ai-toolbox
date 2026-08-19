@@ -1,6 +1,6 @@
-# Moves "empty" Claude Code sessions (small transcripts) and redundant duplicate copies into a trash
-# folder and purges trash entries past retention. Desired-state and idempotent: re-runs only act on
-# sessions that currently match the criteria.
+# Moves "empty" Claude Code sessions (small transcripts), sessions explicitly marked for deletion and
+# redundant duplicate copies into a trash folder and purges trash entries past retention. Desired-state
+# and idempotent: re-runs only act on sessions that currently match the criteria.
 #
 # Scope: top-level session transcripts %USERPROFILE%\.claude\projects\<project>\<session>.jsonl plus their
 # sidecar directory <session>\ (subagent transcripts). Never touches memory\ or any other project content.
@@ -14,6 +14,8 @@ param(
     [int]$MinAgeHours = 0,
     # Trash entries older than this are deleted permanently.
     [int]$RetentionDays = 30,
+    # A session renamed to exactly this title is trashed on the next run, regardless of size and age.
+    [string]$DeleteMarker = 'DELETE',
     # Report what would happen without moving or deleting anything.
     [switch]$DryRun
 )
@@ -102,6 +104,24 @@ function Get-SessionTitle([System.IO.FileInfo]$file) {
     return '(no user message)'
 }
 
+# The /rename title of a session: $null when it was never renamed, the title otherwise. An entry whose
+# title cannot be parsed yields an empty string - still "titled", so the keep-protection below stays
+# conservative. The last "custom-title" entry wins, a session can be renamed repeatedly. Cached
+# because three phases ask for the same titles.
+$script:titleCache = @{}
+function Get-CustomTitle([System.IO.FileInfo]$file) {
+    if ($script:titleCache.ContainsKey($file.FullName)) { return $script:titleCache[$file.FullName] }
+    $title = $null
+    $hits = @(Select-String -LiteralPath $file.FullName -Pattern '"type"\s*:\s*"custom-title"')
+    if ($hits) {
+        $title = ''
+        try { $parsed = ($hits[-1].Line | ConvertFrom-Json).customTitle } catch { $parsed = $null }
+        if ($parsed) { $title = $parsed }
+    }
+    $script:titleCache[$file.FullName] = $title
+    return $title
+}
+
 # Timestamp of the last entry two diverged copies still share - the fork happened after this moment.
 function Get-ForkPoint([System.IO.FileInfo]$a, [System.IO.FileInfo]$b) {
     try {
@@ -142,6 +162,27 @@ function Test-PrefixOf([System.IO.FileInfo]$small, [System.IO.FileInfo]$big) {
     } finally { $fs.Close() }
     if ($read -ne $bufS.Length) { return $false }
     return [Linq.Enumerable]::SequenceEqual($bufS, $bufB)
+}
+
+# --- Phase 0: sessions explicitly marked for deletion ------------------------------------------------
+# A /rename title normally protects a session forever, so the opposite intent needs its own marker:
+# renaming a session to "DELETE" hands it to the next run, regardless of size and age. Matched against
+# the trimmed title as a whole and case-insensitively - a title that merely mentions the word
+# ("DELETE-Bug") is a real name and stays. Runs before the duplicate phases so every copy of a marked
+# session goes and none of them shows up as a name collision. Marked sessions go to the trash like
+# everything else and stay recoverable until retention expires.
+$marked = 0
+foreach ($projectDir in Get-ChildItem $projectsDir -Directory) {
+    foreach ($transcript in Get-ChildItem $projectDir.FullName -Filter '*.jsonl' -File) {
+        $title = Get-CustomTitle $transcript
+        if (-not $title -or $title.Trim() -ine $DeleteMarker) { continue }
+        $label = "marked `"$title`" via /rename"
+        if ($DryRun) {
+            Write-Log "DRYRUN would trash $($projectDir.Name)\$($transcript.Name) ($label)"
+        } elseif (Move-SessionToTrash $transcript $label) {
+            $marked++
+        }
+    }
 }
 
 # --- Phase 1: duplicate copies of the same session across project dirs -------------------------------
@@ -228,10 +269,7 @@ foreach ($g in $dupGroups) {
 foreach ($projectDir in Get-ChildItem $projectsDir -Directory) {
     $titled = @()
     foreach ($transcript in Get-ChildItem $projectDir.FullName -Filter '*.jsonl' -File) {
-        $hits = @(Select-String -LiteralPath $transcript.FullName -Pattern '"type"\s*:\s*"custom-title"')
-        if (-not $hits) { continue }
-        # The last entry wins: a session can be renamed multiple times.
-        try { $title = ($hits[-1].Line | ConvertFrom-Json).customTitle } catch { continue }
+        $title = Get-CustomTitle $transcript
         if (-not $title) { continue }
         $titled += ,@{ File = $transcript; Title = $title }
     }
@@ -298,7 +336,7 @@ foreach ($projectDir in Get-ChildItem $projectsDir -Directory) {
         if ($totalSize -ge $MaxSizeBytes) { continue }
         if ($lastActivity -ge $cutoff) { continue }
         # A /rename title marks a session the user intends to keep - never auto-trash those.
-        if (Select-String -LiteralPath $transcript.FullName -Pattern '"type"\s*:\s*"custom-title"' -Quiet) { continue }
+        if ($null -ne (Get-CustomTitle $transcript)) { continue }
 
         $sizeKB = [math]::Round($totalSize / 1KB, 1)
         $label = "${sizeKB}KB, last activity $($lastActivity.ToString('yyyy-MM-dd'))"
@@ -326,7 +364,7 @@ foreach ($batch in Get-ChildItem $trashDir -Directory) {
     $purged++
 }
 
-Write-Log "done: $deduped duplicate(s) and $moved empty session(s) trashed, $purged batch(es) purged"
+Write-Log "done: $marked marked, $deduped duplicate(s) and $moved empty session(s) trashed, $purged batch(es) purged"
 
 # --- Findings notification ---------------------------------------------------------------------------
 # Findings that need a human decision (diverged copies, title collisions) are written to findings.txt

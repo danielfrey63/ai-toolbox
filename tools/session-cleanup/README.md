@@ -1,6 +1,10 @@
 # Session Cleanup
 
-Verschiebt «leere» Claude-Code-Sessions und redundante Duplikat-Kopien dreimal täglich (05:30, 11:30, 17:30) in einen Papierkorb und löscht Papierkorb-Einträge nach Ablauf der Aufbewahrungsfrist endgültig.
+Verschiebt «leere» Claude-Code-Sessions, explizit zum Löschen markierte Sessions und redundante Duplikat-Kopien dreimal täglich (05:30, 11:30, 17:30) in einen Papierkorb und löscht Papierkorb-Einträge nach Ablauf der Aufbewahrungsfrist endgültig.
+
+## Zum Löschen markierte Sessions (Phase 0)
+
+Ein `/rename`-Titel schützt eine Session sonst dauerhaft, deshalb braucht die umgekehrte Absicht einen eigenen Marker: Wer eine Session auf `DELETE` umbenennt, gibt sie dem nächsten Lauf frei — unabhängig von Grösse und Alter. Verglichen wird der getrimmte Titel als Ganzes und ohne Rücksicht auf Gross-/Kleinschreibung (`DELETE`, `delete`, `  Delete  `); ein Titel, der das Wort nur enthält (`DELETE-Bug`), ist ein echter Name und bleibt. Die Phase läuft vor der Duplikat-Bereinigung, damit jede Kopie einer markierten Session mitgeht und keine davon als Namens-Kollision gemeldet wird. Markierte Sessions wandern wie alles andere in den Papierkorb und bleiben bis zum Ablauf der Aufbewahrungsfrist wiederherstellbar. Der Marker ist über `-DeleteMarker` bzw. `--delete-marker` konfigurierbar. Ist die Session gerade offen, ist ihre Datei gesperrt und sie fliegt beim nächsten Lauf nach dem Schliessen.
 
 ## Duplikat-Bereinigung (Phase 1)
 
@@ -12,7 +16,7 @@ Nach einem Projektumzug (z.B. via transfer-cc-sessions) liegt dieselbe Session-U
 
 ## Was als «leer» gilt (Phase 2)
 
-Eine Top-Level-Session `~\.claude\projects\<projekt>\<uuid>.jsonl` gilt als leer, wenn Transkript plus Sidecar-Verzeichnis (`<uuid>\` mit Subagent-Transkripten) zusammen kleiner als 250 KB sind. Es gibt keinen Alters-Guard (`-MinAgeHours 0`): Was behalten werden soll, trägt einen `/rename`-Titel (`custom-title`-Eintrag) und ist damit unabhängig von Alter und Grösse geschützt — ein Name markiert Behalten-Absicht. Unbenannte kleine Sessions fliegen beim nächsten Lauf. Massgeblich für das Alter ist der jüngste innere `"timestamp"` im Transkript, nicht die mtime — Picker, Cloud-Bridge und Sync-Tools touchen Dateien ohne Inhaltsänderung und würden alte Sessions sonst dauerhaft re-protecten. Gesperrte (offene) Dateien werden übersprungen. `memory\`-Verzeichnisse und alle anderen Projekt-Inhalte werden nie berührt.
+Eine Top-Level-Session `~\.claude\projects\<projekt>\<uuid>.jsonl` gilt als leer, wenn Transkript plus Sidecar-Verzeichnis (`<uuid>\` mit Subagent-Transkripten) zusammen kleiner als 250 KB sind. Es gibt keinen Alters-Guard (`-MinAgeHours 0`): Was behalten werden soll, trägt einen `/rename`-Titel (`custom-title`-Eintrag) und ist damit unabhängig von Alter und Grösse geschützt — ein Name markiert Behalten-Absicht, ausser er lautet `DELETE` (Phase 0). Unbenannte kleine Sessions fliegen beim nächsten Lauf. Massgeblich für das Alter ist der jüngste innere `"timestamp"` im Transkript, nicht die mtime — Picker, Cloud-Bridge und Sync-Tools touchen Dateien ohne Inhaltsänderung und würden alte Sessions sonst dauerhaft re-protecten. Gesperrte (offene) Dateien werden übersprungen. `memory\`-Verzeichnisse und alle anderen Projekt-Inhalte werden nie berührt.
 
 ## Papierkorb statt Hard-Delete
 
@@ -36,7 +40,7 @@ Oder direkt: unter Windows `.\install.ps1` (Scheduled Task «AI-Toolbox Session 
 .\cleanup-sessions.ps1           # führt aus
 ```
 
-Parameter: `-MaxSizeBytes` (Default 250 KB), `-MinAgeHours` (Default 0 = kein Alters-Guard), `-RetentionDays` (Default 30).
+Parameter: `-MaxSizeBytes` (Default 250 KB), `-MinAgeHours` (Default 0 = kein Alters-Guard), `-RetentionDays` (Default 30), `-DeleteMarker` (Default `DELETE`). Die Bash-Variante kennt dieselben Optionen als `--max-size-bytes`, `--min-age-hours`, `--retention-days`, `--delete-marker`, `--dry-run`.
 
 ## Abgrenzung
 

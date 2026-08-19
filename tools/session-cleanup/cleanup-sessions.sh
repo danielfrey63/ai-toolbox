@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Moves "empty" Claude Code sessions (small transcripts) and redundant duplicate copies into a trash
-# folder and purges trash entries past retention. Bash port of cleanup-sessions.ps1 — see that file
-# for the full phase descriptions. Desired-state and idempotent: re-runs only act on sessions that
-# currently match the criteria.
+# Moves "empty" Claude Code sessions (small transcripts), sessions explicitly marked for deletion and
+# redundant duplicate copies into a trash folder and purges trash entries past retention. Bash port
+# of cleanup-sessions.ps1 — see that file for the full phase descriptions. Desired-state and
+# idempotent: re-runs only act on sessions that currently match the criteria.
 set -euo pipefail
 
 MAX_SIZE_BYTES=$((250 * 1024))
@@ -10,6 +10,8 @@ MAX_SIZE_BYTES=$((250 * 1024))
 # carry a /rename title and are protected regardless of age.
 MIN_AGE_HOURS=0
 RETENTION_DAYS=30
+# A session renamed to exactly this title is trashed on the next run, regardless of size and age.
+DELETE_MARKER=DELETE
 DRY_RUN=0
 
 while [ $# -gt 0 ]; do
@@ -17,8 +19,9 @@ while [ $# -gt 0 ]; do
         --max-size-bytes) MAX_SIZE_BYTES=$2; shift 2 ;;
         --min-age-hours)  MIN_AGE_HOURS=$2; shift 2 ;;
         --retention-days) RETENTION_DAYS=$2; shift 2 ;;
+        --delete-marker)  DELETE_MARKER=$2; shift 2 ;;
         --dry-run)        DRY_RUN=1; shift ;;
-        *) echo "usage: cleanup-sessions.sh [--max-size-bytes N] [--min-age-hours N] [--retention-days N] [--dry-run]" >&2; exit 2 ;;
+        *) echo "usage: cleanup-sessions.sh [--max-size-bytes N] [--min-age-hours N] [--retention-days N] [--delete-marker TITLE] [--dry-run]" >&2; exit 2 ;;
     esac
 done
 
@@ -93,6 +96,32 @@ session_title() {
     printf '(no user message)'
 }
 
+# The /rename title of a session, returned in CUSTOM_TITLE (not on stdout: a $(...) call would run in
+# a subshell and drop the cache below). Exit status 0 when the session carries a "custom-title" entry
+# at all - an unparsable entry yields an empty title but still counts as titled, so the keep-protection
+# in phase 2 stays conservative - and 1 when it was never renamed. The last entry wins, a session can
+# be renamed repeatedly.
+declare -A title_cache
+CUSTOM_TITLE=""
+custom_title() {
+    local f="$1" line title
+    if [ -z "${title_cache[$f]+x}" ]; then
+        line=$(grep '"type"[[:space:]]*:[[:space:]]*"custom-title"' "$f" | tail -1) || true
+        if [ -n "$line" ]; then
+            title=$(printf '%s' "$line" | sed -nE 's/.*"customTitle"[[:space:]]*:[[:space:]]*"((\\.|[^"\\])*)".*/\1/p')
+            # Sentinel prefix: an empty title must stay distinguishable from "never renamed".
+            title_cache[$f]="T$title"
+        else
+            title_cache[$f]="-"
+        fi
+    fi
+    case "${title_cache[$f]}" in
+        T*) CUSTOM_TITLE="${title_cache[$f]#T}"; return 0 ;;
+    esac
+    CUSTOM_TITLE=""
+    return 1
+}
+
 # Timestamp of the last entry two diverged copies still share - the fork happened after this moment.
 fork_point() {
     local a="$1" b="$2" out byte common ts
@@ -150,6 +179,32 @@ dir_display() {
 }
 # Findings needing a human decision, collected for the desktop notification.
 findings_titles=(); findings_bodies=()
+
+# --- Phase 0: sessions explicitly marked for deletion ------------------------------------------------
+# A /rename title normally protects a session forever, so the opposite intent needs its own marker:
+# renaming a session to "DELETE" hands it to the next run, regardless of size and age. Matched against
+# the trimmed title as a whole and case-insensitively - a title that merely mentions the word
+# ("DELETE-Bug") is a real name and stays. Runs before the duplicate phases so every copy of a marked
+# session goes and none of them shows up as a name collision. Marked sessions go to the trash like
+# everything else and stay recoverable until retention expires.
+delete_marker_norm=$(printf '%s' "$DELETE_MARKER" | tr '[:lower:]' '[:upper:]')
+marked=0
+for project_dir in "$PROJECTS_DIR"/*/; do
+    [ -d "$project_dir" ] || continue
+    project_name=$(basename "$project_dir")
+    for transcript in "$project_dir"*.jsonl; do
+        [ -f "$transcript" ] || continue
+        custom_title "$transcript" || continue
+        norm=$(printf '%s' "$CUSTOM_TITLE" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | tr '[:lower:]' '[:upper:]')
+        [ "$norm" = "$delete_marker_norm" ] || continue
+        label="marked \"$CUSTOM_TITLE\" via /rename"
+        if [ "$DRY_RUN" = 1 ]; then
+            log "DRYRUN would trash $project_name/$(basename "$transcript") ($label)"
+        elif trash_session "$transcript" "$label"; then
+            marked=$((marked + 1))
+        fi
+    done
+done
 
 # --- Phase 1: duplicate copies of the same session across project dirs -------------------------------
 # Tree moves keep the old-path copy (transfer-cc-sessions). A copy that is byte-identical to - or a
@@ -215,12 +270,9 @@ for project_dir in "$PROJECTS_DIR"/*/; do
     titled_files=(); titled_titles=()
     for transcript in "$project_dir"*.jsonl; do
         [ -f "$transcript" ] || continue
-        # The last entry wins: a session can be renamed multiple times.
-        line=$(grep '"type"[[:space:]]*:[[:space:]]*"custom-title"' "$transcript" | tail -1) || true
-        [ -n "$line" ] || continue
-        title=$(printf '%s' "$line" | sed -nE 's/.*"customTitle"[[:space:]]*:[[:space:]]*"((\\.|[^"\\])*)".*/\1/p')
-        [ -n "$title" ] || continue
-        titled_files+=("$transcript"); titled_titles+=("$title")
+        custom_title "$transcript" || continue
+        [ -n "$CUSTOM_TITLE" ] || continue
+        titled_files+=("$transcript"); titled_titles+=("$CUSTOM_TITLE")
     done
     declare -A gone=()
     for ((i = 0; i < ${#titled_files[@]}; i++)); do
@@ -305,7 +357,7 @@ for project_dir in "$PROJECTS_DIR"/*/; do
         [ -n "$sidecar_last" ] && [ "$sidecar_last" -gt "$last_activity" ] && last_activity=$sidecar_last
         [ "$last_activity" -ge "$cutoff" ] && continue
         # A /rename title marks a session the user intends to keep - never auto-trash those.
-        grep -q '"type"[[:space:]]*:[[:space:]]*"custom-title"' "$transcript" && continue
+        custom_title "$transcript" && continue
 
         size_kb=$((total_size / 1024))
         label="${size_kb}KB, last activity $(date -d "@$last_activity" +%Y-%m-%d)"
@@ -334,7 +386,7 @@ for batch in "$TRASH_DIR"/*/; do
     purged=$((purged + 1))
 done
 
-log "done: $deduped duplicate(s) and $moved empty session(s) trashed, $purged batch(es) purged"
+log "done: $marked marked, $deduped duplicate(s) and $moved empty session(s) trashed, $purged batch(es) purged"
 
 # Findings that need a human decision (diverged copies, title collisions) are written to findings.txt
 # and raised as desktop notifications (one per finding), because scheduled runs have no visible
