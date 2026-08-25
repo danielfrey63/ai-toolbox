@@ -41,7 +41,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.48.307'
+APP_VERSION='0.49.309'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -1190,6 +1190,28 @@ _hook_shim_is_portable() {  # prepo → 0/1
     printf '%s' "$line" | grep -q 'toolbox-bump'
 }
 
+# Legacy cleanup: pre-toolbox repo hooks carried their own inline APP_VERSION
+# bump/tag logic, which duplicates toolbox-bump (double minor bump per commit,
+# duplicate plain tags). The blocks are recognized by their header comment;
+# everything from that line up to our managed line (or EOF) is the legacy
+# block and is removed. Other custom hook content is left untouched.
+_hook_legacy_strip() {  # file which → 0 when stripped
+    local file=$1 which=$2 fp tmp
+    case "$which" in
+        pre)  fp='# Auto-increment minor version in APP_VERSION before commit' ;;
+        post) fp='# Create git tag from APP_VERSION after commit' ;;
+        *)    return 1 ;;
+    esac
+    { [ -f "$file" ] && grep -qF "$fp" "$file"; } || return 1
+    tmp=$(awk -v fp="$fp" -v m="$_HOOK_MARK" '
+        index($0, fp) { skip=1 }
+        skip && index($0, m) { skip=0 }
+        !skip { print }
+    ' "$file")
+    printf '%s\n' "$tmp" > "$file"
+    return 0
+}
+
 # Install/refresh our line in <active>/<which>-commit. Echoes 'added' on a fresh
 # insert, 'refreshed' when our marked line was already there.
 _hook_block_install() {  # prepo which → verdict
@@ -1200,6 +1222,9 @@ _hook_block_install() {  # prepo which → verdict
     if [ ! -f "$file" ]; then
         printf '#!/bin/sh\n' > "$file"
         chmod +x "$file" 2>/dev/null || true
+    fi
+    if _hook_legacy_strip "$file" "$which"; then
+        printf '  [-] %-18s legacy inline APP_VERSION bump removed from %s\n' 'versioning-hooks' "$file" >&2
     fi
     if grep -qF "$_HOOK_MARK" "$file"; then
         # Replace our marked line in place (first match wins; others dropped).
