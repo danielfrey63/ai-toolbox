@@ -43,7 +43,7 @@ Sobald ein Text **in Daniels Namen** entworfen wird (Chat, Mail, Teams) — in j
 
 ### Querliegende Prinzipien
 
-- **Trunk-Based Development.** Alle Änderungen laufen direkt auf `main` (bzw. dem Default-Branch) — keine Long-Running-Feature-Branches. Verbindlicher Ablauf für jede Änderung: **Pull → Read → Changes → Commit → Push.** `pull` zuerst, damit lokal mit dem Remote synchron ist. `read` heisst aktuellen Stand der betroffenen Dateien sichten (kein Blind-Edit auf Annahmen). Erst dann `changes` machen, sofort danach `commit` mit aussagekräftiger Message, abschliessend `push`. Niemals länger als nötig uncommittet liegen lassen.
+- **Trunk-Based Development.** Alle Änderungen laufen direkt auf `main` (bzw. dem Default-Branch) — keine Long-Running-Feature-Branches. Verbindlicher Ablauf für jede Änderung: **Pull → Read → Changes → Commit → Push.** `pull` zuerst, damit lokal mit dem Remote synchron ist. `read` heisst aktuellen Stand der betroffenen Dateien sichten (kein Blind-Edit auf Annahmen). Erst dann `changes` machen, sofort danach `commit` mit aussagekräftiger Message, abschliessend `push`. Niemals länger als nötig uncommittet liegen lassen. **Schnitt-Kriterium innerhalb einer Session:** committet wird, sobald eine Datei in einem Zustand ist, den du nicht verlieren möchtest — nicht erst, wenn das Thema fertig ist. Eine noch laufende Analyse, ein offener Klärungspunkt oder ein erwarteter Folge-Edit sind kein Grund, Zwischenstände liegen zu lassen.
 - **Nie destruktiv ohne User-Bestätigung.** Das gilt für `git reset --hard`, `git stash drop`, `git push --force`, `rm -rf` auf potentiell wertvolle Pfade, `git clean -fdx`, Submodule entfernen.
 - **Backups so lange behalten wie möglich.** Ein angelegter Stash bleibt liegen, bis der User bestätigt hat, dass das Resultat passt — dann erst `git stash drop`.
 - **Bei mehreren Entscheidungen: `AskUserQuestion` gruppieren.** Pro Fragerunde max. 4 Fragen, lieber 2-3 gut formulierte Mehrfach-Choice-Fragen als zehn Einzelnachfragen.
@@ -130,7 +130,7 @@ In `~/.claude/settings.json` sind ungenutzte Built-in-Tools abgeschaltet (Analys
 - **`disableArtifact: true`** — kein Publizieren von Artifacts auf claude.ai. Reaktivieren für teilbare HTML-Reports/Seiten.
 - **Bewusst AKTIV gelassen**: AskUserQuestion (häufig genutzt, von dieser CLAUDE.md verlangt), Task-Tools, Agent/Skill/ToolSearch, ScheduleWakeup (für `/loop`; der frühere session-keepwarm Stop-Hook ist seit 2026-08-18 ausgebaut), SendUserFile, ReportFindings (für `/code-review`), Bundled Skills (`/loop`, `/update-config` in Nutzung), Remote Control (remoteControlAtStartup), claude.ai-Connectoren (gdrive-Skill braucht Google Drive; abschaltbar nur alle zusammen via `disableClaudeAiConnectors`).
 
-<!-- APP_VERSION: 0.12.20 -->
+<!-- APP_VERSION: 0.13.21 -->
 # graphify
 - **graphify** (`~/.claude/skills/graphify/SKILL.md`) - any input to knowledge graph. Trigger: `/graphify`
 When the user types `/graphify`, invoke the Skill tool with `skill: "graphify"` before doing anything else.
