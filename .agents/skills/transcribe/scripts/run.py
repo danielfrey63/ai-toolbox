@@ -391,6 +391,13 @@ def main() -> int:
              ".turns.json) and re-transcribe + re-diarize from scratch. By "
              "default a re-run against the same output reuses them (idempotent).",
     )
+    ap.add_argument(
+        "--background",
+        action="store_true",
+        help="Unattended run (watcher): below-normal process priority, and a "
+             "manual run on the same recording takes over instead of "
+             "competing - see joblock.py.",
+    )
     args = ap.parse_args()
 
     if args.no_diarize:
@@ -414,6 +421,18 @@ def main() -> int:
         # actual file (same NFC/NFD form) even when the argument's form differs.
         src = resolve_source_path(args.source)
         save_md_path = src.with_suffix(".md")
+
+    # One job per recording: the watcher's background run and a manual
+    # /transcribe on the same file hand over instead of computing twice.
+    if save_md_path is not None:
+        from joblock import JobLock
+        job = JobLock(save_md_path.with_name(save_md_path.stem + ".transcribe.lock"),
+                      background=args.background)
+        if job.acquire() == "busy":
+            return 0
+    elif args.background:
+        from joblock import lower_own_priority
+        lower_own_priority()
 
     if args.out_dir:
         work = Path(args.out_dir).expanduser().resolve()
