@@ -1,5 +1,5 @@
-# Registers (or removes) the keepwarm-guard PreToolUse hook in ~/.claude/settings.json and drops
-# any leftover session-keepwarm Stop hook while at it. Idempotent: re-running replaces the entry.
+# Registers (or removes) the wakeup-guard PreToolUse hook in ~/.claude/settings.json and drops
+# leftovers of its predecessors (session-keepwarm Stop hook, keepwarm-guard) while at it. Idempotent: re-running replaces the entry.
 # -Status reports the install state via exit code (0 = installed, 1 = not).
 [CmdletBinding()]
 param(
@@ -10,8 +10,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $settingsFile = Join-Path $env:USERPROFILE '.claude\settings.json'
-$marker = 'keepwarm-guard/guard.sh'
-$legacy = 'session-keepwarm'
+$marker = 'wakeup-guard/guard.sh'
+$legacy = 'keepwarm'
 # Git Bash takes forward slashes; the hook runs through the same bash the repo hooks already use.
 $guard = (Join-Path $PSScriptRoot 'guard.sh').Replace('\', '/')
 $command = "bash `"$guard`""
@@ -26,8 +26,8 @@ foreach ($event in 'PreToolUse', 'Stop') {
     if (-not $settings.hooks.PSObject.Properties[$event]) { $settings.hooks | Add-Member -NotePropertyName $event -NotePropertyValue @() }
 }
 
-# Drop our entries and any legacy keepwarm Stop hook, then re-add unless uninstalling.
-$pre = @($settings.hooks.PreToolUse | Where-Object { -not ($_.hooks | Where-Object { $_.command -like "*$marker*" }) })
+# Drop our entries and any legacy keepwarm hook (Stop or PreToolUse), then re-add unless uninstalling.
+$pre = @($settings.hooks.PreToolUse | Where-Object { -not ($_.hooks | Where-Object { $_.command -like "*$marker*" -or $_.command -like "*$legacy*" }) })
 $stop = @($settings.hooks.Stop | Where-Object { -not ($_.hooks | Where-Object { $_.command -like "*$legacy*" }) })
 if (-not $Uninstall) {
     $pre += [pscustomobject]@{ matcher = 'ScheduleWakeup'; hooks = @([pscustomobject]@{ type = 'command'; command = $command; timeout = 10 }) }
@@ -42,7 +42,7 @@ if ($settings.hooks.PSObject.Properties.Value.Count -eq 0) { $settings.PSObject.
 $settings | ConvertTo-Json -Depth 32 | Set-Content $settingsFile -Encoding UTF8
 
 if ($Uninstall) {
-    Write-Host "Removed keepwarm-guard PreToolUse hook from $settingsFile."
+    Write-Host "Removed wakeup-guard PreToolUse hook from $settingsFile."
 } else {
-    Write-Host "Registered keepwarm-guard PreToolUse hook in $settingsFile (takes effect for newly started sessions)."
+    Write-Host "Registered wakeup-guard PreToolUse hook in $settingsFile (takes effect for newly started sessions)."
 }

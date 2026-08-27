@@ -233,10 +233,10 @@
       "description": "Daily trash of empty, DELETE-marked and duplicate Claude Code sessions (scheduled task / systemd user timer)."
     },
     {
-      "name": "keepwarm-guard",
+      "name": "wakeup-guard",
       "type": "installer",
-      "path": "tools/keepwarm-guard",
-      "description": "PreToolUse hook that blocks leftover session-keepwarm ScheduleWakeup ticks (retired 2026-08-18)."
+      "path": "tools/wakeup-guard",
+      "description": "PreToolUse hook that blocks ScheduleWakeup calls from uninstalled or expired hook instructions (incl. legacy keepwarm)."
     },
     {
       "name": "versioning-hooks",
