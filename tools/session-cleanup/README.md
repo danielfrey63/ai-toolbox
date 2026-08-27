@@ -13,7 +13,7 @@ Nach einem Projektumzug (z.B. via transfer-cc-sessions) liegt dieselbe Session-U
 Kopien, die nicht enthalten sind, haben sich an einem Punkt getrennt — dahinter stecken zwei verschiedene Situationen, die das Skript anhand der eigenen Einträge nach dem Trennpunkt unterscheidet:
 
 - **Umzugs-Rest**: Die alte Kopie endet, bevor der eigene Zweig der neuen Kopie beginnt — nach dem Umzug wurde hier nichts mehr geschrieben. Solche Reste wandern automatisch in den Papierkorb, solange sie höchstens `-MaxHandoverMessages` (Default 10) eigene Nachrichten über den Trennpunkt hinaus tragen. Log: `leftover of "<Name>" after the move to <ziel> - 3 own message(s) up to 2026-08-19 16:56`.
-- **Echte Parallelarbeit**: In beiden Kopien wurde nach der Trennung eigenständig weitergearbeitet — beide Seiten tragen einmaligen Verlauf, keine wird angefasst. Die Meldung nennt den Session-Namen (`/rename`-Titel, sonst erste User-Message), den Trennzeitpunkt und pro Kopie die Zahl eigener Nachrichten samt letzter Aktivität, damit entscheidbar ist, welche Kopie behalten wird.
+- **Echte Parallelarbeit**: In beiden Kopien wurde nach der Trennung eigenständig weitergearbeitet — beide Seiten tragen einmaligen Verlauf, keine wird angefasst. Die Meldung nennt den Session-Namen (`/rename`-Titel, sonst erste User-Message), den Trennzeitpunkt und pro Kopie die Zahl eigener Nachrichten samt letzter Aktivität, damit entscheidbar ist, welche Kopie behalten wird. Tragen beide Kopien verschiedene `/rename`-Titel, gilt das Doppel als bewusst aufgelöst (zwei Sessions) und wird nicht mehr gemeldet — Umbenennen ist die eine, Wegwerfen die andere Auflösung.
 
 ## Gleich- und ähnlich benannte Sessions (Phase 1b)
 

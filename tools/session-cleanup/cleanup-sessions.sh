@@ -296,6 +296,15 @@ while IFS= read -r dup_name; do
             other_short=$(dir_short "$(basename "$(dirname "$other")")")
             keeper_short=$(dir_short "$keeper_dir")
             fork=$(date -d "$DIV_FORK" '+%Y-%m-%d %H:%M' 2>/dev/null || printf 'unknown')
+            # Two copies renamed to different titles were consciously kept as two sessions - the
+            # rename is exactly the resolution the finding asks for, so there is nothing to report.
+            other_title=""; keeper_title=""
+            custom_title "$other" && other_title=$CUSTOM_TITLE
+            custom_title "$keeper" && keeper_title=$CUSTOM_TITLE
+            if [ -n "$other_title" ] && [ -n "$keeper_title" ] && [ "$other_title" != "$keeper_title" ]; then
+                kept_files+=("$other")
+                continue
+            fi
             # Handover: everything this copy holds beyond the split predates the kept copy's own
             # branch, so nothing was written here after the session moved on. Raw ISO timestamps
             # compare correctly as strings.
@@ -315,11 +324,11 @@ while IFS= read -r dup_name; do
             last_a=$(date -d "$DIV_A_LAST" +%Y-%m-%d 2>/dev/null || printf '?')
             last_b=$(date -d "$DIV_B_LAST" +%Y-%m-%d 2>/dev/null || printf '?')
             log "diverged copies of \"$name\" (${dup_name:0:8}) split on $fork: $other_short has $DIV_A_MSGS own message(s) up to $last_a, $keeper_short has $DIV_B_MSGS up to $last_b - keep one, trash the other"
-            findings_titles+=("Session \"$name\" liegt zweimal vor")
-            findings_bodies+=("Seit $fork wurde in beiden Kopien eigenständig weitergearbeitet:
-$other_short - $DIV_A_MSGS eigene Nachrichten, zuletzt $last_a
-$keeper_short - $DIV_B_MSGS eigene Nachrichten, zuletzt $last_b
-Eine Kopie behalten, die andere wegwerfen.")
+            # Desktop notifications show a few body lines at most - one line per copy, decision last.
+            findings_titles+=("Session \"$name\" liegt zweimal vor (getrennt seit $fork)")
+            findings_bodies+=("$other_short - $DIV_A_MSGS Nachrichten, bis $last_a
+$keeper_short - $DIV_B_MSGS Nachrichten, bis $last_b
+Beide weitergeführt: eine behalten, andere wegwerfen oder beide umbenennen.")
             kept_files+=("$other")
         files+=("$other")
         fi

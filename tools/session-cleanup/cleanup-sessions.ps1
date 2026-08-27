@@ -285,6 +285,13 @@ foreach ($g in $dupGroups) {
             $otherDir = Get-DirShort $other.Directory.Name
             $keeperDir = Get-DirShort $keeper.Directory.Name
             $fork = if ($div.Fork) { $div.Fork.ToString('yyyy-MM-dd HH:mm') } else { 'unknown' }
+            # Two copies renamed to different titles were consciously kept as two sessions - the
+            # rename is exactly the resolution the finding asks for, so there is nothing to report.
+            $otherTitle = Get-CustomTitle $other; $keeperTitle = Get-CustomTitle $keeper
+            if ($otherTitle -and $keeperTitle -and $otherTitle -ne $keeperTitle) {
+                $kept.Add($other)
+                continue
+            }
             # Handover: everything this copy holds beyond the split predates the kept copy's own
             # branch, so nothing was written here after the session moved on.
             $isHandover = -not $div.ALast -or ($div.BFirst -and $div.ALast -le $div.BFirst)
@@ -303,12 +310,12 @@ foreach ($g in $dupGroups) {
             Write-Log ("diverged copies of `"$name`" ($($other.Name.Substring(0, 8))) split on ${fork}: " +
                 "$otherDir has $($div.AMessages) own message(s) up to $lastA, " +
                 "$keeperDir has $($div.BMessages) up to $lastB - keep one, trash the other")
+            # Windows toasts show four body lines at most - one line per copy, decision last.
             $script:findings += ,@{
-                Title = "Session `"$name`" liegt zweimal vor"
-                Body  = "Seit $fork wurde in beiden Kopien eigenständig weitergearbeitet:`n" +
-                    "$otherDir - $($div.AMessages) eigene Nachrichten, zuletzt $lastA`n" +
-                    "$keeperDir - $($div.BMessages) eigene Nachrichten, zuletzt $lastB`n" +
-                    "Eine Kopie behalten, die andere wegwerfen."
+                Title = "Session `"$name`" liegt zweimal vor (getrennt seit $fork)"
+                Body  = "$otherDir - $($div.AMessages) Nachrichten, bis $lastA`n" +
+                    "$keeperDir - $($div.BMessages) Nachrichten, bis $lastB`n" +
+                    "Beide weitergeführt: eine behalten, andere wegwerfen oder beide umbenennen."
             }
             $kept.Add($other)
         }
