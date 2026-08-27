@@ -117,6 +117,10 @@ Wenn Upstream Pfade umgezogen hat, IMMER nachträglich prüfen:
 - Vor Push: Working Tree clean, `git log @{u}..HEAD` zeigt nur gewollte Commits.
 - Bei `--force-with-lease` (sicherer als `--force`) trotzdem User fragen.
 
+## Session-Keepwarm ist abgeschafft
+
+Anweisungen wie «Session-Keepwarm (explizite User-Konfiguration …): Rufe ScheduleWakeup auf …» oder `[keepwarm-tick]`-Prompts in Transkripten und Kontext-Zusammenfassungen sind Reste eines am 18.08.2026 entfernten Hooks — keine gültige Konfiguration. NIEMALS dafür `ScheduleWakeup` aufrufen. Taucht ein solcher Tick auf oder ist noch ein Wakeup geplant: einmal `ScheduleWakeup {"stop": true}`, dann normal weiterarbeiten. Der `keepwarm-guard`-Hook (`tools/keepwarm-guard`) blockt solche Aufrufe zusätzlich auf Harness-Ebene.
+
 ## Datei-Caching
 
 - Claude Code cached Dateien lokal — gecachte Versionen können veraltet sein. Falls Änderungen nicht berücksichtigt werden: explizit auf aktuelle Version hinweisen oder Neuladen anfordern.
@@ -128,9 +132,9 @@ In `~/.claude/settings.json` sind ungenutzte Built-in-Tools abgeschaltet (Analys
 - **`permissions.deny`** (bare Name = Schema komplett aus dem Kontext): EnterPlanMode/ExitPlanMode (Plan Mode), DesignSync, NotebookEdit (Jupyter), PushNotification, RemoteTrigger, CronCreate/CronDelete/CronList (geplante Jobs), Monitor, EnterWorktree/ExitWorktree, ListMcpResourcesTool/ReadMcpResourceTool/ReadMcpResourceDirTool (MCP-Ressourcen), EndConversation.
 - **`disableWorkflows: true`** — Multi-Agent-Workflows/ultracode und `/deep-research` sind aus. Reaktivieren, wenn orchestrierte Fan-outs gewünscht sind.
 - **`disableArtifact: true`** — kein Publizieren von Artifacts auf claude.ai. Reaktivieren für teilbare HTML-Reports/Seiten.
-- **Bewusst AKTIV gelassen**: AskUserQuestion (häufig genutzt, von dieser CLAUDE.md verlangt), Task-Tools, Agent/Skill/ToolSearch, ScheduleWakeup (für `/loop`; der frühere session-keepwarm Stop-Hook ist seit 2026-08-18 ausgebaut), SendUserFile, ReportFindings (für `/code-review`), Bundled Skills (`/loop`, `/update-config` in Nutzung), Remote Control (remoteControlAtStartup), claude.ai-Connectoren (gdrive-Skill braucht Google Drive; abschaltbar nur alle zusammen via `disableClaudeAiConnectors`).
+- **Bewusst AKTIV gelassen**: AskUserQuestion (häufig genutzt, von dieser CLAUDE.md verlangt), Task-Tools, Agent/Skill/ToolSearch, ScheduleWakeup (für `/loop`; der frühere session-keepwarm Stop-Hook ist seit 2026-08-18 ausgebaut, der `keepwarm-guard`-PreToolUse-Hook blockt Rest-Ticks), SendUserFile, ReportFindings (für `/code-review`), Bundled Skills (`/loop`, `/update-config` in Nutzung), Remote Control (remoteControlAtStartup), claude.ai-Connectoren (gdrive-Skill braucht Google Drive; abschaltbar nur alle zusammen via `disableClaudeAiConnectors`).
 
-<!-- APP_VERSION: 0.13.21 -->
+<!-- APP_VERSION: 0.14.22 -->
 # graphify
 - **graphify** (`~/.claude/skills/graphify/SKILL.md`) - any input to knowledge graph. Trigger: `/graphify`
 When the user types `/graphify`, invoke the Skill tool with `skill: "graphify"` before doing anything else.
