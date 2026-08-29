@@ -14,6 +14,12 @@
 # via plugin.json — that is the plugin's own authoritative version — instead of
 # the SKILL.md frontmatter.
 #
+# Opt-out: a repo marks derived files (build outputs that merely copy the
+# source's APP_VERSION, e.g. a single-file bundle) with the git attribute
+# `-bump` in .gitattributes — `index.html -bump`. Such files are never
+# resolved as artifacts, so neither the per-edit nor the pre-commit hook
+# touches them; the build stamps them from the source instead.
+#
 # The version marker is matched in its DECLARATION form only — an APP_VERSION
 # assignment at the start of a line, the whole <!-- APP_VERSION: --> comment,
 # a version: key inside YAML frontmatter, or the "version" key of plugin.json.
@@ -40,7 +46,7 @@
 # Always exits 0 (except on a usage error) — a non-artifact edit is a silent
 # no-op, so it is hook-safe.
 
-APP_VERSION='0.5.18'
+APP_VERSION='0.6.19'
 set -u
 
 INIT_VERSION='0.0.1'
@@ -71,6 +77,9 @@ Options:
 
 Hook mode: with no <file>, the edited path is read from a Claude Code / Codex
 PostToolUse JSON payload on stdin.
+
+Opt-out: files carrying the git attribute `-bump` (.gitattributes, e.g.
+`index.html -bump` for a build output) are never treated as artifacts.
 
 Artifact types (MAJOR.MINOR.BUILD version):
   plugin  skill dir with .claude-plugin/plugin.json -> plugin.json "version"
@@ -112,6 +121,16 @@ fi
 [ -n "$FILE" ] || exit 0
 [ -f "$FILE" ] || exit 0
 FILE="$(cd "$(dirname "$FILE")" && pwd)/$(basename "$FILE")"
+
+# --- opt-out via git attribute ------------------------------------------------
+# `<path> -bump` in .gitattributes marks derived files (build outputs) whose
+# APP_VERSION is a copy stamped by the build: not an artifact, silent no-op.
+# check-attr runs from the file's own directory so it works outside any repo
+# too (then it simply fails and the file is treated normally).
+if git -C "$(dirname "$FILE")" check-attr bump -- "$(basename "$FILE")" 2>/dev/null \
+    | grep -qE ': bump: (unset|false|no|off)$'; then
+    exit 0
+fi
 
 # --- declaration patterns -----------------------------------------------------
 # An APP_VERSION assignment at the start of a line — covers APP_VERSION='x',

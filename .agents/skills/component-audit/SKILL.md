@@ -2,7 +2,7 @@
 name: component-audit
 description: Audit a codebase for component-orientation drift — finds DOM/UI-construction bypasses, hand-rolled patterns that should go through shared factories, and refactor opportunities, then routes them through the right component. Use after any UI-touching change, or when the user asks to "verify component consistency", "check for duplication", "audit the components". Works on any project — reads the project's component inventory from `.claude/component-inventory.md` (or a path passed as argument).
 metadata:
-  version: "0.3.8"
+  version: "0.5.10"
 ---
 
 # Component-Audit Skill
@@ -48,11 +48,12 @@ The factories list is the human-readable map. The bypass patterns drive the agen
    })
    ```
 
-3. **Review findings.** Classify each entry into one of four buckets — every bucket has a code action AND an inventory action:
+3. **Review findings.** Classify each entry into one of five buckets — every bucket has a code action AND an inventory action:
    - **Bypass → direct factory replacement.** Refactor inline. Inventory unchanged.
    - **Almost-fits → extend the factory.** Add the small option, then call. **Inventory:** update the factory's entry to mention the new option, if it changes the call surface.
    - **Repeated hand-built pattern without factory (3+ similar sites).** Extract a new factory. **Inventory:** add the new factory to the Factories section AND add a fresh grep recipe to Bypass patterns so the next audit defends it.
    - **Legitimate exception.** Add it to the inventory's exceptions section so the next audit doesn't re-flag it.
+   - **Exception re-examined.** The audit's verdict per existing exception: `still valid` → leave, but stamp the re-examination date on the section; `valid but narrowed` → rewrite the entry to the narrowed scope and fix whatever fell outside it; `no longer valid` → fix the finding and move the entry to the inventory's "Struck" section so it is not re-added later.
 
 4. **Apply refactors AND inventory updates in the current turn.** Don't just report — fix. Migrate to factory calls, drop the dead inline code, cross-check that no other site still references the old pattern. If a new factory was extracted or an existing one extended, the inventory edit is part of this step — not a follow-up.
 
@@ -64,7 +65,7 @@ The factories list is the human-readable map. The bypass patterns drive the agen
    - What was deleted
 
 7. **Loop until clean (optional).** When the user asks for a loop ("run until no substantial findings remain"), repeat steps 2–6 as rounds. The exit criterion is the audit's severity verdict: stop when a round reports **zero substantial findings**. Rules per round:
-   - Update the inventory BETWEEN rounds — every extracted factory, extended option and accepted exception goes in before the next audit prompt is built, otherwise the next round re-flags the previous round's own output.
+   - Update the inventory BETWEEN rounds — every extracted factory, extended option, accepted exception and every narrowed or struck exception goes in before the next audit prompt is built, otherwise the next round re-flags the previous round's own output.
    - Commit each round separately (one verified, revertable step per round).
    - Minor/cosmetic findings may be fixed opportunistically in a round, but they do not keep the loop alive on their own.
    - Run a final confirmation round (reduced search breadth is fine) that spot-checks the earlier fixes and confirms the zero-substantial verdict.
@@ -90,14 +91,25 @@ Run each grep recipe below and inspect a small block around every hit:
 
 {{bypass patterns list, numbered}}
 
-Known legitimate exceptions (do NOT re-report):
+Standing checks (run every time, independent of the recipes above):
+  A. Dead contract classes — every class in the layout-contract list, and every class selector in the project's stylesheet(s) among the target files, without a producer (createElement/className/classList/template markup) in the target files. Report under "Dead contract classes"; severity "minor" unless the dead class hides a divergent second implementation of a live one.
+  B. Static values hiding under a "dynamic" label — inline style assignments with a literal value (cursor, background, margins, padding, z-index, display toggles) are bypasses even when the surrounding code handles dynamic values.
+
+Known legitimate exceptions (do NOT re-report them as findings — but re-examine each one, see below):
 {{exceptions list}}
+
+Exceptions re-examined (mandatory section, numbered after the categories above):
+  For every exception listed, check it against the current code instead of skipping it:
+  - does the exempted code still exist (file / function / class)?
+  - is the justification still true? ("dynamic value" → is every inline value actually computed at runtime; "canvas drawing" → is no UI chrome built under that umbrella; "pre-built markup" → does the JS still stay out of styling and visibility; "single site" → is it still a single site?)
+  - has the exempted pattern spread to a second site (→ factory candidate)?
+  Verdict per exception, with file:line evidence: "still valid" / "valid but narrowed to <…>" / "no longer valid — <finding>". Anything outside a narrowed scope is reported as a normal finding.
 
 Report format:
   - Group findings under the numbered categories above.
   - For each finding: file:line, 5-word summary, one of "bypass" / "extend X" / "factory candidate (N similar sites)" / "exception", a severity judgement "substantial" / "minor", suggested refactor target.
   - Severity rubric: "substantial" = duplicated construction logic, inline styling that imitates or should be a CSS class, or any pattern that will drift (3+ sites, bulk static styles); "minor" = cosmetic single-property issues or inconsistencies with no drift risk.
-  - End with a one-line verdict that counts severities first (e.g. "2 substantial, 3 minor — 3 bypasses, 1 extension opportunity, 1 factory candidate").
+  - End with a one-line verdict that counts severities first, then the exception verdicts (e.g. "2 substantial, 3 minor — 3 bypasses, 1 extension opportunity, 1 factory candidate; 4 exceptions re-examined: 2 still valid, 1 narrowed, 1 struck").
 
 Do NOT modify files. Read-only.
 ```
@@ -122,3 +134,5 @@ Don't run the audit on a bootstrapped inventory until the user has reviewed it �
 - **Refactor in the same turn.** Don't drop a punch list and stop — apply the fixes, verify, commit. If a refactor is genuinely too large, say so and propose a separate scoped session.
 - **Feed exceptions back into the inventory.** A legitimate exception flagged twice means the inventory is incomplete, not that the user has to re-explain.
 - **Inventory is a living document.** Every new factory extracted, every factory extended, every legitimate exception accepted goes back into `.claude/component-inventory.md` in the same turn. A factory that exists in code but not in the inventory is invisible to the next audit — and the next audit will then flag *its* call sites as bypasses.
+- **Exceptions expire.** An exception is a claim about the code at the time it was written; every audit re-examines each one and the inventory records the date. A narrowed exception is rewritten, a struck one moves to the "Struck" section — silently skipping exceptions is how static values hide under a "dynamic" label for months.
+- **Dead contract classes are findings.** A CSS class nobody produces is either leftover from a removed component (delete it) or a second implementation waiting to happen (wire it up); the standing check in the audit prompt catches both.

@@ -109,6 +109,8 @@ entfernt/aktualisiert wird nur die markierte Zeile. Die eigentliche Bump-Logik
 liegt zentral in der Toolbox; ein `git pull` dort propagiert Verbesserungen an
 alle Repos automatisch.
 
+**Build-Outputs ausnehmen:** Abgeleitete Dateien, die eine `APP_VERSION` nur als Kopie der Quelle tragen (z.B. ein Single-File-Bundle `index.html`, das `build.js` aus `index.template.html` erzeugt), markiert das Repo in `.gitattributes` mit `index.html -bump`. Der Bumper (`bump-version.sh`/`.ps1`) behandelt sie dann nie als Artefakt — weder der Per-Edit- noch der Pre-Commit-Hook fasst sie an, und im Commit-Log erscheint nur noch die Quelle.
+
 ### Migration bestehender Installs (z.B. auf anderen Maschinen)
 
 Frühere Versionen schrieben entweder `core.hooksPath` aufs Toolbox-Verzeichnis

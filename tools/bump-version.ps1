@@ -24,7 +24,7 @@
 # as a CLI, or a Codex / Claude Code PostToolUse hook JSON payload on stdin. Always
 # exits 0 (except on a usage error).
 
-$APP_VERSION = '0.5.18'
+$APP_VERSION = '0.6.19'
 $ErrorActionPreference = 'Stop'
 
 $InitVersion = '0.0.1'
@@ -68,6 +68,9 @@ The version is matched in its declaration form only — an assignment / the
 whole marker comment / a frontmatter key / the plugin.json "version" key —
 never a bare mention of the word. A missing version is initialised to 0.0.1.
 A non-artifact file is a no-op.
+
+Opt-out: files carrying the git attribute `-bump` (.gitattributes, e.g.
+`index.html -bump` for a build output) are never treated as artifacts.
 '@
     exit 0
 }
@@ -232,6 +235,14 @@ if ($positional.Count -ge 1 -and $positional[0]) {
 if (-not $file) { exit 0 }
 if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { exit 0 }
 $file = (Resolve-Path -LiteralPath $file).Path
+
+# --- opt-out via git attribute ------------------------------------------------
+# `<path> -bump` in .gitattributes marks derived files (build outputs) whose
+# APP_VERSION is a copy stamped by the build: not an artifact, silent no-op.
+try {
+    $attr = & git -C (Split-Path -Parent $file) check-attr bump -- (Split-Path -Leaf $file) 2>$null
+    if ("$attr" -match ': bump: (unset|false|no|off)$') { exit 0 }
+} catch {}
 
 # --- detect artifact type -----------------------------------------------------
 $norm = $file -replace '\\', '/'
