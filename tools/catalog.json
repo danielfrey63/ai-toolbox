@@ -239,6 +239,13 @@
       "description": "PreToolUse hook that blocks ScheduleWakeup calls from uninstalled or expired hook instructions (incl. legacy keepwarm)."
     },
     {
+      "name": "workspace-audit",
+      "type": "bin",
+      "path": "tools/workspace-audit/workspace-audit.sh",
+      "command": "workspace-audit",
+      "description": "Read-only inventory of all git repos below a workspace root: split .git, no remote, ahead/behind, dirty, nested clones, container folders, name mismatches."
+    },
+    {
       "name": "versioning-hooks",
       "type": "hook",
       "path": "tools/githooks",
