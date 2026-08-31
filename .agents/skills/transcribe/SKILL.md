@@ -113,6 +113,7 @@ Optional flags:
   - Identifying *which name* maps to `A`/`B`/`SPEAKER_00` is done later by Claude using address patterns in the transcript (see Step 4 Inventar → Personen & Stimmen). For **audio-only sources** (no frames as ground truth), role/content evidence substitutes for frame evidence: a label that consistently owns a known person's responsibilities ("I'll prepare the compliance slide") plus at least one address-pattern hit qualifies as high-confidence; document the reasoning in the transcript header. Surplus diarization clusters that map to no one stay as bare letters with a header note.
 - `--resolution W` — change frame width in px (default 512; bump to 1024 only if the user needs to read on-screen text)
 - `--version` — print the skill version and exit (the same value the report stamps, see "Version stamp" below)
+- `--cpu-budget SPEC` — cap the CPU the CPU-bound stages may use **together**: a share (`50%`), an absolute thread count (`6`), or `all` for no limit. Default 75% of the cores, overridable via `TRANSCRIBE_CPU_BUDGET` in the environment or `.env`. See "CPU budget" below.
 - `--fps F` — override auto-fps (clamped to 2 fps max)
 - `--out-dir DIR` — keep working files somewhere specific (default: an auto-generated tmp dir)
 - `--fresh` — ignore persisted `<base>.segments.json` / `.turns.json` and re-transcribe + re-diarize from scratch (default behaviour reuses them for idempotent re-runs)
@@ -269,6 +270,26 @@ Skip the compact file for non-diarized transcripts — without speakers it would
 
 **Step 6 — clean up.** The script prints a working directory at the end. If the user isn't going to ask follow-ups about this video, delete it with `rm -rf <dir>`. **If `--save-md` produced the companion files (`<base>.md` + `<base>.protocol.md` + `<base>.transcript.md`, plus `<base>.illustrations/` and `<base>.illustrations.spec.json` when illustrations were extracted), they live outside the work dir and are preserved** by the cleanup. If the user might follow up, leave the work dir in place too.
 
+### CPU budget
+
+The CPU-bound stages used to help themselves to the whole machine. ffmpeg defaults to `-threads 0` — one thread per core — and the frame stage ran up to 8 of those *in parallel*, so on a 16-core box that was 8 processes each asking for 16 threads. The visible effect is a stage that pins every core, followed by a near-idle stretch while the GPU stages (whisper, pyannote) run, followed by the next CPU stage: fans surging up and down several times per transcription.
+
+`scripts/cpu.py` is now the single place that answers "how much CPU may we use?", and the stages **divide one budget** instead of each taking it in full:
+
+| Stage | Processes | Gets |
+|---|---|---|
+| scdet cut detection | 1 ffmpeg | whole budget |
+| audio extraction | 1 ffmpeg | whole budget |
+| frame extraction | N ffmpegs | budget split across them |
+| whisper CPU fallback | in-venv | whole budget (via env) |
+| pyannote CPU path | in-venv | `torch.set_num_threads` (via env) |
+
+Resolution order: `--cpu-budget` > `TRANSCRIBE_CPU_BUDGET` (environment or `.env`) > 75% of the cores. The resolved value is exported into the environment, so the venv workers inherit the same cap without a flag being threaded through. An unparseable value falls back to the default rather than failing the run.
+
+**Splitting is not the same as spreading it thin.** Measured on 16 cores, extracting 24 frames from 1080p with a budget of 12: 8 workers × 1 thread took **13.8 s**, 6 × 2 took **11.1 s**, 4 × 3 took 11.3 s, 3 × 4 took 11.5 s — against 9.7 s ungoverned. A single-threaded ffmpeg cannot overlap its own seek and decode, so handing the budget to as many workers as possible is the *worst* way to spend it. `frame_workers()` therefore derives the worker count as `budget // 2`, guaranteeing every worker two threads; the default budget costs roughly 15% wall-clock against no cap at all.
+
+Lower it with `--cpu-budget 50%` (or `25%`) when the machine runs hot or needs to stay responsive; `--cpu-budget all` restores the old unbounded behaviour. `--frame-workers` still overrides the worker count explicitly if you want to tune that axis by hand.
+
 ### Version stamp
 
 Every report records which build of the skill produced it, so a transcript read months later says what made it — pipeline behaviour (repair pass, glossary handling, crosscheck) shifts between versions, and a report that predates a fix should be readable as such.
@@ -396,6 +417,6 @@ If you already watched a video this session and the user asks a follow-up, do **
 - Does not log, cache, or write API keys to stdout, stderr, or output files
 - Does not persist anything outside the working directory and `~/.config/transcribe/.env` — clean up the working directory when you're done (Step 5)
 
-**Bundled scripts:** `scripts/run.py` (entry point), `scripts/download.py` (yt-dlp wrapper), `scripts/frames.py` (ffmpeg frame extraction + scdet cut detection), `scripts/transcribe.py` (caption selection + Whisper orchestration), `scripts/stt.py` (pluggable speech-to-text backends - Azure / Groq / OpenAI / whisper-local), `scripts/repair.py` (collapse detection + windowed re-transcription), `scripts/diarize.py` (diarization backends + alignment), `scripts/pyannote_worker.py` + `scripts/whisper_local_worker.py` (run inside the managed venv, never imported by the host), `scripts/resources.py` (URL extraction from description + transcript, grouped by category), `scripts/version.py` (skill version, read from the plugin manifest), `scripts/setup.py` (preflight + installer + uv bootstrap + venv provisioning)
+**Bundled scripts:** `scripts/run.py` (entry point), `scripts/download.py` (yt-dlp wrapper), `scripts/frames.py` (ffmpeg frame extraction + scdet cut detection), `scripts/transcribe.py` (caption selection + Whisper orchestration), `scripts/stt.py` (pluggable speech-to-text backends - Azure / Groq / OpenAI / whisper-local), `scripts/repair.py` (collapse detection + windowed re-transcription), `scripts/diarize.py` (diarization backends + alignment), `scripts/pyannote_worker.py` + `scripts/whisper_local_worker.py` (run inside the managed venv, never imported by the host), `scripts/resources.py` (URL extraction from description + transcript, grouped by category), `scripts/version.py` (skill version, read from the plugin manifest), `scripts/cpu.py` (shared CPU budget for the CPU-bound stages), `scripts/setup.py` (preflight + installer + uv bootstrap + venv provisioning)
 
 Review scripts before first use to verify behavior.

@@ -220,6 +220,7 @@ from transcribe import (  # noqa: E402
 )
 from stt import extract_audio, load_hotwords, select_backend, select_backends, transcribe_video  # noqa: E402
 from version import APP_VERSION  # noqa: E402
+import cpu  # noqa: E402
 
 
 def main() -> int:
@@ -316,6 +317,17 @@ def main() -> int:
              "Set to 0 to revert to the old just-before-cut behavior.",
     )
     ap.add_argument(
+        "--cpu-budget",
+        type=str,
+        default=None,
+        metavar="SPEC",
+        help="Cap the CPU the pipeline's CPU-bound stages may use together: "
+             "a share (\"50%%\"), an absolute thread count (\"6\"), or "
+             "\"all\" for no limit. Default: 75%% of the cores, or "
+             "TRANSCRIBE_CPU_BUDGET from the environment / .env. Lower it if "
+             "the machine gets hot or unresponsive during a run.",
+    )
+    ap.add_argument(
         "--frame-workers",
         type=int,
         default=None,
@@ -405,6 +417,10 @@ def main() -> int:
 
     max_frames = min(args.max_frames, 100)
 
+    # Resolve the shared CPU budget before any stage starts. set_budget also
+    # exports it, so the venv workers (whisper/pyannote) inherit the same cap.
+    cpu_threads = cpu.set_budget(args.cpu_budget)
+
     # Local-file and explicit --save-md paths resolve now; URL sources defer
     # to Phase 2 below (needs the yt-dlp title to slug the folder).
     save_md_path: Path | None = None
@@ -455,8 +471,10 @@ def main() -> int:
     print(
         f"[transcribe] workers: frame={frame_workers}, "
         f"whisper={whisper_workers} ({'seq' if whisper_workers == 1 else 'parallel'}), "
-        f"dedup={dedup_label} "
-        f"(override via --frame-workers / --whisper-workers / --dedup-threshold)",
+        f"dedup={dedup_label}, "
+        f"cpu={cpu_threads}/{cpu.cores()} threads "
+        f"(override via --cpu-budget / --frame-workers / --whisper-workers / "
+        f"--dedup-threshold)",
         file=sys.stderr,
     )
     # Transcript + diarization availability summary - flags missing keys

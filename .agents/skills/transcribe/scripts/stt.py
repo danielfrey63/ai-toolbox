@@ -28,6 +28,8 @@ import time
 import urllib.error
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+
+import cpu
 from pathlib import Path
 from urllib.request import Request, urlopen
 
@@ -368,6 +370,8 @@ def extract_audio(video_path: str, out_path: Path) -> Path:
         "-hide_banner",
         "-loglevel", "error",
         "-y",
+        # Full-video decode + mp3 encode: worth capping (see cpu.py).
+        *cpu.ffmpeg_flags(),
         "-i", video_path,
         "-vn",
         "-acodec", "libmp3lame",

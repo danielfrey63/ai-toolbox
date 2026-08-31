@@ -88,7 +88,14 @@ def main() -> int:
         desc = "large-v3 / cuda float16"
     except Exception as exc:  # noqa: BLE001 - any CUDA failure -> CPU
         log(f"CUDA unavailable ({type(exc).__name__}) - CPU fallback (medium/int8)")
-        threads = max(1, (os.cpu_count() or 4) - 2)
+        # Runs in the managed venv as a separate process, so it re-resolves
+        # the budget from the environment run.py exported (see cpu.py) rather
+        # than importing it - keeps this worker free of host-side imports.
+        budget = os.environ.get("TRANSCRIBE_CPU_BUDGET")
+        try:
+            threads = max(1, int(budget)) if budget else max(1, (os.cpu_count() or 4) - 2)
+        except ValueError:
+            threads = max(1, (os.cpu_count() or 4) - 2)
         model = WhisperModel("medium", device="cpu", compute_type="int8",
                              cpu_threads=threads)
         desc = f"medium / cpu int8 ({threads} threads)"

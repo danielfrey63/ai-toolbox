@@ -46,6 +46,8 @@ import json
 import re
 import shutil
 import subprocess
+
+import cpu
 import sys
 from pathlib import Path
 
@@ -89,6 +91,7 @@ def _crop_one(ffmpeg: str, video: str, t: float, bbox, out_path: Path) -> bool:
     crop = f"crop=in_w*{w:.5f}:in_h*{h:.5f}:in_w*{x:.5f}:in_h*{y:.5f}"
     cmd = [
         ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+        *cpu.ffmpeg_flags(),
         "-ss", f"{max(0.0, t - 0.05):.3f}",
         "-i", video,
         "-frames:v", "1",
@@ -123,7 +126,8 @@ def _make_sheets(ffmpeg: str, video: str, out_dir: Path,
     for old in out_dir.glob("sheet_*.png"):
         old.unlink()
     cmd = [
-        ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", video,
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+        *cpu.ffmpeg_flags(), "-i", video,
         "-vf", f"fps=1/{interval},scale={width}:-1,tile={cols}x{rows}",
         "-vsync", "vfr",
         str(out_dir / "sheet_%02d.png"),
@@ -149,6 +153,7 @@ def _extract_frames(ffmpeg: str, video: str, out_dir: Path, stamps: list[float])
         path = out_dir / f"frame_t{int(t):05d}.png"
         cmd = [
             ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+        *cpu.ffmpeg_flags(),
             "-ss", f"{max(0.0, t):.3f}", "-i", video,
             "-frames:v", "1", str(path),
         ]
@@ -272,7 +277,8 @@ def _gray_sidecar(ffmpeg: str, png: Path) -> Path | None:
     """Write a 17x16 grayscale raw sidecar for dHash. Returns its path or None."""
     side = _hash_sidecar_path(png)
     cmd = [
-        ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(png),
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+        *cpu.ffmpeg_flags(), "-i", str(png),
         "-vf", f"scale={_HASH_W}:{_HASH_H},format=gray", "-frames:v", "1",
         "-f", "rawvideo", "-pix_fmt", "gray", str(side),
     ]

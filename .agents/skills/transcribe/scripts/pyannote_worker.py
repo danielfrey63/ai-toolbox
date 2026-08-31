@@ -58,6 +58,15 @@ def main() -> int:
         torch.load = _orig_torch_load
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    # On the CPU path torch would otherwise spawn one thread per core. Same
+    # budget as every other CPU stage, inherited via the environment (cpu.py).
+    if device == "cpu":
+        _budget = os.environ.get("TRANSCRIBE_CPU_BUDGET")
+        if _budget:
+            try:
+                torch.set_num_threads(max(1, int(_budget)))
+            except (ValueError, RuntimeError):
+                pass
     pipeline.to(torch.device(device))
 
     # In-memory input bypasses pyannote's own (Windows-fragile) decoders.

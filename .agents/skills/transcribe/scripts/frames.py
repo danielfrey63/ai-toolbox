@@ -15,6 +15,8 @@ import subprocess
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
+
+import cpu
 from pathlib import Path
 
 from setup import find_tool
@@ -23,12 +25,11 @@ from setup import find_tool
 def _default_workers() -> int:
     """ThreadPool size for per-frame ffmpeg calls.
 
-    8 is a good balance for typical 4-8 core dev laptops - beyond that, ffmpeg
-    instances start contending for L3 cache and disk seek bandwidth, and the
-    wall-clock curve flattens. Clamp to cpu_count() so 2-core machines don't
-    over-subscribe.
+    Delegates to the shared CPU budget (see cpu.py): the worker count and the
+    per-worker thread count are two halves of one number, so they must not be
+    decided independently.
     """
-    return min(8, os.cpu_count() or 4)
+    return cpu.frame_workers()
 
 
 MAX_FPS = 2.0
@@ -184,6 +185,7 @@ def extract(
         "-hide_banner",
         "-loglevel", "error",
         "-y",
+        *cpu.ffmpeg_flags(),
     ]
 
     # -ss before -i = fast seek (keyframe-snap, good enough for preview frames).
@@ -286,7 +288,9 @@ def detect_cuts(
         # accepts both on Windows), then double-backslash-escape any colon
         # left over from the Windows drive letter.
         meta_path_for_filter = meta_path.replace("\\", "/").replace(":", r"\\:")
+        # Full-length decode + scene analysis: the single heaviest CPU stage.
         cmd: list[str] = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+        cmd += cpu.ffmpeg_flags()
         if start_seconds is not None:
             cmd += ["-ss", f"{start_seconds:.3f}"]
         if end_seconds is not None:
@@ -387,6 +391,7 @@ def _extract_one_frame(
     out_path: Path,
     resolution: int,
     produce_hash: bool = False,
+    threads: int = 1,
 ) -> bool:
     """Run a single ffmpeg fast-seek-and-extract. Returns True on success.
 
@@ -398,6 +403,7 @@ def _extract_one_frame(
     if produce_hash:
         cmd = [
             ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-threads", str(threads),
             "-ss", f"{seek_t:.3f}",
             "-i", video_path,
             "-filter_complex",
@@ -411,6 +417,7 @@ def _extract_one_frame(
     else:
         cmd = [
             ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-threads", str(threads),
             "-ss", f"{seek_t:.3f}",
             "-i", video_path,
             "-frames:v", "1",
@@ -662,11 +669,15 @@ def extract_at_timestamps(
     # scene-change signal and shouldn't be deduplicated against each other.
     use_dedup = (kind == "regular") and (dedup_threshold is not None)
 
+    # Split, don't repeat: n_workers processes each taking the full budget is
+    # exactly the oversubscription the budget exists to prevent.
+    per_worker_threads = cpu.per_process(n_workers)
+
     def run_job(job: tuple[int, float, float, Path]) -> tuple[int, float, Path, bool]:
         i, t, seek_t, path = job
         ok = _extract_one_frame(
             ffmpeg, video_path, seek_t, path, resolution,
-            produce_hash=use_dedup,
+            produce_hash=use_dedup, threads=per_worker_threads,
         )
         return i, t, path, ok
 
