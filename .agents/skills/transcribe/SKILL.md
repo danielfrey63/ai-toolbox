@@ -1,6 +1,6 @@
 ---
 name: transcribe
-description: Transcribe a video or audio file (URL or local path; .m4a/.mp3 voice memos and meeting recordings skip the frame stages automatically). Downloads with yt-dlp, extracts gap-filled frames + scdet-detected cuts, auto-chunks long videos, and transcribes via captions or a LOCAL-FIRST cascade (on-device faster-whisper by default, cloud backends as fallback) with speaker diarization ON by default (on-device pyannote, Claude-driven speaker-to-name substitution). Produces a persistent report (`<base>.{md,protocol.md,transcript.md}` plus `transcript-kompakt.md` when diarized) and a Summary that hits the chat with clickable file:// links.
+description: Transcribe a video or audio file (URL or local path; .m4a/.mp3 voice memos and meeting recordings skip the frame stages automatically). Downloads with yt-dlp, extracts gap-filled frames + scdet-detected cuts, auto-chunks long videos, and transcribes via captions or a LOCAL-FIRST cascade (on-device faster-whisper by default, cloud backends as fallback) with speaker diarization ON by default (on-device pyannote, Claude-driven speaker-to-name substitution). Produces a persistent report (`<base>.{md,protocol.md,transcript.md}` plus `transcript-kompakt.md` when diarized); the chat reply stays minimal — Kernaussagen only, plus clickable file:// links.
 argument-hint: "<video-url-or-path> [question]"
 allowed-tools: Bash, Read, Write, Edit, AskUserQuestion, SendUserFile
 homepage: https://github.com/danielfrey63/ai-toolbox
@@ -210,9 +210,9 @@ Run all frame Reads and the transcript Read in a single message (parallel tool c
 - **Transcript** — what's said at each timestamp. The report's header shows the source (`captions` = yt-dlp pulled native subs; `whisper (groq)` or `whisper (openai)` = transcribed by API).
 - **Resources** — a `## Resources` section at the end of the report aggregates every `https://` URL found in the **video description** plus URLs that appear in the **transcript**, deduped and grouped by category (Projects / Docs / Articles / Videos / Social / Other). Each entry shows where it was sourced from (`description` or `transcript@MM:SS`).
 
-If the user asked a specific question, answer it directly citing timestamps and stop. Don't impose the report structure below — they asked something specific, give them that.
+**Always write the full report — a user question comes ON TOP, never INSTEAD.** Whenever the run persists companion files (any `--save-md`, incl. the defaults), produce the complete three-section report and persist it per Steps 5–6, regardless of whether the user asked a specific question. If they did ask one, answer it in chat **after** the report is written, citing timestamps — the question changes what you emphasize in the chat answer, not what gets persisted. Skipping the report is only right when nothing is persisted at all (`--no-save-md`).
 
-If they didn't ask anything specific, write the full three-section report (`## Übersicht`, `## Summary`, `## Analysis`). **Before writing it, Read `${CLAUDE_SKILL_DIR}/references/report-writing.md`** — it defines the mandatory pre-stage (Inventar + Konsistenz-Check + Datum identifizieren), the Schlüssel-Illustrationen extraction via `illustrate.py`, the spec of all three sections, and the exact markdown layout to append. Do not write the report from memory of this paragraph; the reference file is the authoritative methodology.
+Write the full three-section report (`## Übersicht`, `## Summary`, `## Analysis`). **Before writing it, Read `${CLAUDE_SKILL_DIR}/references/report-writing.md`** — it defines the mandatory pre-stage (Inventar + Konsistenz-Check + Datum identifizieren), the Schlüssel-Illustrationen extraction via `illustrate.py`, the spec of all three sections, and the exact markdown layout to append. Do not write the report from memory of this paragraph; the reference file is the authoritative methodology.
 
 **Step 5 — persist Übersicht + Summary + Analysis to the main file.** Check the report header for the three saved-files lines (`**Protocol file:**`, `**Transcript file:**`, `**Analysis target:**`). The script has already written the protocol (`<base>.protocol.md`) and transcript (`<base>.transcript.md`). The Analysis-target file (the main `<base>.md`) contains only a short stub with cross-links — **append the full three-section report to it** so the user ends up with one human-readable document alongside the two raw-data companions. Use the exact layout defined in `${CLAUDE_SKILL_DIR}/references/report-writing.md`, section «Report layout».
 
@@ -229,24 +229,23 @@ When the relative path contains spaces (typical for meeting recordings), wrap it
 
 Place each image once, where it carries the most explanatory weight; don't scatter the same crop across sections. If the manifest is empty or absent, there's nothing to embed — move on.
 
-**After the append, surface Übersicht + Summary in chat.** The chat / console is where the user actually reads the result; the saved file is the persistent artifact. Echo the **full `## Übersicht`** block (Kernaussagen + Chapter-Struktur — quick orient, ~15 lines) and the **full `## Summary`** block (thematic catalog) into your final chat message, then a short pointer block listing the three companion files **as markdown links with `file://` URLs** so the user can click through (clickable in Claude Code and most modern terminals):
+**After the append, surface ONLY the Kernaussagen + file links in chat.** The saved `<base>.md` is the full artifact (Übersicht + Summary + Analysis stay complete there); the chat message is deliberately minimal so the user can orient in seconds. Echo **only the `### Kernaussagen` block** (3–6 bullets) into your final chat message, then a short pointer block listing the companion files **as markdown links with `file://` URLs** so the user can click through (clickable in Claude Code and most modern terminals):
 
 ```
-<full ## Übersicht block — Kernaussagen + Chapter-Struktur>
-
-<full ## Summary block — all ### <Thema> groups and bullets>
+<### Kernaussagen block — 3–6 bullets, nothing else>
 
 **Files**
 - Protocol: [`<base>.protocol.md`](file:///absolute/path/to/<base>.protocol.md) — metadata + frame list
 - Transcript: [`<base>.transcript.md`](file:///absolute/path/to/<base>.transcript.md) — full transcript
+- Kompakt: [`<base>.transcript-kompakt.md`](file:///absolute/path/to/<base>.transcript-kompakt.md) — condensed transcript (only when diarized)
 - Analysis: [`<base>.md`](file:///absolute/path/to/<base>.md) — Übersicht + Summary + full Analysis
 ```
+
+Do **not** echo Chapter-Struktur, Summary, or any Analysis subsection into chat — they live complete and unchanged in `<base>.md`. If the user asked a specific question in the invocation, its answer comes in addition to the Kernaussagen block, not instead of it.
 
 Use the **absolute paths** from the `**Protocol file:**` / `**Transcript file:**` / `**Analysis target:**` lines in the report header (those are already absolute). Just prefix each with `file://` to form the URL.
 
 **Surface the illustrations as images in chat (if any).** A `file://` link to a PNG renders in a terminal but not in the Claude mobile/desktop app, where the user often reads. So when `<base>.illustrations/manifest.json` lists crops, send them with **`SendUserFile`** (status `normal`) right after the Files block — the app renders them inline. Pass all crop paths in one call with a short `caption` (e.g. `"Schlüssel-Illustrationen aus dem Video"`); the user then sees the diagrams without opening the file. Skip when there are no illustrations.
-
-Do **not** echo the Analysis subsections (Inventar, Beurteilungen, Schlüsselaussagen, Details, Abdeckung, Resources) into chat — those live in the saved `<base>.md` and would make the chat response unwieldy. The user opens `<base>.md` if they want them.
 
 **Apply speaker-name mapping to the transcript (only when diarized).** If the run produced a diarized transcript (the Step 2 metadata says `Transcript: N segments (via assemblyai (transcript + diarization))` or similar) **and** the Inventar's *Personen & Stimmen* contains **high-confidence** mappings (frame evidence AND address-pattern evidence — see Step 4), substitute the anonymous speaker labels in `<base>.transcript.md` with the canonical first names you decided in the Inventar:
 
