@@ -75,7 +75,7 @@ def _load_env_value(name: str) -> str | None:
         if not path.exists():
             continue
         try:
-            for line in path.read_text().splitlines():
+            for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:
                     continue

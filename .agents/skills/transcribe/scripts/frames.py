@@ -301,7 +301,7 @@ def detect_cuts(
             raise SystemExit(f"ffmpeg scdet failed: {result.stderr.strip()}")
 
         offset = start_seconds or 0.0
-        text = Path(meta_path).read_text()
+        text = Path(meta_path).read_text(encoding="utf-8", errors="replace")
     finally:
         Path(meta_path).unlink(missing_ok=True)
 

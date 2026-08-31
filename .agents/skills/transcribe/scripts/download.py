@@ -319,7 +319,9 @@ def download_url(url: str, out_dir: Path) -> dict:
     info: dict = {}
     if info_path.exists():
         try:
-            raw = json.loads(info_path.read_text())
+            # yt-dlp always writes UTF-8; the platform default (cp1252 on
+            # Windows) chokes on multi-byte titles/descriptions
+            raw = json.loads(info_path.read_text(encoding="utf-8"))
             info = {
                 "title": raw.get("title"),
                 "uploader": raw.get("uploader") or raw.get("channel"),
@@ -327,7 +329,12 @@ def download_url(url: str, out_dir: Path) -> dict:
                 "url": raw.get("webpage_url") or url,
                 "description": raw.get("description") or "",
             }
-        except Exception:
+        except Exception as exc:
+            print(
+                f"[transcribe] WARNING: could not parse {info_path.name} "
+                f"({type(exc).__name__}: {exc}) - title/description metadata lost",
+                file=sys.stderr,
+            )
             info = {"url": url}
 
     media = video or audio

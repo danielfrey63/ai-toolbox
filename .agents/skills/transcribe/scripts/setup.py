@@ -675,7 +675,7 @@ def _read_env_key(name: str) -> str | None:
         return None
     _check_file_permissions(CONFIG_FILE)
     try:
-        for line in CONFIG_FILE.read_text().splitlines():
+        for line in CONFIG_FILE.read_text(encoding="utf-8", errors="ignore").splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
@@ -704,7 +704,7 @@ def _upsert_env_value(name: str, value: str) -> None:
     or appends one. Preserves comments, layout, and 0600 perms."""
     if not CONFIG_FILE.exists():
         _scaffold_env()
-    lines = CONFIG_FILE.read_text().splitlines()
+    lines = CONFIG_FILE.read_text(encoding="utf-8").splitlines()
     found = False
     for i, line in enumerate(lines):
         stripped = line.lstrip()
@@ -717,7 +717,7 @@ def _upsert_env_value(name: str, value: str) -> None:
             break
     if not found:
         lines.append(f"{name}={value}")
-    CONFIG_FILE.write_text("\n".join(lines) + "\n")
+    CONFIG_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
     try:
         CONFIG_FILE.chmod(0o600)
     except OSError:
@@ -866,13 +866,13 @@ def _write_setup_complete() -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     existing = ""
     if CONFIG_FILE.exists():
-        existing = CONFIG_FILE.read_text()
+        existing = CONFIG_FILE.read_text(encoding="utf-8", errors="ignore")
         for line in existing.splitlines():
             if line.strip().startswith("SETUP_COMPLETE="):
                 return
         if existing and not existing.endswith("\n"):
             existing += "\n"
-        CONFIG_FILE.write_text(existing + "SETUP_COMPLETE=true\n")
+        CONFIG_FILE.write_text(existing + "SETUP_COMPLETE=true\n", encoding="utf-8")
     else:
         CONFIG_FILE.write_text(
             _env_template() + "\nSETUP_COMPLETE=true\n", encoding="utf-8"
