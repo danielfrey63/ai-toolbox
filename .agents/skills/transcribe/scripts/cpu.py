@@ -42,7 +42,20 @@ _override: int | None = None
 
 
 def cores() -> int:
-    return os.cpu_count() or 4
+    """Cores this process may actually run on.
+
+    os.cpu_count() reports the machine's CPUs, not the ones we are allowed to
+    use. On Linux a process can be restricted by CPU affinity (taskset, a
+    systemd slice, a container's cpuset), and sched_getaffinity is the only
+    call that reflects that - budgeting off cpu_count() there would hand out
+    threads for cores the scheduler will never give us, which is precisely the
+    oversubscription this module exists to prevent. Not available on Windows
+    or macOS, where cpu_count() is the right answer anyway.
+    """
+    try:
+        return len(os.sched_getaffinity(0))
+    except AttributeError:
+        return os.cpu_count() or 4
 
 
 def parse_spec(spec: str) -> int | None:

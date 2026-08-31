@@ -45,6 +45,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+import cpu  # noqa: E402
 from setup import find_tool  # noqa: E402
 
 # Languages written in Latin script - for these, a burst of Cyrillic / CJK /
@@ -229,6 +230,7 @@ def _cut_audio(source: Path, start: float, end: float, out: Path) -> Path:
         )
     subprocess.run(
         [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+         *cpu.ffmpeg_flags(),
          "-ss", f"{start:.3f}", "-to", f"{end:.3f}", "-i", str(source),
          "-vn", "-ac", "1", "-ar", "16000", str(out)],
         check=True,
