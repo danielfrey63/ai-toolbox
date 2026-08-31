@@ -46,7 +46,7 @@
 # Always exits 0 (except on a usage error) — a non-artifact edit is a silent
 # no-op, so it is hook-safe.
 
-APP_VERSION='0.6.19'
+APP_VERSION='0.7.20'
 set -u
 
 INIT_VERSION='0.0.1'
@@ -80,6 +80,9 @@ PostToolUse JSON payload on stdin.
 
 Opt-out: files carrying the git attribute `-bump` (.gitattributes, e.g.
 `index.html -bump` for a build output) are never treated as artifacts.
+Redirect: `<pattern> bump-target=<path>` routes version-less sources to the
+artifact owning the version (e.g. `src/** bump-target=index.template.html`),
+so source-only commits still bump the deliverable's APP_VERSION.
 
 Artifact types (MAJOR.MINOR.BUILD version):
   plugin  skill dir with .claude-plugin/plugin.json -> plugin.json "version"
@@ -131,6 +134,25 @@ if git -C "$(dirname "$FILE")" check-attr bump -- "$(basename "$FILE")" 2>/dev/n
     | grep -qE ': bump: (unset|false|no|off)$'; then
     exit 0
 fi
+
+# --- redirect via git attribute -----------------------------------------------
+# `<pattern> bump-target=<path>` in .gitattributes routes files that carry no
+# version of their own (sources compiled into a stamped deliverable) to the
+# artifact that owns the version; <path> is relative to the repo root. Example:
+#   src/** bump-target=index.template.html
+# Exactly one redirect is followed (no chains); a missing target is ignored and
+# the file is treated normally.
+attr_target=$(git -C "$(dirname "$FILE")" check-attr bump-target -- "$(basename "$FILE")" 2>/dev/null \
+    | sed -n 's/^.*: bump-target: //p')
+case "$attr_target" in
+    ''|unspecified|unset) ;;
+    *)
+        repo_root=$(git -C "$(dirname "$FILE")" rev-parse --show-toplevel 2>/dev/null)
+        if [ -n "$repo_root" ] && [ -f "$repo_root/$attr_target" ]; then
+            FILE="$repo_root/$attr_target"
+        fi
+        ;;
+esac
 
 # --- declaration patterns -----------------------------------------------------
 # An APP_VERSION assignment at the start of a line — covers APP_VERSION='x',
