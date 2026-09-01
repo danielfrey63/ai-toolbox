@@ -48,6 +48,20 @@ log() {
 now=$(date +%s)
 today_batch="$TRASH_DIR/$(date +%Y-%m-%d)"
 
+# Sessions that are open right now. A file lock is NOT a reliable signal: the harness appends to the
+# transcript without holding it open, and between appends the file moves just fine (observed
+# 2026-09-01: a running session's transcript landed in the trash). Liveness comes from the session
+# registry ~/.claude/sessions/<pid>.json instead; an entry counts only while its process is still
+# alive, so stale files left by crashes do not protect anything.
+declare -A open_sessions
+for reg in "$HOME/.claude/sessions"/*.json; do
+    [ -f "$reg" ] || continue
+    pid=$(grep -o '"pid"[[:space:]]*:[[:space:]]*[0-9]*' "$reg" | head -1 | grep -o '[0-9]*$') || true
+    sid=$(grep -o '"sessionId"[[:space:]]*:[[:space:]]*"[^"]*"' "$reg" | head -1 | sed -E 's/.*"([^"]+)"$//') || true
+    [ -n "$pid" ] && [ -n "$sid" ] || continue
+    kill -0 "$pid" 2>/dev/null && open_sessions[$sid]=1
+done
+
 # Last activity of a transcript: the newest inner "timestamp" beats the file mtime, because resume
 # pickers, cloud bridges and sync tools touch files without adding content - mtime alone would
 # re-protect old sessions forever. Files without inner timestamps (bridge stubs) fall back to mtime.
@@ -61,13 +75,17 @@ last_activity_epoch() {
     fi
 }
 
-# Moves a transcript plus its sidecar directory into today's trash batch. A locked/failed move means
-# the session is open right now and is left alone.
+# Moves a transcript plus its sidecar directory into today's trash batch. Open sessions (registry
+# check above) are left alone.
 trash_session() {
     local transcript="$1" label="$2"
     local project_name session_id sidecar target
     project_name=$(basename "$(dirname "$transcript")")
     session_id=$(basename "$transcript" .jsonl)
+    if [ -n "${open_sessions[$session_id]:-}" ]; then
+        log "skipped $project_name/$(basename "$transcript"): session is open"
+        return 1
+    fi
     sidecar="$(dirname "$transcript")/$session_id"
     target="$today_batch/$project_name"
     mkdir -p "$target"
@@ -421,6 +439,7 @@ for project_dir in "$PROJECTS_DIR"/*/; do
     for transcript in "$project_dir"*.jsonl; do
         [ -f "$transcript" ] || continue
         session_id=$(basename "$transcript" .jsonl)
+        [ -n "${open_sessions[$session_id]:-}" ] && continue
         sidecar="$project_dir$session_id"
 
         total_size=$(stat -c %s "$transcript")

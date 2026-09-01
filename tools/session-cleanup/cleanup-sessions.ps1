@@ -10,7 +10,7 @@ param(
     [long]$MaxSizeBytes = 250KB,
     # Never touch sessions with activity within this window (0 = no age guard). Sessions worth
     # keeping carry a /rename title and are protected regardless of age; open sessions are skipped
-    # via their file lock.
+    # via the session registry.
     [int]$MinAgeHours = 0,
     # Trash entries older than this are deleted permanently.
     [int]$RetentionDays = 30,
@@ -45,10 +45,26 @@ function Write-Log([string]$Message) {
 
 $todayBatch = Join-Path $trashDir (Get-Date -Format 'yyyy-MM-dd')
 
+# Sessions that are open right now. A file lock is NOT a reliable signal: the harness appends to the
+# transcript without holding it open, and between appends the file moves just fine (observed
+# 2026-09-01: a running session's transcript landed in the trash). Liveness comes from the session
+# registry ~/.claude/sessions/<pid>.json instead; an entry counts only while its process is still
+# alive, so stale files left by crashes do not protect anything.
+$script:openSessions = @{}
+foreach ($reg in Get-ChildItem (Join-Path $env:USERPROFILE '.claude\sessions') -Filter '*.json' -File -ErrorAction SilentlyContinue) {
+    try { $info = Get-Content -LiteralPath $reg.FullName -Raw | ConvertFrom-Json } catch { continue }
+    if (-not $info.sessionId -or -not $info.pid) { continue }
+    if (Get-Process -Id $info.pid -ErrorAction SilentlyContinue) { $script:openSessions[$info.sessionId] = $true }
+}
+
 # Moves a transcript plus its sidecar directory into today's trash batch. Returns $true on success;
-# a locked transcript means the session is open right now and is left alone.
+# open sessions (registry check above) are left alone.
 function Move-SessionToTrash([System.IO.FileInfo]$transcript, [string]$label) {
     $sessionId = [IO.Path]::GetFileNameWithoutExtension($transcript.Name)
+    if ($script:openSessions.ContainsKey($sessionId)) {
+        Write-Log "skipped $($transcript.Directory.Name)\$($transcript.Name): session is open"
+        return $false
+    }
     $sidecar = Join-Path $transcript.DirectoryName $sessionId
     $target = Join-Path $todayBatch $transcript.Directory.Name
     if (-not (Test-Path $target)) { New-Item -ItemType Directory -Path $target -Force | Out-Null }
@@ -387,6 +403,7 @@ $moved = 0
 foreach ($projectDir in Get-ChildItem $projectsDir -Directory) {
     foreach ($transcript in Get-ChildItem $projectDir.FullName -Filter '*.jsonl' -File) {
         $sessionId = [IO.Path]::GetFileNameWithoutExtension($transcript.Name)
+        if ($script:openSessions.ContainsKey($sessionId)) { continue }
         $sidecar = Join-Path $projectDir.FullName $sessionId
 
         $totalSize = $transcript.Length
