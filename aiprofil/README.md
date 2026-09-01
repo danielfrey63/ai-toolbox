@@ -47,7 +47,7 @@ Scope maps per target; where a target has no analog it is **skipped with a note*
 
 ```
 aiprofil use sbb-ai-dz --scope user            # CC User scope + Kilo global
-aiprofil use sbb-dfa   --target kilo --scope project   # only Kilo, ./kilo.jsonc
+aiprofil use sbb-dfa-openai   --target kilo --scope project   # only Kilo, ./kilo.jsonc
 aiprofil use max       --scope session --target cc      # only this shell
 ```
 
