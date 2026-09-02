@@ -448,44 +448,30 @@ foreach ($batch in Get-ChildItem $trashDir -Directory) {
 
 Write-Log "done: $marked marked, $deduped duplicate(s) and $moved empty session(s) trashed, $purged batch(es) purged"
 
-# --- Findings notification ---------------------------------------------------------------------------
-# Findings that need a human decision (diverged copies, title collisions) are written to findings.txt
-# and raised as regular Windows toast notifications (one per finding, visible in the Action Center),
-# because scheduled runs have no visible console. Toasts from unpackaged scripts need a registered
-# AppUserModelID (HKCU, no admin required); pwsh 7 cannot project WinRT types, so the toasts are shown
-# via Windows PowerShell 5.1. A failed notification never breaks the run.
-if (-not $DryRun -and $script:findings.Count -gt 0) {
+# --- Desktop notification ----------------------------------------------------------------------------
+# Scheduled runs have no visible console, so the outcome goes to the Action Center: one summary toast
+# when something was trashed or purged, plus one toast per finding that needs a human decision
+# (diverged copies, title collisions; also written to findings.txt, kept on screen via -Reminder).
+# Runs with nothing to report stay silent. Show-Toast (tools/notify) routes the WinRT call through
+# Windows PowerShell 5.1 without a console window. A failed notification never breaks the run.
+$acted = $marked + $deduped + $moved + $purged
+if (-not $DryRun -and ($acted + $script:findings.Count) -gt 0) {
     try {
-        $findingsFile = Join-Path $trashDir 'findings.txt'
-        $header = "Session-Cleanup-Befunde vom $(Get-Date -Format 'yyyy-MM-dd HH:mm') - Auflösung: Session umbenennen (/rename) oder wegwerfen"
-        $body = ($script:findings | ForEach-Object { "$($_.Title)`n$($_.Body)" }) -join "`n`n"
-        Set-Content -LiteralPath $findingsFile -Value ($header + "`n`n" + $body) -Encoding UTF8
-
-        $appId = 'AIToolbox.SessionCleanup'
-        $reg = "HKCU:\Software\Classes\AppUserModelId\$appId"
-        if (-not (Test-Path $reg)) { New-Item -Path $reg -Force | Out-Null }
-        if ((Get-ItemProperty -Path $reg -Name DisplayName -ErrorAction SilentlyContinue).DisplayName -ne 'AI-Toolbox Session Cleanup') {
-            New-ItemProperty -Path $reg -Name DisplayName -Value 'AI-Toolbox Session Cleanup' -PropertyType String -Force | Out-Null
+        . (Join-Path $PSScriptRoot '..\notify\toast.ps1')
+        $sender = @{ AppId = 'AIToolbox.SessionCleanup'; AppName = 'AI-Toolbox Session Cleanup' }
+        if ($acted -gt 0) {
+            Show-Toast @sender -Title 'Session-Cleanup gelaufen' `
+                -Body "$marked markiert, $deduped Duplikat(e), $moved leere Session(s) in den Papierkorb; $purged Batch(es) endgültig gelöscht"
         }
-
-        $toastCalls = foreach ($f in ($script:findings | Select-Object -First 5)) {
-            $t = [Security.SecurityElement]::Escape($f.Title)
-            $b = [Security.SecurityElement]::Escape($f.Body)
-            "Show-Toast '<toast duration=`"long`"><visual><binding template=`"ToastGeneric`"><text>$t</text><text>$b</text></binding></visual></toast>'"
+        if ($script:findings.Count -gt 0) {
+            $findingsFile = Join-Path $trashDir 'findings.txt'
+            $header = "Session-Cleanup-Befunde vom $(Get-Date -Format 'yyyy-MM-dd HH:mm') - Auflösung: Session umbenennen (/rename) oder wegwerfen"
+            $body = ($script:findings | ForEach-Object { "$($_.Title)`n$($_.Body)" }) -join "`n`n"
+            Set-Content -LiteralPath $findingsFile -Value ($header + "`n`n" + $body) -Encoding UTF8
+            foreach ($f in ($script:findings | Select-Object -First 5)) {
+                Show-Toast @sender -Title $f.Title -Body $f.Body -Reminder
+            }
         }
-        $toastScript = @"
-[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
-function Show-Toast([string]`$xmlText) {
-    `$xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-    `$xml.LoadXml(`$xmlText)
-    [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('$appId').Show([Windows.UI.Notifications.ToastNotification]::new(`$xml))
-    Start-Sleep -Milliseconds 500
-}
-$($toastCalls -join "`n")
-"@
-        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($toastScript))
-        & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -EncodedCommand $encoded | Out-Null
     } catch {
         Write-Log "notification failed: $($_.Exception.Message)"
     }

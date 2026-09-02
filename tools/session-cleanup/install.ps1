@@ -27,11 +27,10 @@ if ($Uninstall) {
     return
 }
 
-# Prefer pwsh when available; fall back to Windows PowerShell.
-$shell = (Get-Command pwsh -ErrorAction SilentlyContinue)?.Source
-if (-not $shell) { $shell = (Get-Command powershell).Source }
-
-$action = New-ScheduledTaskAction -Execute $shell -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`""
+# Windowless start via wscript + run-hidden.vbs: "-WindowStyle Hidden" alone still flashes a console
+# window on every run. Prefers pwsh, falls back to Windows PowerShell (see tools/run-hidden).
+. (Join-Path $PSScriptRoot '..\run-hidden\HiddenTask.ps1')
+$action = New-HiddenTaskAction -FilePath (Get-TaskShell) -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath)
 $triggers = foreach ($t in $Times) { New-ScheduledTaskTrigger -Daily -At $t }
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 

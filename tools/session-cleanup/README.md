@@ -25,7 +25,7 @@ Eine Top-Level-Session `~\.claude\projects\<projekt>\<uuid>.jsonl` gilt als leer
 
 ## Papierkorb statt Hard-Delete
 
-Verschobene Sessions landen unter `~\.claude\projects-trash\<yyyy-MM-dd>\<projekt>\` (Datum = Tag der Verschiebung). Batches, die älter als 30 Tage sind, werden beim nächsten Lauf endgültig gelöscht. Zum Wiederherstellen einfach die Datei (und ggf. das Sidecar-Verzeichnis) zurück in den Projekt-Ordner verschieben. Jeder Lauf protokolliert nach `~\.claude\projects-trash\cleanup.log`. Meldungen, die eine menschliche Entscheidung brauchen (divergierte Kopien, Namens-Kollisionen), landen zusätzlich in `~\.claude\projects-trash\findings.txt` und erscheinen unter Windows als system-modales Popup (topmost, bleibt bis zum Wegklicken; detached gestartet, blockiert den Lauf nicht), unter Linux via `notify-send`, falls vorhanden.
+Verschobene Sessions landen unter `~\.claude\projects-trash\<yyyy-MM-dd>\<projekt>\` (Datum = Tag der Verschiebung). Batches, die älter als 30 Tage sind, werden beim nächsten Lauf endgültig gelöscht. Zum Wiederherstellen einfach die Datei (und ggf. das Sidecar-Verzeichnis) zurück in den Projekt-Ordner verschieben. Jeder Lauf protokolliert nach `~\.claude\projects-trash\cleanup.log`. Unter Windows meldet ein Lauf, der etwas verschoben oder gelöscht hat, sein Ergebnis als Toast im Info-Center (Absender «AI-Toolbox Session Cleanup», via `tools/notify`); Läufe ohne Arbeit bleiben still. Meldungen, die eine menschliche Entscheidung brauchen (divergierte Kopien, Namens-Kollisionen), landen zusätzlich in `~\.claude\projects-trash\findings.txt` und erscheinen als Reminder-Toast, der bis zum Wegklicken stehen bleibt; unter Linux via `notify-send`, falls vorhanden.
 
 ## Installation
 
@@ -36,7 +36,7 @@ toolbox install --what session-cleanup
 toolbox remove --what session-cleanup
 ```
 
-Oder direkt: unter Windows `.\install.ps1` (Scheduled Task «AI-Toolbox Session Cleanup», `-Uninstall` entfernt, `-Status` liefert Exit-Code 0/1), unter Linux `./install.sh` (systemd User-Timer `session-cleanup.timer`, `--uninstall`/`--status` analog). Beide Installer sind idempotent und ersetzen die bestehende Definition.
+Oder direkt: unter Windows `.\install.ps1` (Scheduled Task «AI-Toolbox Session Cleanup», `-Uninstall` entfernt, `-Status` liefert Exit-Code 0/1), unter Linux `./install.sh` (systemd User-Timer `session-cleanup.timer`, `--uninstall`/`--status` analog). Beide Installer sind idempotent und ersetzen die bestehende Definition. Der Windows-Task startet fensterlos über `tools/run-hidden` (ein `-WindowStyle Hidden` allein blitzt bei jedem Lauf ein Konsolenfenster auf).
 
 ## Manuell ausführen
 
