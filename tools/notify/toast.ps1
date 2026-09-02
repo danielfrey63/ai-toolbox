@@ -1,4 +1,4 @@
-# toast.ps1 - Windows toast notifications for background scripts.
+﻿# toast.ps1 - Windows toast notifications for background scripts.
 #
 # Dot-source it, then call Show-Toast:
 #   . "<ai-toolbox>\tools\notify\toast.ps1"
