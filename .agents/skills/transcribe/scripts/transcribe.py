@@ -13,6 +13,7 @@ exact-duplicate merge.
 """
 from __future__ import annotations
 
+import html
 import re
 import sys
 from pathlib import Path
@@ -57,7 +58,10 @@ def parse_vtt(path: str) -> list[dict]:
 
         cue_lines: list[str] = []
         while i < len(lines) and lines[i].strip():
-            cleaned = TAG_RE.sub("", lines[i]).strip()
+            # Order matters: strip real markup first, then unescape. Doing it
+            # the other way round would turn an escaped literal `&lt;c&gt;`
+            # into `<c>` and TAG_RE would then eat it as if it were markup.
+            cleaned = html.unescape(TAG_RE.sub("", lines[i])).strip()
             if cleaned:
                 cue_lines.append(cleaned)
             i += 1
@@ -220,6 +224,11 @@ def _vtt_stamp(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
 
+def _vtt_escape(text: str) -> str:
+    """Escape cue *payload* for WebVTT (`&` first, so it can't double-escape)."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def format_vtt(segments: list[dict]) -> str:
     """Render segments as a WebVTT subtitle file.
 
@@ -242,7 +251,8 @@ def format_vtt(segments: list[dict]) -> str:
         lines.append(str(n))
         lines.append(f"{_vtt_stamp(start)} --> {_vtt_stamp(end)}")
         speaker = seg.get("speaker")
-        lines.append(f"<v {speaker}>{text}" if speaker else text)
+        cue = _vtt_escape(text)
+        lines.append(f"<v {speaker}>{cue}" if speaker else cue)
         lines.append("")
     return "\n".join(lines)
 
