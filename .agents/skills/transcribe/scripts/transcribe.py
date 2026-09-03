@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """Parse a WebVTT subtitle file into a clean, timestamped transcript.
 
-YouTube auto-subs emit rolling-duplicate cues (each line appears 2-3 times as it
-scrolls). We dedupe consecutive identical cues and merge their time ranges.
+YouTube auto-subs emit *rolling* cues: every cue repeats the previously
+displayed line verbatim as plain text and appends the new line with inline
+word-timing tags, followed by a ~10 ms "spacer" cue carrying the settled line
+on its own. Naively joining a cue's lines therefore emits every spoken line
+twice. We detect rolling mode structurally (inline timing tags are present
+only in YouTube-style auto-subs) and strip the carry-over prefix, so each line
+lands in the transcript exactly once. Platform exports (Teams) and
+skill-generated VTTs have no inline timings and keep the old, conservative
+exact-duplicate merge.
 """
 from __future__ import annotations
 
@@ -17,6 +24,14 @@ TS_RE = re.compile(
     r"(\d{2}):(\d{2}):(\d{2})[.,](\d{3})\s+-->\s+(\d{2}):(\d{2}):(\d{2})[.,](\d{3})"
 )
 TAG_RE = re.compile(r"<[^>]+>")
+# Inline word timings (`<00:00:02.680>`) appear only in YouTube-style rolling
+# auto-subs. Their presence is the structural signal that carry-over stripping
+# is safe; without it we must not touch cue text beyond exact duplicates.
+INLINE_TIMING_RE = re.compile(r"<\d{2}:\d{2}:\d{2}[.,]\d{3}>")
+
+# A 1-word overlap is far more likely a genuine repeat ("no, no") than a
+# carry-over line, so stripping starts at two words.
+MIN_CARRYOVER_WORDS = 2
 
 
 def _to_seconds(h: str, m: str, s: str, ms: str) -> float:
@@ -25,6 +40,7 @@ def _to_seconds(h: str, m: str, s: str, ms: str) -> float:
 
 def parse_vtt(path: str) -> list[dict]:
     text = Path(path).read_text(encoding="utf-8", errors="ignore")
+    rolling = bool(INLINE_TIMING_RE.search(text))
     lines = text.splitlines()
 
     segments: list[dict] = []
@@ -51,20 +67,64 @@ def parse_vtt(path: str) -> list[dict]:
             segments.append({"start": round(start, 2), "end": round(end, 2), "text": cue_text})
         i += 1
 
-    return _dedupe(segments)
+    return _dedupe(segments, rolling=rolling)
 
 
-def _dedupe(segments: list[dict]) -> list[dict]:
-    """Collapse rolling duplicates common in YouTube auto-subs."""
+def _carryover_words(prev_words: list[str], cur_words: list[str]) -> int:
+    """Longest k where prev_words[-k:] == cur_words[:k]; 0 when they don't overlap.
+
+    Rolling captions repeat the previous line verbatim at the head of the next
+    cue, so the repeat is always anchored at the end of what we already emitted.
+    Anchoring the match at that boundary is what keeps this from eating
+    coincidental repeats elsewhere in the sentence.
+    """
+    for k in range(min(len(prev_words), len(cur_words)), 0, -1):
+        if prev_words[-k:] == cur_words[:k]:
+            return k
+    return 0
+
+
+def _dedupe(segments: list[dict], rolling: bool = False) -> list[dict]:
+    """Collapse rolling duplicates common in YouTube auto-subs.
+
+    `rolling` enables carry-over stripping: a cue that re-states the tail of the
+    previous segment contributes only the words past that overlap. Without it
+    only exact duplicates are merged, which is the right behaviour for platform
+    exports where cue text is authoritative.
+    """
     out: list[dict] = []
     for seg in segments:
-        if out and seg["text"] == out[-1]["text"]:
-            out[-1]["end"] = seg["end"]
+        if not out:
+            out.append(seg)
             continue
-        if out and seg["text"].startswith(out[-1]["text"] + " "):
-            out[-1]["text"] = seg["text"]
-            out[-1]["end"] = seg["end"]
+
+        prev = out[-1]
+        prev_words = prev["text"].split()
+        cur_words = seg["text"].split()
+        overlap = _carryover_words(prev_words, cur_words)
+        remainder = cur_words[overlap:]
+
+        # Cue adds nothing new: exact duplicate, or a rolling spacer cue that
+        # only re-states the settled line. Extend the existing segment.
+        if overlap and not remainder:
+            prev["end"] = seg["end"]
             continue
+
+        if rolling and overlap >= MIN_CARRYOVER_WORDS:
+            out.append({
+                "start": seg["start"],
+                "end": seg["end"],
+                "text": " ".join(remainder),
+            })
+            continue
+
+        # Pre-existing non-rolling behaviour: a cue that strictly extends the
+        # previous one replaces it rather than duplicating the shared prefix.
+        if not rolling and seg["text"].startswith(prev["text"] + " "):
+            prev["text"] = seg["text"]
+            prev["end"] = seg["end"]
+            continue
+
         out.append(seg)
     return out
 

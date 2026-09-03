@@ -67,14 +67,24 @@ Otherwise, from the frames already read:
 
 1. **Select the decisive frames.** Pick the ones carrying an illustration that *materially aids understanding* — diagrams, architecture/data-flow slides, charts, tables, screenshots with substantive content. `[CUT]` frames are the prime candidates (slides land on scene cuts). Exclude talking-head, transitions, decorative title cards, and anything redundant. Be selective: typically **3–10** for a talk, often fewer.
 2. **Themen-Abdeckung — cross-check the selection against the transcript.** Visual triage alone systematically drops slides that *look* decorative but *are* the discussion (real miss: a photo pair with red/green classification dots looked "nur illustrativ", yet the speakers spent 3+ minutes on exactly that accessibility classification). So: **write down an explicit topic-window list first** — every major discussion topic (anything spanning ≳2 minutes or recurring) with its `[MM:SS – MM:SS]` transcript window. The Chapter-Struktur you build for the Übersicht (or the `## <Thema>` headings of an existing `transcript-kompakt.md` on a re-run) is this list — reuse it, don't re-derive it. Then check each window: at least one selected illustration falls inside it — or name the explicit reason why the topic needs none. For an uncovered window, scout it with `--extract-range <start> <end> --step 10` and pick the frame where the discussed visual is fully on screen. A visual the speakers talk *about* is content, never decoration.
-3. **For each, give a normalized bounding box** `[x, y, w, h]` in `0..1` of the illustration *region within the frame* (estimate it from the image — the script trims uniform margins afterwards, so a slightly generous box is fine; omit `bbox` to keep the whole frame). Add a short `caption` (use canonical names from the Inventar) and a `type` (`Architektur` / `Diagramm` / `Chart` / `Tabelle` / `Screenshot` / `Slide`).
-4. **Write the spec** to `<base>.illustrations.spec.json` (the `Write` tool) as a JSON list:
+3. **Verify each timestamp at native resolution before it enters the spec.** The `t=` in a frame filename is *not* always the timestamp of what you saw:
+   - `[CUT]` frames are extracted `--scene-settle-seconds` (default `1.0`) **after** the detected cut, while the filename keeps the cut point — so the image is typically ~0.5–2.5 s later than its name.
+   - Reading 20+ frames in one batch makes it easy to mis-map an image to the wrong filename; that mis-mapping, not a seek bug, is the usual cause of "the crop shows something else".
+
+   So before writing the spec, re-extract your candidates and look at them:
+   ```bash
+   python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" --video "<Video file from header>" \
+     --extract 42 162 218 326 --out-dir "<scratch>/scout"
+   ```
+   `Read` those PNGs and take the timestamp from the one that actually shows the content. For a region you are still hunting, sweep it with `--extract-range <start> <end> --step 6`. This costs seconds and removes an entire class of re-run loops — it is the regular path for every video with substantive screens, not a fallback.
+4. **For each, give a normalized bounding box** `[x, y, w, h]` in `0..1` of the illustration *region within the frame* (estimate it from the image — the script trims uniform margins afterwards, so a slightly generous box is fine; omit `bbox` to keep the whole frame). Add a short `caption` (use canonical names from the Inventar) and a `type` (`Architektur` / `Diagramm` / `Chart` / `Tabelle` / `Screenshot` / `Slide`).
+5. **Write the spec** to `<base>.illustrations.spec.json` (the `Write` tool) as a JSON list:
    ```json
    [ { "id": 1, "timestamp": 734.0, "bbox": [0.08, 0.12, 0.84, 0.76],
        "caption": "Zielarchitektur DfA-GIS", "type": "Architektur" } ]
    ```
    `timestamp` is in seconds (the absolute `t=` of the frame). `<base>` is the report base (the `.md` stem from the header's saved-files lines).
-5. **Run the cropper**, passing the `**Video file:**` path from the report header verbatim:
+6. **Run the cropper**, passing the `**Video file:**` path from the report header verbatim:
    ```bash
    python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" \
      --video "<Video file from header>" \
@@ -82,8 +92,8 @@ Otherwise, from the frames already read:
      --out-dir "<base>.illustrations"
    ```
    It prints the surviving crops and writes `<base>.illustrations/manifest.json`. **Read the manifest** — dedup may have dropped near-duplicate slides (they are listed under `dropped_duplicates` with the surviving id), so the manifest (not your spec) is the authoritative list of what to embed. If a drop was a false positive (two genuinely different but visually similar slides), add `"no_dedup": true` to that spec entry and re-run. The crops are PNGs at native resolution, idempotent on re-run.
-6. **Check for SUSPECT flags and iterate.** Entries whose crop came out tiny or near-uniform carry a `"suspect"` reason in the manifest (and a `[SUSPECT]` mark in the stdout list) — the bbox almost certainly missed its target region. Fix those bboxes in the spec and re-run (the spec is the desired state; re-runs are cheap and idempotent).
-7. **Visual QS on the final PNGs (mandatory).** `Read` every surviving crop and check it against this defect list — each class has burned a real run:
+7. **Check for SUSPECT flags and iterate.** Entries whose crop came out tiny or near-uniform carry a `"suspect"` reason in the manifest (and a `[SUSPECT]` mark in the stdout list) — the bbox almost certainly missed its target region. Fix those bboxes in the spec and re-run (the spec is the desired state; re-runs are cheap and idempotent).
+8. **Visual QS on the final PNGs (mandatory).** `Read` every surviving crop and check it against this defect list — each class has burned a real run:
    - **Caption mismatch** — the crop doesn't show what its caption claims (bbox hit a neighbouring region, or a sliver of chrome survived the trim). Nudge the bbox.
    - **Transient overlay** — an error dialog, notification toast, or loading state covers the content. First check the transcript: if the speakers discuss the overlay itself, it *is* content (keep it, or add a second entry for the clean state). Otherwise the transcript usually marks the dismissal («mache ich die weg», "let me close that") — scout with `--extract` a few timestamps after that line and re-time the entry. Real miss: an app-crash dialog sat over a map crop for 5+ minutes of footage; the clean frame was 65 s later.
    - **Desktop chrome** — Windows taskbar, window shadows, black letterbox bars, or the webcam strip inside the bbox. Tighten the bbox to the app window / slide area; the margin-trim only removes *uniform* borders, a taskbar survives it.

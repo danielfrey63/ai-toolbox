@@ -174,6 +174,8 @@ Output — the report's frame list is **merged chronologically** and each entry 
 
 Read both kinds the same way — they are JPEGs in the same format.
 
+**Filename vs. content for `[CUT]` frames:** the filename carries the *detected cut point*, but the image is extracted `--scene-settle-seconds` later (default `1.0`, clamped to `next_cut - 0.3s`), so the picture is typically 0.5–2.5 s after its own timestamp. `[REG]` filenames match their content. This matters when you lift a timestamp out of the frame list into an `illustrate.py` spec — verify it with `--extract` first (see `references/report-writing.md`).
+
 When to disable with `--no-scene`:
 - Talking-head videos with no real cuts (the scdet pass takes ~30 s on a 30-min video for ~0 useful cuts anyway).
 - Token budget is tight and the regular sampling alone is sufficient.
