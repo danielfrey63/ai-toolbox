@@ -143,6 +143,16 @@ function Get-CustomTitle([System.IO.FileInfo]$file) {
     return $title
 }
 
+# Total footprint of a session: transcript plus sidecar directory (subagent transcripts).
+function Get-SessionSize([System.IO.FileInfo]$transcript) {
+    $size = $transcript.Length
+    $sidecar = Join-Path $transcript.DirectoryName ([IO.Path]::GetFileNameWithoutExtension($transcript.Name))
+    if (Test-Path $sidecar -PathType Container) {
+        $size += (Get-ChildItem $sidecar -Recurse -File | Measure-Object Length -Sum).Sum
+    }
+    return $size
+}
+
 # What to call a session in a message: its /rename title when it has one, otherwise the first user
 # message (what the resume picker falls back to). A renamed session must never be reported under its
 # opening line - that line is usually a stale one-off and unrecognizable months later.
@@ -385,7 +395,28 @@ foreach ($projectDir in Get-ChildItem $projectsDir -Directory) {
     }
     foreach ($t in $titles.GetEnumerator()) {
         if ($t.Value.Count -lt 2) { continue }
-        $list = ($t.Value | ForEach-Object {
+        # The rename protection preserves a name the user gave - but when the same name lives on in
+        # a bigger session of the same project, a namesake below the empty threshold carries no keep
+        # intent of its own. It goes to trash; only namesakes that are all above the threshold are
+        # reported as a collision.
+        $bySize = @($t.Value | Sort-Object { Get-SessionSize $_ } -Descending)
+        $remaining = [Collections.Generic.List[object]]::new()
+        $remaining.Add($bySize[0])
+        foreach ($f in ($bySize | Select-Object -Skip 1)) {
+            $size = Get-SessionSize $f
+            if ($size -lt $MaxSizeBytes) {
+                $label = "small namesake of $($bySize[0].Name.Substring(0, 8)) `"$($t.Key)`" ($([math]::Round($size / 1KB, 1))KB)"
+                if ($DryRun) {
+                    Write-Log "DRYRUN would trash $($projectDir.Name)\$($f.Name) ($label)"
+                } elseif (Move-SessionToTrash $f $label) {
+                    $deduped++
+                }
+                continue
+            }
+            $remaining.Add($f)
+        }
+        if ($remaining.Count -lt 2) { continue }
+        $list = ($remaining | ForEach-Object {
             "$($_.Name.Substring(0, 8)) ($([math]::Round($_.Length / 1MB, 1))MB, last $((Get-LastActivity $_).ToString('yyyy-MM-dd')))"
         }) -join ', '
         Write-Log "same title `"$($t.Key)`" in $($projectDir.Name): $list - different histories, rename or trash manually"

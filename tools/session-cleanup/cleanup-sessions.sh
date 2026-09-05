@@ -57,7 +57,7 @@ declare -A open_sessions
 for reg in "$HOME/.claude/sessions"/*.json; do
     [ -f "$reg" ] || continue
     pid=$(grep -o '"pid"[[:space:]]*:[[:space:]]*[0-9]*' "$reg" | head -1 | grep -o '[0-9]*$') || true
-    sid=$(grep -o '"sessionId"[[:space:]]*:[[:space:]]*"[^"]*"' "$reg" | head -1 | sed -E 's/.*"([^"]+)"$//') || true
+    sid=$(grep -o '"sessionId"[[:space:]]*:[[:space:]]*"[^"]*"' "$reg" | head -1 | sed -E 's/.*"([^"]+)"$/\1/') || true
     [ -n "$pid" ] && [ -n "$sid" ] || continue
     kill -0 "$pid" 2>/dev/null && open_sessions[$sid]=1
 done
@@ -142,6 +142,15 @@ custom_title() {
     esac
     CUSTOM_TITLE=""
     return 1
+}
+
+# Total footprint of a session: transcript plus sidecar directory (subagent transcripts).
+session_total_size() {
+    local f="$1" size sidecar
+    size=$(stat -c %s "$f")
+    sidecar="${f%.jsonl}"
+    [ -d "$sidecar" ] && size=$((size + $(du -sb "$sidecar" | cut -f1)))
+    printf '%s' "$size"
 }
 
 # What to call a session in a message: its /rename title when it has one, otherwise the first user
@@ -414,6 +423,37 @@ for project_dir in "$PROJECTS_DIR"/*/; do
     for title in "${!title_map[@]}"; do
         count=$(printf '%s' "${title_map[$title]}" | grep -c .) || true
         [ "$count" -ge 2 ] || continue
+        # The rename protection preserves a name the user gave - but when the same name lives on in
+        # a bigger session of the same project, a namesake below the empty threshold carries no keep
+        # intent of its own. It goes to trash; only namesakes that are all above the threshold are
+        # reported as a collision.
+        sorted=$(while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            printf '%s	%s
+' "$(session_total_size "$f")" "$f"
+        done <<< "${title_map[$title]}" | sort -rn)
+        keeper_f=$(printf '%s
+' "$sorted" | head -1 | cut -f2-)
+        keeper_id=$(basename "$keeper_f" .jsonl)
+        remaining="$keeper_f"
+        while IFS=$'	' read -r sz f; do
+            [ -n "$f" ] || continue
+            if [ "$sz" -lt "$MAX_SIZE_BYTES" ]; then
+                label="small namesake of ${keeper_id:0:8} \"$title\" ($((sz / 1024))KB)"
+                if [ "$DRY_RUN" = 1 ]; then
+                    log "DRYRUN would trash $project_name/$(basename "$f") ($label)"
+                elif trash_session "$f" "$label"; then
+                    deduped=$((deduped + 1))
+                fi
+                continue
+            fi
+            remaining="$remaining"$'
+'"$f"
+        done <<< "$(printf '%s
+' "$sorted" | tail -n +2)"
+        rem_count=$(printf '%s
+' "$remaining" | grep -c .) || true
+        [ "$rem_count" -ge 2 ] || continue
         list=""
         while IFS= read -r f; do
             [ -n "$f" ] || continue
@@ -421,7 +461,7 @@ for project_dir in "$PROJECTS_DIR"/*/; do
             size_mb=$(( $(stat -c %s "$f") / 1048576 ))
             last=$(date -d "@$(last_activity_epoch "$f")" +%Y-%m-%d)
             list="${list:+$list, }${id:0:8} (${size_mb}MB, last $last)"
-        done <<< "${title_map[$title]}"
+        done <<< "$remaining"
         log "same title \"$title\" in $project_name: $list - different histories, rename or trash manually"
         findings_titles+=("Zwei Sessions heissen \"$title\"")
         findings_bodies+=("In $(dir_short "$project_name"): $list
