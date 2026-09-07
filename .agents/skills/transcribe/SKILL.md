@@ -306,17 +306,20 @@ Every throttle lowers *instantaneous* draw and raises *total* heat, because the 
 
 - `TRANSCRIBE_GPU_COMPUTE` — ctranslate2 compute type (default `float16`; a type the GPU rejects falls back to `float16` rather than failing the run).
 - `TRANSCRIBE_GPU_DUTY` — share of wall-clock spent decoding, `0.1`–`1.0` (default `1.0` = no pauses). Idles between segments; since decoding is a lazy generator, that idles the GPU itself.
-- `TRANSCRIBE_WHISPER_MODEL` — default `large-v3`. `medium` roughly halves the GPU time, at a real accuracy cost on domain terms and Swiss German.
+- `TRANSCRIBE_WHISPER_MODEL` — default `large-v3-turbo`. Measured against `large-v3` on a 253 s German recording (RTX A4000 Laptop): decode 6.9 s vs 24.3 s at the same ~62 W, and turbo was the one that *avoided* the repetition collapse large-v3 fell into on both test recordings. Set `large-v3` to go back; `medium` is smaller again but loses domain terms and Swiss German. **Never `distil-large-v3`** — English-only, and it silently translates German input instead of transcribing it (measured: 100% divergence, output in English).
 
-**What does cut heat is doing less work.** Same recording, full pipeline versus stages switched off:
+**What does cut heat is finishing sooner — which means the model, not the throttle.** Full pipeline, 253 s of real German speech, energy measured above the idle floor:
 
-| Run | Wall-clock | Total energy |
-|---|---|---|
-| full (diarization + repair) | 120 s | 6673 Ws |
-| `--no-diarize` | 98 s | 5103 Ws (−24%) |
-| `--no-diarize --no-repair` | 92 s | 4537 Ws (−32%) |
+| Run | Wall-clock | Whisper stage | Diarization stage | Total energy |
+|---|---|---|---|---|
+| `large-v3` | 48.2 s | 24.3 s / 1205 Ws | 7.1 s / 469 Ws | 1674 Ws |
+| `large-v3-turbo` (default) | **29.2 s** | **6.9 s / 296 Ws** | 7.5 s / 341 Ws | **637 Ws (−62%)** |
 
-Diarization alone is about a quarter of the energy of a run. Neither flag costs transcript *accuracy* — they drop speaker attribution and collapse repair respectively. On a recording with one speaker, or where speaker labels don't matter, `--no-diarize` is the single biggest lever available.
+Phase shares under `large-v3`: transcription **72%**, diarization **28%**, everything else (venv startup, ffmpeg, writing) draws idle power and contributes essentially nothing. The CPU never drives the heat — 23% average, 72% peak, and that peak lasts seven seconds.
+
+Diarization has the *highest instantaneous* draw of the whole run (80 W average during its GPU phase, against 64 W for whisper) but is short, so `--no-diarize` saves about a quarter of a run's energy — worth having on single-speaker recordings, but a smaller lever than the model choice above.
+
+> **Measurement caveat, recorded because it bit once.** An earlier version of this section claimed 90% of a run's heat came from transcription and that `--no-diarize` saved 24% of it. Both numbers came from a synthetic looping test fixture on which `large-v3` collapsed into a repetition loop, inflating its decode from ~12 s to 79.8 s. Benchmark heat and speed on *real* recordings only: a collapse silently multiplies the transcription stage, so a collapsed run measures the failure mode rather than the pipeline.
 
 ### Version stamp
 
@@ -344,10 +347,10 @@ Real example from a 26-minute German meeting: a 20-second stretch came out as `u
 
 After transcription (and after a cache resume), `repair.py` therefore:
 
-1. **Scans the segments for collapse signatures** — foreign script in a Latin-script language, a token repeated ≥6× in a row, a sentence repeated ≥4×, the identical line in ≥3 consecutive segments, implausible text density (<0.7 or >32 chars/s over a long segment).
+1. **Scans the segments for collapse signatures** — foreign script in a Latin-script language, a token repeated ≥6× in a row, a sentence repeated ≥4×, the identical line in ≥3 consecutive segments, implausible text density (>32 chars/s in any segment, or <0.7 chars/s over a segment of ≥6 s).
 2. **Merges neighbouring hits into windows** and pads them by 12 s so the decoder gets run-up. Padding matters a lot: the same broken passage re-transcribed with 4 s of lead-in still hallucinated, with 12 s it came out clean.
 3. **Cuts each window out of the audio and re-transcribes it** with a fresh context and `--no-carryover`.
-4. **Splices the result back in — but only through two gates.** The *score gate* rejects a result that still trips the detectors; the *content gate* rejects one whose deduplicated character count fell below 60 % of the original, which catches the failure mode of "fixing" a passage by silently dropping real speech. A rejected window keeps its original text.
+4. **Splices the result back in — but only through two gates.** The *score gate* rejects a result that still trips the detectors; the *content gate* rejects one whose deduplicated character count fell below 60 % of the original, which catches the failure mode of "fixing" a passage by silently dropping real speech. Deduplication works at **clause** level, not sentence level — a collapse often stutters inside one sentence, and counting those echoes as real text made a correct repair look like it had deleted half the speech. A rejected window keeps its original text.
 5. **Runs at most 2 internal passes**, because rewriting a window can expose a mild signature just past its edge. Spans already rewritten (this run or a previous one, tracked in `<base>.segments.json` under `repaired`) are never touched twice — without that, every re-run nudged the transcript a little further.
 
 The protocol lists every detected passage under `**Repaired passages:**` with its reason and whether the rewrite was applied. `<base>.segments.json` keeps the full before/after text for each one.
@@ -366,6 +369,10 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/repair.py" --segments "<base>.segments.json
 ```
 
 Note the repaired `segments.json` is the *input* to rendering — after a standalone repair, re-run `run.py` (it resumes from the cache in ~1 s) to regenerate the transcript and protocol files.
+
+**Detection has a regression suite.** `python3 scripts/repair.py --selftest` runs the cases distilled from measured collapses — no audio, no venv, under a second. Run it after touching a threshold or a detector.
+
+> **Two blind spots found by measurement (2026-09-07), both now covered by the selftest.** A German recording collapsed in a way the detector never saw: whisper stopped advancing its timestamps and emitted full sentences into one-second segments, at 89–93 chars/s where the clean run of the same recording sat at 19. The density check missed it because the upper bound was gated behind a six-second minimum duration — the *lower* bound needs a long window to mean anything, the upper one does not, so they are now gated separately. With that fixed the passage was detected and correctly re-transcribed, and then **rejected by the content gate**, which is the second blind spot described above. A cross-transcript "same line repeated anywhere" rule was also tried and deliberately dropped: on genuinely repetitive audio it flagged every segment and demanded 282 s of rework against the 14 s the density rule needs for the same collapse. Degenerate *timing*, not repetition alone, is what tells a decoder loop from audio that really does repeat.
 
 ### Cross-check against platform captions (default on)
 
@@ -386,7 +393,7 @@ The script gets a timestamped transcript in one of two ways:
 
 1. **Native captions (free, preferred).** yt-dlp pulls manual or auto-generated subtitles from the source platform if available.
 2. **STT cascade, local first.** If no captions came back (or the source is a local file), the script extracts audio (`ffmpeg -vn -ac 1 -ar 16000 -b:a 64k`, ~0.5 MB/min) and tries the configured backends in order — each failure cascades to the next:
-   - **whisper-local** (DEFAULT) — faster-whisper **fully on-device** (large-v3 on CUDA, medium/int8 CPU fallback) in the managed venv; always available, no key, self-provisions on first use. Nothing leaves the machine.
+   - **whisper-local** (DEFAULT) — faster-whisper **fully on-device** (large-v3-turbo on CUDA, medium/int8 CPU fallback) in the managed venv; always available, no key, self-provisions on first use. Nothing leaves the machine.
    - **Azure** — `gpt-4o-transcribe-diarize` on a private tenant (transcription + speakers in one call). Needs `AZURE_TRANSCRIBE_DIARIZE_URL` + `_KEY`.
    - **Groq** — `whisper-large-v3` cloud API. Cheaper/faster than OpenAI. Get a key at console.groq.com/keys.
    - **OpenAI** — `whisper-1` cloud API. Get a key at platform.openai.com/api-keys.

@@ -915,7 +915,7 @@ class WhisperLocalBackend(STTBackend):
     No API key, nothing leaves the machine: the right default for
     confidential recordings. Heavy lifting happens in
     `whisper_local_worker.py` inside the venv that setup.ensure_venv()
-    provisions on first use (large-v3 on CUDA, medium/int8 CPU fallback).
+    provisions on first use (large-v3-turbo on CUDA, medium/int8 CPU fallback).
     ctranslate2 streams arbitrary-length audio, so no chunking is needed.
     """
 

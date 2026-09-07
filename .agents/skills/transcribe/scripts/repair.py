@@ -69,7 +69,21 @@ MAX_SEGMENT_REPEAT = 3     # identical text in N consecutive segments
 MIN_CHARS_PER_SEC = 0.7    # long segment, almost no words
 MAX_CHARS_PER_SEC = 32.0   # run-on hallucination
 MIN_DURATION_FOR_DENSITY = 6.0
+# The *upper* density bound needs no minimum duration - nobody speaks 89
+# characters in one second, and the timestamp collapse below is precisely a
+# burst of very short segments carrying full sentences. Only the lower bound
+# ("long segment, almost no words") needs a long window to be meaningful, so
+# the two are gated separately. Measured: collapsed runs peak at 89-93 c/s,
+# a clean run of the same recording at 19 c/s.
+MIN_DURATION_FOR_FLOOD = 0.4   # below this, the rate is division noise
 MIN_CONTENT_RATIO = 0.6    # reject a rerun that lost this much real speech
+
+# A cross-transcript "same line repeated N times anywhere" rule was tried here
+# and dropped: on a genuinely repetitive recording (an announcement loop) it
+# flagged every segment and asked for the whole file to be re-transcribed -
+# 282 s of rework against the 14 s the density rule needs for the same
+# collapse. Degenerate *timing*, not repetition alone, is what distinguishes a
+# decoder loop from audio that really does repeat.
 
 
 def _norm_token(tok: str) -> str:
@@ -137,12 +151,12 @@ def find_suspects(segments: list[dict], language: str | None = None) -> list[dic
         if rep >= MAX_SENTENCE_REPEAT:
             reasons.append(f"Satzwiederholung ({rep}x)")
 
-        if dur >= MIN_DURATION_FOR_DENSITY and text:
+        if text and dur >= MIN_DURATION_FOR_FLOOD:
             cps = len(text) / dur
-            if cps < MIN_CHARS_PER_SEC:
+            if cps > MAX_CHARS_PER_SEC:
+                reasons.append(f"Textflut ({cps:.0f} Z/s über {dur:.1f}s)")
+            elif dur >= MIN_DURATION_FOR_DENSITY and cps < MIN_CHARS_PER_SEC:
                 reasons.append(f"kaum Text ({cps:.1f} Z/s über {dur:.0f}s)")
-            elif cps > MAX_CHARS_PER_SEC:
-                reasons.append(f"Textflut ({cps:.0f} Z/s)")
 
         if reasons:
             suspects.append({"index": i, "start": start, "end": end,
@@ -177,22 +191,43 @@ def find_suspects(segments: list[dict], language: str | None = None) -> list[dic
     return suspects
 
 
+# Clause boundaries, not just sentence boundaries. A collapse does not always
+# repeat whole sentences: it can stutter *within* one, separated by commas
+# ("beobachtet von den Ideen, die ich euch vorhin, die ich euch vorhin,
+# gegeben habe"). Splitting on sentence marks alone counted every one of those
+# echoes as real text, so a correct repair looked like it had deleted half the
+# speech and was rejected. Measured on a real collapse: 306 raw chars against
+# 162 after a correct repair (rejected), 180 against 162 once clauses are
+# deduplicated (accepted).
+CLAUSE_SPLIT_RE = re.compile(r"[.!?,;:]+")
+# Below this, a clause is a filler ("ja", "also", "und") that legitimately
+# recurs; deduplicating those would shrink both sides for no reason.
+MIN_CLAUSE_CHARS_FOR_DEDUP = 12
+
+
 def _dedup_chars(segments: list[dict]) -> int:
-    """Character count after collapsing repeated sentences.
+    """Character count after collapsing repeated clauses.
 
     A repair that merely deletes a "Ja. Ja. Ja." loop shrinks the raw text a
     lot while losing nothing; a repair that silently drops real speech shrinks
-    it too. Comparing *deduplicated* length tells the two apart.
+    it too. Comparing *deduplicated* length tells the two apart. Both sides of
+    that comparison go through this function, so the guard against real text
+    loss stays intact.
     """
     seen: set[str] = set()
     total = 0
     for seg in segments:
-        for sent in re.split(r"[.!?]+", seg.get("text") or ""):
-            s = sent.strip()
-            key = s.casefold()
-            if s and key not in seen:
+        for clause in CLAUSE_SPLIT_RE.split(seg.get("text") or ""):
+            c = clause.strip()
+            if not c:
+                continue
+            if len(c) < MIN_CLAUSE_CHARS_FOR_DEDUP:
+                total += len(c)   # too short to be a collapse signature
+                continue
+            key = c.casefold()
+            if key not in seen:
                 seen.add(key)
-                total += len(s)
+                total += len(c)
     return total
 
 
@@ -373,6 +408,109 @@ def _repair_windows(segments: list[dict], windows: list[dict], audio: Path,
     return out, list(reversed(report))
 
 
+# Regression cases distilled from measured runs of the same two recordings,
+# one collapsed and one clean. The collapse that motivated them was invisible
+# to the detector before: whisper stopped advancing its timestamps and emitted
+# full sentences into one-second segments, and the density check only looked
+# at segments of six seconds or more, so nothing was ever tested.
+SELFTEST_CASES = [
+    (
+        "timestamp collapse - full sentences in 1 s segments (89-93 c/s)",
+        "de",
+        [
+            {"start": 0.0, "end": 6.4,
+             "text": "Wo steht euer Becken über den Füssen, ist es zentriert?"},
+            {"start": 229.5, "end": 230.5,
+             "text": "die ich euch vorhin da im Stehen, beobachtet von den Ideen, "
+                     "die ich euch vorhin da im Stehen,"},
+            {"start": 243.9, "end": 245.9,
+             "text": "gegeben habe, was fällt euch auf, wenn ihr euch wieder "
+                     "betrachtet, jetzt im Liegen?"},
+        ],
+        [1, 2],
+    ),
+    (
+        "clean run of the same recording - nothing flagged",
+        "de",
+        [
+            {"start": 0.0, "end": 2.4, "text": "Oder steht ihr mehr über einem Fuss?"},
+            {"start": 2.4, "end": 7.0, "text": "Wo steht euer Becken über den Füssen?"},
+            {"start": 14.2, "end": 21.0,
+             "text": "Ist das Becken wie zentriert, genau über den Füssen, zwischen den Füssen?"},
+        ],
+        [],
+    ),
+    (
+        "genuinely repetitive audio - repetition alone must not flag",
+        "en",
+        [
+            {"start": 0.0, "end": 3.2, "text": "Good morning everyone and welcome to this meeting."},
+            {"start": 4.4, "end": 9.8, "text": "Thank you all for joining today."},
+            {"start": 25.0, "end": 28.2, "text": "Good morning everyone and welcome to this meeting."},
+            {"start": 29.4, "end": 34.8, "text": "Thank you all for joining today."},
+            {"start": 50.0, "end": 53.2, "text": "Good morning everyone and welcome to this meeting."},
+        ],
+        [],
+    ),
+    (
+        "long segment with almost no text still flagged",
+        "de",
+        [{"start": 0.0, "end": 30.0, "text": "Ja."}],
+        [0],
+    ),
+    (
+        "repetition loop inside one segment still flagged",
+        "de",
+        [{"start": 0.0, "end": 20.0, "text": "Ja. Ja. Ja. Ja. Ja. Ja. Ja. Ja."}],
+        [0],
+    ),
+]
+
+
+# A correct repair of a clause-level stutter must not read as text loss.
+# Taken verbatim from the collapse above and the repair that fixes it.
+DEDUP_CASE = (
+    "clause-level stutter scores as repairable, not as text loss",
+    [{"text": "und wenn ihr dann auf dem Rücken seid, beobachtet von den Ideen, "
+              "die ich euch vorhin da im Stehen, die ich euch vorhin da im Stehen, "
+              "beobachtet von den Ideen, die ich euch vorhin da im Stehen, "
+              "die ich euch vorhin da im Stehen, gegeben habe, was fällt euch auf, "
+              "wenn ihr euch wieder betrachtet, jetzt im Liegen?"}],
+    [{"text": "Und wenn ihr dann auf dem Rücken seid, beobachtet von den Ideen, "
+              "die ich euch vorhin da im Stehen gegeben habe, was fällt euch auf, "
+              "wenn ihr euch wieder betrachtet?"}],
+)
+
+
+def selftest() -> int:
+    """Check find_suspects and the repair-vs-text-loss score on measured cases."""
+    failures = 0
+
+    name, before, after = DEDUP_CASE
+    old_chars, new_chars = _dedup_chars(before), _dedup_chars(after)
+    ratio = new_chars / max(1, old_chars)
+    ok = ratio >= MIN_CONTENT_RATIO
+    print(f"[{'ok  ' if ok else 'FAIL'}] {name}")
+    if not ok:
+        failures += 1
+        print(f"        {new_chars}/{old_chars} chars = {ratio:.2f}, "
+              f"below MIN_CONTENT_RATIO {MIN_CONTENT_RATIO} - the repair would be rejected")
+
+    for name, lang, segments, expected in SELFTEST_CASES:
+        got = sorted(s["index"] for s in find_suspects(segments, language=lang))
+        ok = got == sorted(expected)
+        print(f"[{'ok  ' if ok else 'FAIL'}] {name}")
+        if not ok:
+            failures += 1
+            print(f"        expected suspects {sorted(expected)}, got {got}")
+            for s in find_suspects(segments, language=lang):
+                print(f"        #{s['index']}: {s['reasons']}")
+    total = len(SELFTEST_CASES) + 1
+    print()
+    print(f"{total - failures}/{total} cases passed")
+    return 1 if failures else 0
+
+
 def main() -> int:
     # Before parse_args: --help renders this module's docstring (which carries
     # the cyrillic collapse example) and exits *inside* parse_args, so a
@@ -385,7 +523,7 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--segments", required=True, help="<base>.segments.json")
+    ap.add_argument("--segments", help="<base>.segments.json")
     ap.add_argument("--audio", help="audio file (mp3/wav)")
     ap.add_argument("--video", help="source video - audio is cut from it directly")
     ap.add_argument("--language", default=None, help='e.g. "de"')
@@ -395,8 +533,15 @@ def main() -> int:
                          '~/.config/transcribe/, via stt.load_hotwords)')
     ap.add_argument("--dry-run", action="store_true",
                     help="only list the suspect passages, change nothing")
+    ap.add_argument("--selftest", action="store_true",
+                    help="run the detection regression cases and exit")
     ap.add_argument("-o", "--out", help="write result here (default: in place)")
     args = ap.parse_args()
+
+    if args.selftest:
+        return selftest()
+    if not args.segments:
+        ap.error("--segments is required (or use --selftest)")
 
     store = Path(args.segments)
     payload = json.loads(store.read_text(encoding="utf-8"))

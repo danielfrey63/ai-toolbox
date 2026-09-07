@@ -29,8 +29,8 @@ repair.py uses this when re-transcribing a collapsed passage.
 
 faster-whisper rides on ctranslate2 (torch-free), so it coexists with the
 pyannote stack in the same venv and uses the GPU when CUDA libs are present.
-large-v3 on GPU transcribes ~8x realtime; the CPU fallback drops to the
-medium model with int8 quantization to stay usable.
+large-v3-turbo on GPU transcribes ~35x realtime; the CPU fallback drops to
+the medium model with int8 quantization to stay usable.
 """
 from __future__ import annotations
 
@@ -109,7 +109,16 @@ def main() -> int:
     # Both are overridable for the case where a quieter fan for longer is
     # actually what you want (see TRANSCRIBE_GPU_DUTY too); a compute type the
     # GPU rejects falls back to float16 rather than losing the run.
-    model_name = os.environ.get("TRANSCRIBE_WHISPER_MODEL") or "large-v3"
+    # large-v3-turbo over large-v3: measured on a 253 s German recording
+    # (RTX A4000 Laptop), decode 24.3 s -> 6.9 s at the same ~62 W, i.e. 75 %
+    # less energy for the transcription stage and -62 % for the whole run.
+    # Accuracy held up: turbo dropped the odd filler word ("ein wenig" ->
+    # "wenig"), but large-v3 was the one that collapsed into a repetition loop
+    # on both test recordings while turbo transcribed them cleanly. Set
+    # TRANSCRIBE_WHISPER_MODEL=large-v3 to go back. Do NOT reach for
+    # distil-large-v3: it is English-only and silently *translates* German
+    # input instead of transcribing it.
+    model_name = os.environ.get("TRANSCRIBE_WHISPER_MODEL") or "large-v3-turbo"
     compute = os.environ.get("TRANSCRIBE_GPU_COMPUTE") or "float16"
     try:
         try:
