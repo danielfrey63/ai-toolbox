@@ -113,7 +113,7 @@ Optional flags:
   - Identifying *which name* maps to `A`/`B`/`SPEAKER_00` is done later by Claude using address patterns in the transcript (see Step 4 Inventar → Personen & Stimmen). For **audio-only sources** (no frames as ground truth), role/content evidence substitutes for frame evidence: a label that consistently owns a known person's responsibilities ("I'll prepare the compliance slide") plus at least one address-pattern hit qualifies as high-confidence; document the reasoning in the transcript header. Surplus diarization clusters that map to no one stay as bare letters with a header note.
 - `--resolution W` — change frame width in px (default 512; bump to 1024 only if the user needs to read on-screen text)
 - `--version` — print the skill version and exit (the same value the report stamps, see "Version stamp" below)
-- `--cpu-budget SPEC` — cap the CPU the CPU-bound stages may use **together**: a share (`50%`), an absolute thread count (`6`), or `all` for no limit. Default 75% of the cores, overridable via `TRANSCRIBE_CPU_BUDGET` in the environment or `.env`. See "CPU budget" below.
+- `--cpu-budget SPEC` — cap the CPU the CPU-bound stages may use **together**: a share (`50%`), an absolute thread count (`6`), or `all` for no limit. Default 50% of the cores, overridable via `TRANSCRIBE_CPU_BUDGET` in the environment or `.env`. See "CPU budget" below.
 - `--fps F` — override auto-fps (clamped to 2 fps max)
 - `--out-dir DIR` — keep working files somewhere specific (default: an auto-generated tmp dir)
 - `--fresh` — ignore persisted `<base>.segments.json` / `.turns.json` and re-transcribe + re-diarize from scratch (default behaviour reuses them for idempotent re-runs)
@@ -286,7 +286,7 @@ The CPU-bound stages used to help themselves to the whole machine. ffmpeg defaul
 | whisper CPU fallback | in-venv | whole budget (via env) |
 | pyannote CPU path | in-venv | `torch.set_num_threads` (via env) |
 
-Resolution order: `--cpu-budget` > `TRANSCRIBE_CPU_BUDGET` (environment or `.env`) > 75% of the cores. "Cores" means *usable* cores: on Linux the count comes from `sched_getaffinity`, so a run restricted by `taskset`, a systemd slice or a container cpuset budgets against what it may actually use rather than what the machine has (verified: under `taskset -c 0-3` on a 16-core box the budget drops from 12 to 3). Windows and macOS fall back to `os.cpu_count()`. The resolved value is exported into the environment, so the venv workers inherit the same cap without a flag being threaded through. An unparseable value falls back to the default rather than failing the run.
+Resolution order: `--cpu-budget` > `TRANSCRIBE_CPU_BUDGET` (environment or `.env`) > 50% of the cores. "Cores" means *usable* cores: on Linux the count comes from `sched_getaffinity`, so a run restricted by `taskset`, a systemd slice or a container cpuset budgets against what it may actually use rather than what the machine has (verified: under `taskset -c 0-3` on a 16-core box the budget drops from 12 to 3). Windows and macOS fall back to `os.cpu_count()`. The resolved value is exported into the environment, so the venv workers inherit the same cap without a flag being threaded through. An unparseable value falls back to the default rather than failing the run.
 
 **Splitting is not the same as spreading it thin.** Measured on 16 cores, extracting 24 frames from 1080p with a budget of 12: 8 workers × 1 thread took **13.8 s**, 6 × 2 took **11.1 s**, 4 × 3 took 11.3 s, 3 × 4 took 11.5 s — against 9.7 s ungoverned. A single-threaded ffmpeg cannot overlap its own seek and decode, so handing the budget to as many workers as possible is the *worst* way to spend it. `frame_workers()` therefore derives the worker count as `budget // 2`, guaranteeing every worker two threads; the default budget costs roughly 15% wall-clock against no cap at all.
 
@@ -320,6 +320,16 @@ Phase shares under `large-v3`: transcription **72%**, diarization **28%**, every
 Diarization has the *highest instantaneous* draw of the whole run (80 W average during its GPU phase, against 64 W for whisper) but is short, so `--no-diarize` saves about a quarter of a run's energy — worth having on single-speaker recordings, but a smaller lever than the model choice above.
 
 > **Measurement caveat, recorded because it bit once.** An earlier version of this section claimed 90% of a run's heat came from transcription and that `--no-diarize` saved 24% of it. Both numbers came from a synthetic looping test fixture on which `large-v3` collapsed into a repetition loop, inflating its decode from ~12 s to 79.8 s. Benchmark heat and speed on *real* recordings only: a collapse silently multiplies the transcription stage, so a collapsed run measures the failure mode rather than the pipeline.
+
+### Transcript blocking (diarized runs)
+
+A diarized transcript is written as one block per speaker turn — `[MM:SS] [<Speaker>] <everything they said>` — rather than one line per decoder segment, which would be unreadable at three seconds a line. A block ends at a **speaker change**, at a **silence of 2 s**, or once it spans **45 s** (`MAX_TURN_GAP` / `MAX_TURN_SECONDS` in `transcribe.py`).
+
+The latter two limits are not cosmetic. Blocking on speaker identity alone collapses a **single-speaker** recording — a YouTube explainer, a voice memo, a dictation — into exactly one block carrying only the first timestamp, which destroys every timestamp the transcript had. Observed on a 7-minute video: 108 segments rendered as one `[00:00]` block; with the limits, 11 blocks at 45 s apart.
+
+The two rules fire on different material, which is why both exist. Measured over real recordings: a fluently spoken explainer has inter-segment gaps of at most 1.0 s (p95 0.62 s), so only the duration cap ever triggers there; a slow instructional recording has gaps up to 17 s (p75 6.9 s), where the gap rule lands on the natural paragraph breaks and the duration cap rarely fires. In a multi-speaker meeting both are rare and turns keep reading as turns; where one does fire it breaks up a long monologue, which helps navigation rather than hurting it.
+
+`python3 scripts/transcribe.py --selftest` covers the blocking rules, including that a speaker change still yields exactly one block per turn.
 
 ### Version stamp
 

@@ -146,20 +146,38 @@ def filter_range(
     return [seg for seg in segments if seg["end"] >= lo and seg["start"] <= hi]
 
 
+# A block also ends without a speaker change. Merging purely on speaker
+# identity collapses a single-speaker recording - a YouTube explainer, a voice
+# memo, a dictation - into ONE block carrying only the first timestamp, which
+# destroys every timestamp the transcript had (observed on a 7-minute video:
+# 108 segments, one `[00:00]` block). These two limits restore navigability,
+# and they matter on different material: measured over real recordings, a
+# fluently spoken explainer has gaps of at most 1.0 s (p95 0.62 s) so only the
+# duration cap ever fires there, while a slow instructional recording has gaps
+# up to 17 s (p75 6.9 s) where the gap rule lands exactly on the natural
+# paragraph breaks. In a multi-speaker meeting both are rare, so turns keep
+# reading as turns; where one does fire, it breaks up a long monologue, which
+# is an improvement rather than a regression.
+MAX_TURN_SECONDS = 45.0   # a block spanning more than this gets broken up
+MAX_TURN_GAP = 2.0        # a silence this long reads as a paragraph break
+
+
 def merge_speaker_turns(segments: list[dict]) -> list[dict]:
-    """Collapse consecutive segments by the same speaker into one turn.
+    """Collapse consecutive segments by the same speaker into readable blocks.
 
     Diarizing backends (gpt-4o-transcribe-diarize, AssemblyAI, pyannote)
     emit many fine-grained segments - often one short phrase each. A
     readable transcript wants one block per speaker turn:
     `[MM:SS] [Speaker] <everything they said until the next speaker change>`.
 
-    Each turn keeps the first segment's `start` and the last segment's
-    `end`. Only merges when a `speaker` field is present *and* equal on
-    adjacent segments. If no segment carries a speaker at all (plain
-    captions / non-diarized Whisper), the input is returned unchanged -
-    those transcripts keep their per-segment granularity, which the
-    frame-to-transcript alignment relies on.
+    A block ends at a speaker change, at a silence of MAX_TURN_GAP, or once it
+    spans MAX_TURN_SECONDS - see the note above for why the latter two exist.
+    Each block keeps its first segment's `start` and its last segment's `end`.
+    Only merges when a `speaker` field is present *and* equal on adjacent
+    segments. If no segment carries a speaker at all (plain captions /
+    non-diarized Whisper), the input is returned unchanged - those transcripts
+    keep their per-segment granularity, which the frame-to-transcript
+    alignment relies on.
 
     The single source of truth for turn-merging - imported by both the
     production transcript formatter and the azure_transcribe_test harness.
@@ -175,13 +193,21 @@ def merge_speaker_turns(segments: list[dict]) -> list[dict]:
         text = (seg.get("text") or "").strip()
         if not text:
             continue
+        start = float(seg.get("start", 0.0))
+        end = float(seg.get("end", start))
+        cont = False
         if turns and turns[-1].get("speaker") == spk:
+            prev = turns[-1]
+            gap = start - float(prev["end"])
+            span = end - float(prev["start"])
+            cont = gap < MAX_TURN_GAP and span <= MAX_TURN_SECONDS
+        if cont:
             turns[-1]["text"] = (turns[-1]["text"] + " " + text).strip()
-            turns[-1]["end"] = seg.get("end", turns[-1]["end"])
+            turns[-1]["end"] = end
         else:
             turns.append({
-                "start": seg.get("start", 0.0),
-                "end": seg.get("end", 0.0),
+                "start": start,
+                "end": end,
                 "text": text,
                 "speaker": spk,
             })
@@ -257,8 +283,76 @@ def format_vtt(segments: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _seg(start, end, text, speaker=None):
+    s = {"start": start, "end": end, "text": text}
+    if speaker:
+        s["speaker"] = speaker
+    return s
+
+
+# Blocking rules, checked against the shapes that actually occur. The first
+# case is the regression: before the gap/duration limits, a single-speaker
+# recording collapsed into one block and lost every timestamp.
+SELFTEST_CASES = [
+    (
+        "single speaker, fluent - must not collapse into one block",
+        [_seg(i * 5.0, i * 5.0 + 4.6, f"Satz {i}.", "SPEAKER_00") for i in range(24)],
+        lambda blocks: len(blocks) > 1 and all(
+            b["end"] - b["start"] <= MAX_TURN_SECONDS + 0.01 for b in blocks),
+    ),
+    (
+        "single speaker, long silence - breaks at the pause",
+        [_seg(0.0, 4.0, "Erster Teil.", "A"), _seg(9.0, 12.0, "Zweiter Teil.", "A")],
+        lambda blocks: len(blocks) == 2 and blocks[1]["start"] == 9.0,
+    ),
+    (
+        "speaker change - one block each, unchanged behaviour",
+        [_seg(0.0, 3.0, "Frage?", "A"), _seg(3.2, 6.0, "Antwort.", "B"),
+         _seg(6.2, 9.0, "Nachfrage.", "A")],
+        lambda blocks: [b["speaker"] for b in blocks] == ["A", "B", "A"],
+    ),
+    (
+        "same speaker, tight and short - still merges into one block",
+        [_seg(0.0, 3.0, "Erst dies.", "A"), _seg(3.4, 6.0, "Dann das.", "A")],
+        lambda blocks: len(blocks) == 1 and blocks[0]["text"] == "Erst dies. Dann das.",
+    ),
+    (
+        "no speaker labels - passed through untouched",
+        [_seg(0.0, 3.0, "Eins."), _seg(3.1, 6.0, "Zwei.")],
+        lambda blocks: len(blocks) == 2,
+    ),
+    (
+        "empty input",
+        [],
+        lambda blocks: blocks == [],
+    ),
+]
+
+
+def selftest() -> int:
+    """Check merge_speaker_turns against the measured blocking shapes."""
+    failures = 0
+    for name, segments, check in SELFTEST_CASES:
+        blocks = merge_speaker_turns([dict(s) for s in segments])
+        try:
+            ok = bool(check(blocks))
+        except (IndexError, KeyError):
+            ok = False
+        print(f"[{'ok  ' if ok else 'FAIL'}] {name}")
+        if not ok:
+            failures += 1
+            print(f"        got {len(blocks)} block(s): "
+                  + " | ".join(f"{b['start']}-{b['end']} {b.get('speaker', '-')}"
+                               for b in blocks))
+    print()
+    print(f"{len(SELFTEST_CASES) - failures}/{len(SELFTEST_CASES)} cases passed")
+    return 1 if failures else 0
+
+
 if __name__ == "__main__":
+    if len(sys.argv) >= 2 and sys.argv[1] == "--selftest":
+        raise SystemExit(selftest())
     if len(sys.argv) < 2:
-        print("usage: transcribe.py <vtt-path>", file=sys.stderr)
+        print("usage: transcribe.py <vtt-path> | --selftest", file=sys.stderr)
         raise SystemExit(2)
     print(format_transcript(parse_vtt(sys.argv[1])))

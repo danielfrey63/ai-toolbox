@@ -223,6 +223,12 @@ from version import APP_VERSION  # noqa: E402
 import cpu  # noqa: E402
 
 
+# Headings Claude appends to the analysis target. Their presence means the file
+# is a finished report rather than an untouched stub - see the write guard in
+# _persist_report, which must not clobber a report on a re-run.
+ANALYSIS_MARKERS = ("## Übersicht", "## Summary", "## Analysis")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         prog="transcribe",
@@ -1151,7 +1157,25 @@ def main() -> int:
             " Resources) below this line._",
             "",
         ]
-        _write_best_effort(save_md_path, "\n".join(stub_lines), "analysis")
+        # Idempotency: a re-run must not delete the analysis Claude appended.
+        # Re-running run.py is cheap and explicitly prescribed (a cache resume
+        # takes ~1 s and is the documented way to re-render after a standalone
+        # repair), so rewriting the stub unconditionally destroyed the finished
+        # report every single time - silently, because the write succeeded.
+        # Write only when the file is absent or still stub-only, and say so on
+        # stderr otherwise: the caller needs to know the cross-links in the
+        # header were not refreshed.
+        try:
+            existing = save_md_path.read_text(encoding="utf-8")
+        except OSError:
+            existing = ""
+        if any(marker in existing for marker in ANALYSIS_MARKERS):
+            sys.stderr.write(
+                f"[transcribe] analysis    -> {save_md_path} (kept - already "
+                f"carries an analysis; delete the file to regenerate the stub)\n"
+            )
+        else:
+            _write_best_effort(save_md_path, "\n".join(stub_lines), "analysis")
 
     # Defense-in-depth: register _persist_report to fire at interpreter
     # shutdown. Frames are already extracted, audio is already transcribed
