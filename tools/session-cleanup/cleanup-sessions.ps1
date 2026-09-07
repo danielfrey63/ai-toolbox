@@ -20,7 +20,9 @@ param(
     # messages beyond the split. Larger leftovers are reported instead.
     [int]$MaxHandoverMessages = 10,
     # Report what would happen without moving or deleting anything.
-    [switch]$DryRun
+    [switch]$DryRun,
+    # Skip desktop toasts (findings.txt is still written) - used by test-cleanup.sh.
+    [switch]$NoNotify
 )
 
 $ErrorActionPreference = 'Stop'
@@ -307,7 +309,9 @@ foreach ($g in $dupGroups) {
             # the new one continues) and a session that was genuinely worked on in both places. The
             # first kind is a leftover and can go; the second holds unique history on both sides.
             $div = Get-Divergence $other $keeper
-            $name = Get-DisplayName $other
+            # Name the session as the user sees it today: the kept copy is the one in the picker,
+            # and after a move only it carries the /rename title.
+            $name = Get-DisplayName $keeper
             $otherDir = Get-DirShort $other.Directory.Name
             $keeperDir = Get-DirShort $keeper.Directory.Name
             $fork = if ($div.Fork) { $div.Fork.ToString('yyyy-MM-dd HH:mm') } else { 'unknown' }
@@ -486,7 +490,13 @@ Write-Log "done: $marked marked, $deduped duplicate(s) and $moved empty session(
 # Runs with nothing to report stay silent. Show-Toast (tools/notify) routes the WinRT call through
 # Windows PowerShell 5.1 without a console window. A failed notification never breaks the run.
 $acted = $marked + $deduped + $moved + $purged
-if (-not $DryRun -and ($acted + $script:findings.Count) -gt 0) {
+if (-not $DryRun -and $script:findings.Count -gt 0) {
+    $findingsFile = Join-Path $trashDir 'findings.txt'
+    $header = "Session-Cleanup-Befunde vom $(Get-Date -Format 'yyyy-MM-dd HH:mm') - Auflösung: Session umbenennen (/rename) oder wegwerfen"
+    $body = ($script:findings | ForEach-Object { "$($_.Title)`n$($_.Body)" }) -join "`n`n"
+    Set-Content -LiteralPath $findingsFile -Value ($header + "`n`n" + $body) -Encoding UTF8
+}
+if (-not $DryRun -and -not $NoNotify -and ($acted + $script:findings.Count) -gt 0) {
     try {
         . (Join-Path $PSScriptRoot '..\notify\toast.ps1')
         $sender = @{ AppId = 'AIToolbox.SessionCleanup'; AppName = 'AI-Toolbox Session Cleanup' }
@@ -494,14 +504,8 @@ if (-not $DryRun -and ($acted + $script:findings.Count) -gt 0) {
             Show-Toast @sender -Title 'Session-Cleanup gelaufen' `
                 -Body "$marked markiert, $deduped Duplikat(e), $moved leere Session(s) in den Papierkorb; $purged Batch(es) endgültig gelöscht"
         }
-        if ($script:findings.Count -gt 0) {
-            $findingsFile = Join-Path $trashDir 'findings.txt'
-            $header = "Session-Cleanup-Befunde vom $(Get-Date -Format 'yyyy-MM-dd HH:mm') - Auflösung: Session umbenennen (/rename) oder wegwerfen"
-            $body = ($script:findings | ForEach-Object { "$($_.Title)`n$($_.Body)" }) -join "`n`n"
-            Set-Content -LiteralPath $findingsFile -Value ($header + "`n`n" + $body) -Encoding UTF8
-            foreach ($f in ($script:findings | Select-Object -First 5)) {
-                Show-Toast @sender -Title $f.Title -Body $f.Body -Reminder
-            }
+        foreach ($f in ($script:findings | Select-Object -First 5)) {
+            Show-Toast @sender -Title $f.Title -Body $f.Body -Reminder
         }
     } catch {
         Write-Log "notification failed: $($_.Exception.Message)"

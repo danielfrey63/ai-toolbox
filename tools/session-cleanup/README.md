@@ -45,7 +45,11 @@ Oder direkt: unter Windows `.\install.ps1` (Scheduled Task «AI-Toolbox Session 
 .\cleanup-sessions.ps1           # führt aus
 ```
 
-Parameter: `-MaxSizeBytes` (Default 250 KB), `-MinAgeHours` (Default 0 = kein Alters-Guard), `-RetentionDays` (Default 30), `-DeleteMarker` (Default `DELETE`), `-MaxHandoverMessages` (Default 10). Die Bash-Variante kennt dieselben Optionen als `--max-size-bytes`, `--min-age-hours`, `--retention-days`, `--delete-marker`, `--max-handover-messages`, `--dry-run`.
+Parameter: `-MaxSizeBytes` (Default 250 KB), `-MinAgeHours` (Default 0 = kein Alters-Guard), `-RetentionDays` (Default 30), `-DeleteMarker` (Default `DELETE`), `-MaxHandoverMessages` (Default 10), `-NoNotify` (keine Desktop-Benachrichtigungen; `findings.txt` wird trotzdem geschrieben). Die Bash-Variante kennt dieselben Optionen als `--max-size-bytes`, `--min-age-hours`, `--retention-days`, `--delete-marker`, `--max-handover-messages`, `--dry-run`, `--no-notify`.
+
+## Tests
+
+`bash test-cleanup.sh` baut eine Sandbox-`~/.claude` mit Fixtures für jede Regel (DELETE-Marker, enthaltene Duplikate, Umzugs-Rest, Parallelarbeit, verschieden benannte Kopien, Titel-Präfix-Merge, kleine Namensvettern, Titel-Kollision, leere Sessions, Offene-Session-Schutz, Papierkorb-Purge), lässt das Cleanup zweimal darüber laufen und prüft Dateisystem-Ergebnis, Log-Zeilen, `findings.txt` und die Idempotenz des Zweitlaufs. Die Bash-Variante wird immer getestet, die PowerShell-Variante zusätzlich, wo `pwsh`/`powershell` und `cygpath` verfügbar sind (Windows-Devbox). Das echte `~/.claude` wird nie berührt (Pfade kommen aus `HOME`/`USERPROFILE`, beide zeigen in die Sandbox); `KEEP_SANDBOX=1` lässt die Sandbox zur Inspektion liegen, `VERBOSE=1` zeigt auch die grünen Assertions. Vor jeder neuen Regel gehört hier ein Fixture dazu.
 
 ## Abgrenzung
 

@@ -16,6 +16,8 @@ DELETE_MARKER=DELETE
 # beyond the split. Larger leftovers are reported instead.
 MAX_HANDOVER_MESSAGES=10
 DRY_RUN=0
+# Skip desktop notifications (findings.txt is still written) - used by test-cleanup.sh.
+NO_NOTIFY=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -25,7 +27,8 @@ while [ $# -gt 0 ]; do
         --delete-marker)  DELETE_MARKER=$2; shift 2 ;;
         --max-handover-messages) MAX_HANDOVER_MESSAGES=$2; shift 2 ;;
         --dry-run)        DRY_RUN=1; shift ;;
-        *) echo "usage: cleanup-sessions.sh [--max-size-bytes N] [--min-age-hours N] [--retention-days N] [--delete-marker TITLE] [--max-handover-messages N] [--dry-run]" >&2; exit 2 ;;
+        --no-notify)      NO_NOTIFY=1; shift ;;
+        *) echo "usage: cleanup-sessions.sh [--max-size-bytes N] [--min-age-hours N] [--retention-days N] [--delete-marker TITLE] [--max-handover-messages N] [--dry-run] [--no-notify]" >&2; exit 2 ;;
     esac
 done
 
@@ -319,7 +322,9 @@ while IFS= read -r dup_name; do
             # the new one continues) and a session that was genuinely worked on in both places. The
             # first kind is a leftover and can go; the second holds unique history on both sides.
             divergence "$other" "$keeper"
-            name=$(display_name "$other")
+            # Name the session as the user sees it today: the kept copy is the one in the picker,
+            # and after a move only it carries the /rename title.
+            name=$(display_name "$keeper")
             other_short=$(dir_short "$(basename "$(dirname "$other")")")
             keeper_short=$(dir_short "$keeper_dir")
             fork=$(date -d "$DIV_FORK" '+%Y-%m-%d %H:%M' 2>/dev/null || printf 'unknown')
@@ -357,7 +362,6 @@ while IFS= read -r dup_name; do
 $keeper_short - $DIV_B_MSGS Nachrichten, bis $last_b
 Beide weitergeführt: eine behalten, andere wegwerfen oder beide umbenennen.")
             kept_files+=("$other")
-        files+=("$other")
         fi
     done < <(printf '%s\n' "$ranked" | tail -n +2)
 done < <(find "$PROJECTS_DIR" -mindepth 2 -maxdepth 2 -type f -name '*.jsonl' -printf '%f\n' | sort | uniq -d)
@@ -536,7 +540,7 @@ if [ "$DRY_RUN" != 1 ] && [ "${#findings_titles[@]}" -gt 0 ]; then
             printf '\n%s\n%s\n' "${findings_titles[$i]}" "${findings_bodies[$i]}"
         done
     } > "$TRASH_DIR/findings.txt"
-    if command -v notify-send >/dev/null 2>&1; then
+    if [ "$NO_NOTIFY" != 1 ] && command -v notify-send >/dev/null 2>&1; then
         for ((i = 0; i < ${#findings_titles[@]} && i < 5; i++)); do
             notify-send "${findings_titles[$i]}" "${findings_bodies[$i]}" 2>/dev/null || true
         done
