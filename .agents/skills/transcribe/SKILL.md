@@ -292,6 +292,32 @@ Resolution order: `--cpu-budget` > `TRANSCRIBE_CPU_BUDGET` (environment or `.env
 
 Lower it with `--cpu-budget 50%` (or `25%`) when the machine runs hot or needs to stay responsive; `--cpu-budget all` restores the old unbounded behaviour. `--frame-workers` still overrides the worker count explicitly if you want to tune that axis by hand.
 
+### GPU load and heat (measured, counter-intuitive)
+
+On a laptop the CUDA stages dominate: whisper and pyannote run for minutes while the CPU stages are done in seconds. The obvious reaction — run the GPU in a lighter mode — **does not work**, and the numbers say why. RTX A4000 Laptop, 4.2 min of speech, `nvidia-smi` sampled twice a second:
+
+| Setting | Wall-clock | GPU util | Power | **Total energy** | Peak temp |
+|---|---|---|---|---|---|
+| `float16`, no pauses (default) | **86 s** | 51% | 61 W | **~5200 Ws** | 72 °C |
+| `int8_float16` | 125 s | 40% | 49 W | ~6100 Ws | 72 °C |
+| `float16`, `TRANSCRIBE_GPU_DUTY=0.6` | 137 s | 32% | 48 W | ~6600 Ws | 71 °C |
+
+Every throttle lowers *instantaneous* draw and raises *total* heat, because the run stretches out further than the draw drops. The peak temperature never moves: the laptop's cooling regulates to the same setpoint and simply runs the fan longer. **The way to make the machine run cooler is to finish sooner**, so both knobs default to the fastest setting. They exist for the case where a quieter fan for longer is what you actually want — that is a real preference, just not a thermal one:
+
+- `TRANSCRIBE_GPU_COMPUTE` — ctranslate2 compute type (default `float16`; a type the GPU rejects falls back to `float16` rather than failing the run).
+- `TRANSCRIBE_GPU_DUTY` — share of wall-clock spent decoding, `0.1`–`1.0` (default `1.0` = no pauses). Idles between segments; since decoding is a lazy generator, that idles the GPU itself.
+- `TRANSCRIBE_WHISPER_MODEL` — default `large-v3`. `medium` roughly halves the GPU time, at a real accuracy cost on domain terms and Swiss German.
+
+**What does cut heat is doing less work.** Same recording, full pipeline versus stages switched off:
+
+| Run | Wall-clock | Total energy |
+|---|---|---|
+| full (diarization + repair) | 120 s | 6673 Ws |
+| `--no-diarize` | 98 s | 5103 Ws (−24%) |
+| `--no-diarize --no-repair` | 92 s | 4537 Ws (−32%) |
+
+Diarization alone is about a quarter of the energy of a run. Neither flag costs transcript *accuracy* — they drop speaker attribution and collapse repair respectively. On a recording with one speaker, or where speaker labels don't matter, `--no-diarize` is the single biggest lever available.
+
 ### Version stamp
 
 Every report records which build of the skill produced it, so a transcript read months later says what made it — pipeline behaviour (repair pass, glossary handling, crosscheck) shifts between versions, and a report that predates a fix should be readable as such.

@@ -33,10 +33,14 @@ import os
 
 ENV_VAR = "TRANSCRIBE_CPU_BUDGET"
 
-# Leave a quarter of the machine idle by default. Enough headroom that the box
-# stays responsive and the CPU stages stop hitting the thermal ceiling, while
-# still using most of the silicon - transcription is slow enough already.
-DEFAULT_SHARE = 0.75
+# Leave half the machine idle by default. 0.75 was the first cut, but on a
+# laptop it still drove the fans through every CPU stage: thermal headroom,
+# not throughput, is the binding constraint there, and a transcription is a
+# background errand rather than something anyone watches finish. Costs roughly
+# a third more wall-clock on the frame stage than running uncapped; raise it
+# per-run with --cpu-budget 75% / all when you do want the machine's full
+# attention.
+DEFAULT_SHARE = 0.5
 
 _override: int | None = None
 

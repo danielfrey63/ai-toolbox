@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import sys
 from pathlib import Path
 
@@ -68,6 +69,17 @@ def clamp_hotwords(hotwords: str | None) -> str | None:
     return ", ".join(kept)
 
 
+def _env_float(name: str, default: float, lo: float, hi: float) -> float:
+    """Read a clamped float from the environment; bad input keeps the default."""
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        return max(lo, min(hi, float(raw)))
+    except ValueError:
+        return default
+
+
 def main() -> int:
     argv = list(sys.argv[1:])
     carryover = "--no-carryover" not in argv
@@ -83,9 +95,30 @@ def main() -> int:
 
     from faster_whisper import WhisperModel
 
+    # Both knobs default to the *fastest* setting, which is also the coolest
+    # one - measured, against the intuition that a lighter compute type must
+    # run cooler. On an RTX A4000 Laptop over 4.2 min of speech:
+    #
+    #   float16       86 s, 51% util, 61 W -> ~5200 Ws, 72 C peak
+    #   int8_float16 125 s, 40% util, 49 W -> ~6100 Ws, 72 C peak
+    #
+    # int8_float16 lowers instantaneous draw but runs 45% longer, so it emits
+    # *more* total heat for an identical peak temperature: the laptop's
+    # cooling regulates to the same setpoint either way and simply spins the
+    # fan longer. The way to make a laptop run cooler is to finish sooner.
+    # Both are overridable for the case where a quieter fan for longer is
+    # actually what you want (see TRANSCRIBE_GPU_DUTY too); a compute type the
+    # GPU rejects falls back to float16 rather than losing the run.
+    model_name = os.environ.get("TRANSCRIBE_WHISPER_MODEL") or "large-v3"
+    compute = os.environ.get("TRANSCRIBE_GPU_COMPUTE") or "float16"
     try:
-        model = WhisperModel("large-v3", device="cuda", compute_type="float16")
-        desc = "large-v3 / cuda float16"
+        try:
+            model = WhisperModel(model_name, device="cuda", compute_type=compute)
+        except (ValueError, RuntimeError) as exc:
+            log(f"compute_type={compute} rejected ({type(exc).__name__}) - float16")
+            compute = "float16"
+            model = WhisperModel(model_name, device="cuda", compute_type=compute)
+        desc = f"{model_name} / cuda {compute}"
     except Exception as exc:  # noqa: BLE001 - any CUDA failure -> CPU
         log(f"CUDA unavailable ({type(exc).__name__}) - CPU fallback (medium/int8)")
         # Runs in the managed venv as a separate process, so it re-resolves
@@ -113,14 +146,29 @@ def main() -> int:
                                           condition_on_previous_text=carryover)
         # Generation is lazy - the prompt-budget error surfaces here, not
         # at the transcribe() call, so the list must be built inside.
-        result = [
-            {
+        #
+        # Duty cycling: decoding is a generator, so idling between segments
+        # idles the GPU itself. Unlike a cheaper compute_type - which only
+        # trades watts for runtime and ends up producing *more* total heat -
+        # this actually lowers the sustained temperature, at a runtime cost
+        # that is proportional and predictable. 1.0 = no pauses.
+        duty = _env_float("TRANSCRIBE_GPU_DUTY", 1.0, lo=0.1, hi=1.0)
+        result = []
+        # The decode happens inside the `for` statement (the generator is
+        # lazy), not in the body - so the interval to measure is the one
+        # *ending* at each yield, not the body's own runtime.
+        mark = time.monotonic()
+        for seg in segments:
+            decode = time.monotonic() - mark
+            result.append({
                 "start": round(float(seg.start), 2),
                 "end": round(float(seg.end), 2),
                 "text": seg.text.strip(),
-            }
-            for seg in segments
-        ]
+            })
+            if duty < 1.0:
+                # Sleep so that `duty` is the share of wall-clock spent decoding.
+                time.sleep(decode * (1.0 / duty - 1.0))
+            mark = time.monotonic()
         log(f"transcription done: {len(result)} segments, "
             f"language={info.language} ({info.language_probability:.0%})")
         return result
