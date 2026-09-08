@@ -46,7 +46,7 @@
 # Always exits 0 (except on a usage error) — a non-artifact edit is a silent
 # no-op, so it is hook-safe.
 
-APP_VERSION='0.7.20'
+APP_VERSION='0.8.21'
 set -u
 
 INIT_VERSION='0.0.1'
@@ -240,6 +240,24 @@ case "$FILE" in
         fi
         ;;
 esac
+
+# A standalone skill repo — the skill IS the repo, so SKILL.md sits next to
+# .git and there is no .agents/skills/<name>/ segment to key on. Without this,
+# scripts/*.py in such a repo resolve to no artifact at all (no bump, no tag)
+# and SKILL.md resolves to its own frontmatter, opening a second version source
+# beside the plugin manifest. Precedence matches the branch above: a plugin
+# manifest outranks SKILL.md. Gated on SKILL.md at the repo root, so ordinary
+# repos (no SKILL.md there) keep resolving script/agent/claude types as before.
+if [ -z "$TYPE" ]; then
+    _skillrepo_root=$(cd "$(dirname "$FILE")" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null) || _skillrepo_root=''
+    if [ -n "$_skillrepo_root" ] && [ -f "$_skillrepo_root/SKILL.md" ]; then
+        if [ -f "$_skillrepo_root/.claude-plugin/plugin.json" ]; then
+            TYPE=plugin; TARGET="$_skillrepo_root/.claude-plugin/plugin.json"
+        else
+            TYPE=skill; TARGET="$_skillrepo_root/SKILL.md"
+        fi
+    fi
+fi
 
 if [ -z "$TYPE" ]; then
     if [ "$base" = 'SKILL.md' ]; then

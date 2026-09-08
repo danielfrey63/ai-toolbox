@@ -41,7 +41,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.49.309'
+APP_VERSION='0.50.311'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -260,9 +260,27 @@ _frontmatter() {  # file -> block
 # A skill/plugin directory must carry a SKILL.md with non-empty name+description
 # frontmatter fields. Echoes 0 (ok), 1 (fail — printed to stderr) or 2 (ok, but
 # the frontmatter name differs from the catalog name — printed to stdout).
+# A skill backed by a submodule is an empty directory until the submodule is
+# initialised — true for every clone made without --recurse-submodules. That is
+# a bootstrap step, not a broken catalog entry, so it must not fail validate
+# (which would also block commits through the pre-commit gate).
+_is_uninitialised_submodule() {  # abspath -> 0 when declared but not checked out
+    local dir=$1 rel
+    [ -f "$REPO_ROOT/.gitmodules" ] || return 1
+    rel=${dir#"$REPO_ROOT"/}
+    [ "$rel" != "$dir" ] || return 1
+    git -C "$REPO_ROOT" config -f .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null \
+        | awk '{print $2}' | grep -qx "$rel" || return 1
+    [ ! -e "$dir/.git" ]
+}
+
 validate_skill_dir() {  # name src -> 0/1/2
     local name=$1 src=$2 fm fmname fmdesc
     if [ ! -f "$src/SKILL.md" ]; then
+        if _is_uninitialised_submodule "$src"; then
+            printf '  [i] %-18s submodule not initialised: %s — run git submodule update --init\n' "$name" "$src"
+            return 2
+        fi
         printf '  [!] %-18s missing SKILL.md: %s/SKILL.md\n' "$name" "$src" >&2
         return 1
     fi

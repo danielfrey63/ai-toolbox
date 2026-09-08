@@ -14,7 +14,7 @@
 # writes into a repo's post-commit (see <ai-toolbox>/toolbox.sh). The hook
 # resolves the AI-Toolbox from its own path, so it works inside any repo.
 
-APP_VERSION='0.7.15'
+APP_VERSION='0.8.16'
 
 repo=$(git rev-parse --show-toplevel) || exit 0
 # Resolve bump-version.sh from this hook's own path (see pre-commit).
@@ -40,8 +40,16 @@ printf '%s\n' "$targets" | while IFS= read -r t; do
     [ -n "$ver" ] || continue
 
     # Artifact name: skill directory name for skills, basename otherwise.
+    # A standalone skill repo has no .agents/skills/ segment, and a bare
+    # basename would name the tag after the manifest file ("plugin.json/v1.2.3"
+    # or "SKILL.md/v1.2.3") — so those two resolve to the artifact's real name.
     case "$t" in
         */.agents/skills/*) name=${t#*/.agents/skills/}; name=${name%%/*} ;;
+        */.claude-plugin/plugin.json)
+            name=$(grep -m1 -oE '"name"[[:space:]]*:[[:space:]]*"[^"]+"' "$t" | cut -d'"' -f4)
+            [ -n "$name" ] || name=$(basename "$(dirname "$(dirname "$t")")")
+            ;;
+        */SKILL.md)         name=$(basename "$(dirname "$t")") ;;
         *)                  name=$(basename "$t") ;;
     esac
     # plain tagstyle drops the <name>/ namespace (single-artifact repos).
