@@ -84,12 +84,80 @@ def resolve_local(path: str) -> dict:
     }
 
 
-def _pick_subtitle(out_dir: Path) -> Path | None:
+def _base_lang(language: str | None) -> str | None:
+    """"de-DE" -> "de". None when the language is unknown."""
+    if not language:
+        return None
+    base = str(language).split("-")[0].strip().lower()
+    return base or None
+
+
+def subtitle_langs(language: str | None) -> str | None:
+    """`--sub-langs` for the video's OWN language, or None when unknown.
+
+    YouTube offers auto-translated caption tracks in ~200 languages for any
+    video that has one automatic track. Asking for "en" on a German video
+    therefore does not fail - it silently returns a machine translation, and
+    the pipeline then produces an English transcript of German speech. Only
+    the video's own language is ever requested; when it cannot be determined
+    we ask for nothing and let the local Whisper path handle it, because a
+    transcript in the wrong language is worse than no captions at all.
+    """
+    base = _base_lang(language)
+    if not base:
+        return None
+    # `<lang>-orig` is YouTube's marker for the untranslated track; the bare
+    # code and the full tag cover platforms that use neither convention.
+    langs = [base, f"{base}-orig"]
+    if language and str(language).lower() != base:
+        langs.append(str(language))
+    return ",".join(langs)
+
+
+def _pick_subtitle(out_dir: Path, language: str | None = None) -> Path | None:
+    """Newest matching VTT, preferring the video's own language."""
     candidates = sorted(out_dir.glob("video*.vtt"))
     if not candidates:
         return None
-    preferred = [c for c in candidates if ".en" in c.name]
-    return preferred[0] if preferred else candidates[0]
+    base = _base_lang(language)
+    if base:
+        preferred = [c for c in candidates if f".{base}" in c.name.lower()]
+        if preferred:
+            return preferred[0]
+    return candidates[0]
+
+
+def _read_info_language(out_dir: Path) -> str | None:
+    """The `language` field yt-dlp writes into video.info.json."""
+    path = out_dir / "video.info.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("language")
+    except (OSError, ValueError):
+        return None
+
+
+def _probe_language(yt_dlp: str, url: str, env: dict) -> str | None:
+    """One cheap metadata call, used only when the info JSON has no language.
+
+    Costs a single request and no download. Worth it: without a language we
+    fetch no captions at all, so guessing wrong here means silently losing the
+    free caption path on every video whose info JSON is incomplete.
+    """
+    try:
+        proc = subprocess.run(
+            [yt_dlp, "--skip-download", "--no-playlist", "--no-warnings",
+             "--print", "%(language)s", url],
+            capture_output=True, text=True, errors="replace", timeout=120, env=env,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+    if not lines:
+        return None
+    value = lines[-1]
+    return None if value.upper() in ("NA", "NONE") else value
 
 
 def _pick_video(out_dir: Path) -> Path | None:
@@ -202,7 +270,7 @@ def download_url(url: str, out_dir: Path) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     output_template = str(out_dir / "video.%(ext)s")
 
-    def build_cmd(fmt: str, extractor_args: str | None, want_subs: bool) -> list[str]:
+    def build_cmd(fmt: str, extractor_args: str | None, sub_langs: str | None) -> list[str]:
         cmd = [
             yt_dlp,
             "-N", "8",
@@ -210,11 +278,11 @@ def download_url(url: str, out_dir: Path) -> dict:
             "--merge-output-format", "mp4",
             "--write-info-json",
         ]
-        if want_subs:
+        if sub_langs:
             cmd += [
                 "--write-subs",
                 "--write-auto-subs",
-                "--sub-langs", "en,en-US,en-GB,en-orig",
+                "--sub-langs", sub_langs,
                 "--sub-format", "vtt",
                 "--convert-subs", "vtt",
             ]
@@ -268,13 +336,12 @@ def download_url(url: str, out_dir: Path) -> dict:
                 f"[transcribe] no media file yet - retrying with {label}...",
                 file=sys.stderr,
             )
-        # Subtitles land on the first attempt; re-requesting them on a retry
-        # only re-fetches what's already on disk.
-        want_subs = _pick_subtitle(out_dir) is None
+        # Captions are NOT requested here - they need the video's language,
+        # which only the info JSON reveals, so they get their own pass below.
         # yt-dlp may exit non-zero if a subtitle variant fails (e.g. 429) even
         # when the video itself downloaded fine. Treat "media file present" as
         # success regardless of the exit code.
-        returncode, log_tail = _run_yt_dlp(build_cmd(fmt, extractor_args, want_subs), env)
+        returncode, log_tail = _run_yt_dlp(build_cmd(fmt, extractor_args, None), env)
         video = _pick_video(out_dir)
         if video is not None:
             break
@@ -284,7 +351,29 @@ def download_url(url: str, out_dir: Path) -> dict:
         if audio is not None:
             break
 
-    subtitle = _pick_subtitle(out_dir)
+    # Second, download-free pass for captions, now that the info JSON can say
+    # which language the video is actually in (see subtitle_langs()). Skipped
+    # entirely when the language stays unknown - no captions beats captions in
+    # the wrong language, and the local Whisper path covers that case.
+    language = _read_info_language(out_dir) or _probe_language(yt_dlp, url, env)
+    subtitle = _pick_subtitle(out_dir, language)
+    if subtitle is None:
+        sub_langs = subtitle_langs(language)
+        if sub_langs:
+            print(
+                f"[transcribe] fetching {language} captions...",
+                file=sys.stderr,
+            )
+            cmd = build_cmd(video_fmt, yt_args, sub_langs)
+            cmd.insert(1, "--skip-download")
+            _run_yt_dlp(cmd, env)
+            subtitle = _pick_subtitle(out_dir, language)
+        else:
+            print(
+                "[transcribe] video language undetermined - skipping captions "
+                "(local transcription handles it)",
+                file=sys.stderr,
+            )
     captions_only = False
     download_error: str | None = None
     if video is None and audio is not None:

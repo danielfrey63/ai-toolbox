@@ -767,7 +767,22 @@ def main() -> int:
     resumed_version: str | None = None
 
     # Transcript path: VTT captions → AssemblyAI → Whisper.
-    if dl.get("subtitle_path"):
+    #
+    # A cached transcript outranks captions. Whether a platform hands out
+    # caption tracks at all varies between runs (yt-dlp gets rate-limited on
+    # them, see download.py), so letting captions win made the same command
+    # produce a different transcript on a re-run - and discard an expensive,
+    # already-computed Whisper result to do it. The cache is only consulted
+    # further down, so the check has to happen here, before captions are
+    # parsed. --fresh still forces a clean re-transcription.
+    seg_cache = seg_store or (work / "segments.json")
+    if dl.get("subtitle_path") and not args.fresh and seg_cache.exists():
+        print(
+            f"[transcribe] captions available but {seg_cache.name} exists - "
+            "keeping the cached transcript (--fresh re-transcribes)",
+            file=sys.stderr,
+        )
+    elif dl.get("subtitle_path"):
         try:
             all_segments = parse_vtt(dl["subtitle_path"])
             transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
@@ -807,7 +822,7 @@ def main() -> int:
     # <base>.segments.json and survives across runs - reprocessing the same
     # source skips the expensive STT step. With --no-save-md it falls back to
     # the ephemeral work dir. --fresh forces a clean re-transcription.
-    seg_cache = seg_store or (work / "segments.json")
+    # (seg_cache is resolved above, where captions are gated on it.)
     if not args.fresh and not transcript_segments and not args.no_whisper and seg_cache.exists():
         try:
             cached = json.loads(seg_cache.read_text(encoding="utf-8"))
