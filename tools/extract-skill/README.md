@@ -20,7 +20,7 @@ Die Versionierungs-Maschinerie war auf `.agents/skills/<name>/` als Pfadmuster v
 
 ## Ablauf
 
-Das Skript ist idempotent: ein vorhandenes Ziel wird neu konfiguriert statt erneut extrahiert, Remotes werden angelegt oder korrigiert statt gedoppelt, gelöscht wird nichts.
+Das Skript ist idempotent: ein vorhandenes Ziel wird neu konfiguriert statt erneut extrahiert, Remotes werden angelegt oder korrigiert statt gedoppelt, gelöscht wird nichts. Eine Neu-Extraktion verlangt bewusst, das Zielverzeichnis von Hand wegzuräumen.
 
 ```bash
 # 1. Probelauf — zeigt Pfade, Commit-Zahlen und Ziel, ohne etwas anzufassen

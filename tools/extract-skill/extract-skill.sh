@@ -20,11 +20,11 @@
 #
 # Desired-state throughout: an existing destination is reconfigured, never
 # re-extracted; remotes are added or corrected, never duplicated; nothing is
-# deleted without --force. Re-running after a partial run is safe.
+# deleted at all. Re-running after a partial run is safe.
 #
 # Usage:
 #   extract-skill.sh <name> [--dest DIR] [--origin URL] [--remote NAME=URL]...
-#                           [--also-path P]... [--embed] [--dry-run] [--force]
+#                           [--also-path P]... [--embed] [--dry-run]
 #
 # Example (transcribe -> FCI origin + GitHub mirror):
 #   tools/extract-skill/extract-skill.sh transcribe \
@@ -32,7 +32,7 @@
 #     --remote github=git@github.com:danielfrey63/transcribe.git \
 #     --also-path .agents/skills/watch
 
-APP_VERSION='0.2.4'
+APP_VERSION='0.3.5'
 set -eu
 
 SELF_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -44,7 +44,6 @@ DEST=''
 ORIGIN=''
 EMBED=''
 DRYRUN=''
-FORCE=''
 EXTRA_REMOTES=''   # newline-separated NAME=URL
 EXTRA_PATHS=''     # newline-separated historical paths
 
@@ -70,7 +69,6 @@ while [ $# -gt 0 ]; do
 }${2:?--also-path needs a path}"; shift 2 ;;
         --embed)     EMBED=1; shift ;;
         --dry-run)   DRYRUN=1; shift ;;
-        --force)     FORCE=1; shift ;;
         -*)          die "unknown option: $1 (see --help)" ;;
         *)           [ -z "$NAME" ] || die "only one skill name accepted"
                      NAME=$1; shift ;;
@@ -127,7 +125,7 @@ done
 printf '\n== extract ==\n'
 
 if [ -d "$DEST/.git" ]; then
-    info 'skip' "$DEST already is a git repo — reconfiguring only (--force + manual rm to redo)"
+    info 'skip' "$DEST already is a git repo — reconfiguring only (remove it by hand to re-extract)"
 elif [ -e "$DEST" ]; then
     die "$DEST exists but is not a git repo — move it aside first"
 else
