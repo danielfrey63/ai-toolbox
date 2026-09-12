@@ -76,6 +76,19 @@ MIN_DURATION_FOR_DENSITY = 6.0
 # the two are gated separately. Measured: collapsed runs peak at 89-93 c/s,
 # a clean run of the same recording at 19 c/s.
 MIN_DURATION_FOR_FLOOD = 0.4   # below this, the rate is division noise
+# Short segments need a second signal beyond the rate. Timestamps on 1-2 s
+# segments jitter by a few hundred ms, and that alone pushes a fast speaker
+# over MAX_CHARS_PER_SEC: a 37-minute finance video transcribed on the home
+# laptop produced 48 such segments (25 chars median, 32-41 c/s, none of them
+# repeated), which would have meant 34 repair windows and ~19 min of CPU
+# re-transcription only to be rejected by the content gate. The measured
+# collapses differ on one axis or the other: 93 c/s, or 83 chars packed into
+# 2 s. Below MIN_DURATION_FOR_DENSITY a segment therefore counts as flooded
+# only when the rate is far beyond speech OR it carries a whole sentence's
+# worth of text. The margins are real but thin - 77 chars was the largest
+# false positive - so re-measure on both data sets before moving either value.
+SHORT_FLOOD_CHARS_PER_SEC = 50.0
+SHORT_FLOOD_MIN_CHARS = 80
 MIN_CONTENT_RATIO = 0.6    # reject a rerun that lost this much real speech
 
 # A cross-transcript "same line repeated N times anywhere" rule was tried here
@@ -153,7 +166,11 @@ def find_suspects(segments: list[dict], language: str | None = None) -> list[dic
 
         if text and dur >= MIN_DURATION_FOR_FLOOD:
             cps = len(text) / dur
-            if cps > MAX_CHARS_PER_SEC:
+            if cps > MAX_CHARS_PER_SEC and (
+                dur >= MIN_DURATION_FOR_DENSITY
+                or cps >= SHORT_FLOOD_CHARS_PER_SEC
+                or len(text) >= SHORT_FLOOD_MIN_CHARS
+            ):
                 reasons.append(f"Textflut ({cps:.0f} Z/s über {dur:.1f}s)")
             elif dur >= MIN_DURATION_FOR_DENSITY and cps < MIN_CHARS_PER_SEC:
                 reasons.append(f"kaum Text ({cps:.1f} Z/s über {dur:.0f}s)")
@@ -457,6 +474,23 @@ SELFTEST_CASES = [
         "de",
         [{"start": 0.0, "end": 30.0, "text": "Ja."}],
         [0],
+    ),
+    (
+        # Distilled from a 37-minute finance video on the home laptop: VAD cuts
+        # a fast speaker into 1-2 s segments whose rate sits just above
+        # MAX_CHARS_PER_SEC (32-41 c/s) without any repetition. 48 of these
+        # were flagged before the short-segment gate existed.
+        "fast speaker in short VAD segments - rate alone must not flag",
+        "de",
+        [
+            {"start": 740.0, "end": 741.0,
+             "text": "Und deswegen habe ich auch geschrieben,"},
+            {"start": 676.0, "end": 678.0,
+             "text": "Das heisst, ich habe jetzt nicht einfach in der Analyse "
+                     "veröffentlicht, sondern"},
+            {"start": 818.0, "end": 818.7, "text": "www.finerofolio.de vorbei."},
+        ],
+        [],
     ),
     (
         "repetition loop inside one segment still flagged",
