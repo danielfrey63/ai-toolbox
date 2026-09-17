@@ -59,7 +59,9 @@ Defaults der Switches:
 - `--scope global` — `hook` ist per-Repo und braucht `--scope project`. **Ausnahme `install`:** ein Hook-Install ohne `--scope project` reinstalliert alle in der Registry erfassten Repos, jedes mit seinem aufgezeichneten Target (ein Befehl für Refresh/Migration nach einem Toolbox-Update).
 - `--project <cwd>` — Projekt-Root für `--scope project`; Default ist das aktuelle Verzeichnis.
 - `--target` — nötig, ausser die Auswahl besteht nur aus `hook`/`config`/`bin`.
-- `--tagstyle` — nur Hook-Installs; ungesetzt gilt `namespaced`, ein bestehender Repo-Wert bleibt beim Re-Install erhalten.
+- `--tagstyle` — nur Hook-Installs; `plain`, `namespaced` oder `auto`. Ungesetzt gilt `namespaced`, ein bestehender Repo-Wert bleibt beim Re-Install erhalten. `auto` zählt die versionierten Artefakte des Repos (`bump-version.sh --target` über alle getrackten Dateien) und wählt bei mehr als einem `namespaced`, sonst `plain`.
+- Hook-Installs setzen `--target` per Default auf `claude`, damit neben den Git-Hooks auch der Claude-Code-PostToolUse-Hook für die Bumps pro Edit eingerichtet wird. Registry-getriebene Re-Installs behalten das aufgezeichnete Target.
+- Nach einem Install mit explizitem `--what` prüft der Reconcile nur noch die betroffenen Einträge; alle übrigen bleiben unangetastet in der Registry. `--what all` sweept weiterhin vollständig.
 
 `reconcile` durchsucht die globalen Link-Ziele (Skills-Verzeichnisse je Target,
 `~/.claude`, `~/.local/bin`) nach Symlinks, die in dieses Repo zeigen, und trägt

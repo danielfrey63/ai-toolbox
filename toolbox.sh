@@ -24,7 +24,7 @@
 # Usage:
 #   toolbox.sh <install|status|remove> --target <claude|codex|agents|kilo>
 #              [--scope global|project] [--project PATH] [--what all|<name>|<type>]
-#              [--tagstyle plain|namespaced]
+#              [--tagstyle plain|namespaced|auto]
 #
 # Parameter families:
 #   scope   global (default; base = $HOME) | project (base = --project PATH,
@@ -33,7 +33,9 @@
 #   what    all (default) | a tool name | a tool type
 #
 # --tagstyle applies only to hook installs — it sets the repo's
-# bumpversion.tagstyle (plain = v<version> tags for a single-artifact repo).
+# bumpversion.tagstyle (plain = v<version> tags for a single-artifact repo);
+# `auto` derives it from the number of versioned artifacts in the repo.
+# Hook installs default to --target claude (per-edit PostToolUse bumps).
 #
 # Idempotent: install re-links cleanly, remove deletes only our own symlinks,
 # a foreign file/dir at the target is never clobbered.
@@ -41,7 +43,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.50.311'
+APP_VERSION='0.51.329'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -177,16 +179,22 @@ EOF
 
 _help_tagstyle() {
     cat <<'EOF'
---tagstyle <plain|namespaced>     Hook installs only.
+--tagstyle <plain|namespaced|auto>  Hook installs only.
   Sets the repo's `bumpversion.tagstyle` git config — determines how the
   versioning post-commit hook tags releases.
 
   plain        Tags `v<version>`           single-artifact repo (one app).
   namespaced   Tags `<name>/v<version>`    default if unset; for repos with
                                            multiple versioned artifacts.
+  auto         Count the repo's versioned artifacts (bump-version.sh --target
+               over every tracked file) and pick: >1 -> namespaced, else plain.
+               Scans the whole index, so it is slower than naming the style.
+
+  Hook installs default to --target claude, which adds the Claude Code
+  PostToolUse hook for per-edit BUILD bumps on top of the git hooks.
 
   Example:
-    toolbox install --what versioning-hooks --scope project --tagstyle plain
+    toolbox install --what versioning-hooks --scope project --tagstyle auto
 EOF
     _help_switches
 }
@@ -231,7 +239,7 @@ show_help() {
 # Print the catalog as a readable table — answers "what can I install?".
 print_catalog_list() {
     printf 'toolbox — available tools (%s)\n' "$CATALOG"
-    printf 'Usage: toolbox <install|status|remove|list|reconcile|validate> [--target claude|codex|agents|kilo] [--scope global|project] [--project PATH] [--what all|<name>|<type>] [--tagstyle plain|namespaced] [--all] [-h|--help]\n\n'
+    printf 'Usage: toolbox <install|status|remove|list|reconcile|validate> [--target claude|codex|agents|kilo] [--scope global|project] [--project PATH] [--what all|<name>|<type>] [--tagstyle plain|namespaced|auto] [--all] [-h|--help]\n\n'
     printf '  %-20s %-7s %s\n' NAME TYPE DESCRIPTION
     jq -r '.tools[] | [.name, .type, .description] | @tsv' "$CATALOG" \
         | while IFS=$(printf '\t') read -r n t d; do
@@ -493,6 +501,16 @@ WHAT=all
 TAGSTYLE=''
 ALL=''
 STATE=''
+# Set while a handler runs on behalf of a recorded registry entry rather than a
+# direct CLI invocation. Registry-driven runs must reproduce what was recorded
+# (a hook entry with target="" stays target=""), so the --target default below
+# applies to direct invocations only.
+REGISTRY_DRIVEN=''
+# When non-empty, registry_sweep verifies only entries whose tool name or type
+# matches, and passes every other entry through untouched. Used by the
+# post-install reconcile so an explicit `--what` does not print the whole
+# registry.
+SWEEP_FILTER=''
 while [ $# -gt 0 ]; do
     case "$1" in
         --scope|--target|--project|--what|--tagstyle)
@@ -530,7 +548,7 @@ case "$SCOPE" in
     *) printf 'toolbox: invalid --scope: %s\n' "$SCOPE" >&2; exit 2 ;;
 esac
 case "$TAGSTYLE" in
-    ''|plain|namespaced) ;;
+    ''|plain|namespaced|auto) ;;
     *) printf 'toolbox: invalid --tagstyle: %s\n' "$TAGSTYLE" >&2; exit 2 ;;
 esac
 [ -f "$CATALOG" ] || { printf 'toolbox: catalog not found: %s\n' "$CATALOG" >&2; exit 1; }
@@ -1293,8 +1311,9 @@ _hook_registry_reinstall() {
         printf '  [.] %-18s no registered repos yet — install into one with --scope project\n' "$name"
         return
     fi
-    local oscope=$SCOPE oproject=$PROJECT otarget=$TARGET
+    local oscope=$SCOPE oproject=$PROJECT otarget=$TARGET odriven=$REGISTRY_DRIVEN
     SCOPE=project
+    REGISTRY_DRIVEN=1
     while IFS= read -r entry; do
         [ -n "$entry" ] || continue
         proj=$(printf '%s' "$entry" | jq -r '.project')
@@ -1312,8 +1331,42 @@ _hook_registry_reinstall() {
     done <<EOF
 $entries
 EOF
-    SCOPE=$oscope PROJECT=$oproject TARGET=$otarget
+    SCOPE=$oscope PROJECT=$oproject TARGET=$otarget REGISTRY_DRIVEN=$odriven
     printf '  [i] %-18s %d registered repo(s) re-installed\n' "$name" "$n"
+}
+
+# Count the repo's versioned artifacts by asking bump-version.sh --target for
+# every tracked file and counting the distinct artifacts it resolves to. The
+# bumper stays the single authority on what "is an artifact" — this only tallies
+# its verdicts, so the two can never drift apart.
+_count_version_artifacts() {  # repo -> prints the count on stdout
+    local repo=$1 bump
+    bump="$REPO_ROOT/tools/bump-version.sh"
+    [ -f "$bump" ] || { printf 0; return; }
+    git -C "$repo" ls-files -z 2>/dev/null \
+        | while IFS= read -r -d '' f; do
+              bash "$bump" --target "$repo/$f" 2>/dev/null
+          done \
+        | sort -u | grep -c . || true
+}
+
+# Resolve --tagstyle auto against the repo. The rule mirrors what the styles
+# mean: more than one artifact needs the `<name>/v…` namespace to keep tags
+# apart, a single-artifact repo reads better as a plain `v…`. A repo with no
+# artifact yet counts as single — plain is the reversible choice.
+_resolve_tagstyle() {  # name repo -> echoes plain|namespaced, logs the reasoning
+    local name=$1 repo=$2 cnt
+    cnt=$(_count_version_artifacts "$repo")
+    cnt=${cnt:-0}
+    if [ "$cnt" -gt 1 ]; then
+        printf '  [i] %-18s --tagstyle auto: %s versioned artifacts -> namespaced\n' \
+            "$name" "$cnt" >&2
+        printf namespaced
+    else
+        printf '  [i] %-18s --tagstyle auto: %s versioned artifact(s) -> plain\n' \
+            "$name" "$cnt" >&2
+        printf plain
+    fi
 }
 
 handle_hook() {
@@ -1332,6 +1385,18 @@ handle_hook() {
         return
     }
     hd=$(_active_hooksdir "$prepo")
+    # A hook install without --target claude installs only the git hooks — the
+    # per-edit BUILD bumps (Claude Code PostToolUse) stay off, which is half the
+    # tool and is almost never what was meant. Default a direct invocation to
+    # claude; registry-driven re-installs keep the target they recorded.
+    # This has to happen before the install/remove split, not inside it: the
+    # default is what install records in the registry, so remove must derive
+    # the same target or its registry key would not match the entry.
+    if [ -z "$TARGET" ] && [ -z "$REGISTRY_DRIVEN" ] \
+       && { [ "$CMD" = install ] || [ "$CMD" = remove ]; }; then
+        TARGET=claude
+        [ "$CMD" = install ] && printf '  [i] %-18s --target defaulted to claude (per-edit bumps) — pass --target codex/agents to override\n' "$name"
+    fi
     case "$CMD" in
         install)
             # Migrate a legacy install: drop the core.hooksPath that pointed at
@@ -1355,17 +1420,19 @@ handle_hook() {
                 printf '  [=] %-18s post-commit block refreshed (%s)\n' "$name" "$hd/post-commit"
             fi
             curts=$(git -C "$prepo" config --local bumpversion.tagstyle 2>/dev/null || true)
-            if [ -n "$TAGSTYLE" ]; then
-                if [ "$curts" = "$TAGSTYLE" ]; then
-                    printf '  [=] %-18s bumpversion.tagstyle already %s\n' "$name" "$TAGSTYLE"
+            local wantts=$TAGSTYLE
+            [ "$wantts" = auto ] && wantts=$(_resolve_tagstyle "$name" "$prepo")
+            if [ -n "$wantts" ]; then
+                if [ "$curts" = "$wantts" ]; then
+                    printf '  [=] %-18s bumpversion.tagstyle already %s\n' "$name" "$wantts"
                 else
-                    git -C "$prepo" config --local bumpversion.tagstyle "$TAGSTYLE"
-                    printf '  [+] %-18s bumpversion.tagstyle -> %s\n' "$name" "$TAGSTYLE"
+                    git -C "$prepo" config --local bumpversion.tagstyle "$wantts"
+                    printf '  [+] %-18s bumpversion.tagstyle -> %s\n' "$name" "$wantts"
                 fi
             elif [ -n "$curts" ]; then
                 printf '  [i] %-18s bumpversion.tagstyle = %s\n' "$name" "$curts"
             else
-                printf '  [i] %-18s bumpversion.tagstyle = namespaced (default) — pass --tagstyle plain for a single-artifact repo\n' "$name"
+                printf '  [i] %-18s bumpversion.tagstyle = namespaced (default) — pass --tagstyle auto to derive it, or plain for a single-artifact repo\n' "$name"
             fi
             # The post-commit hook creates tags; push.followTags makes the
             # next `git push` carry them along, so tags never silently lag
@@ -1988,6 +2055,9 @@ _heal_hook_targets() {  # entries_json → healed_json
 registry_sweep() {
     local entries n i e tool type path mkt plg cmdname bin_src url inst links reqs kept='[]'
     local ghrepo relver assets sums
+    # Every handler below acts on a recorded entry, not on CLI flags — no
+    # handler may substitute its own default for what the registry says.
+    REGISTRY_DRIVEN=1
     # Heal five legacy registry pathologies in one pass:
     #   1. {value:[...], Count:n} hulls from PS 5.1 ConvertTo-Json on single-
     #      element arrays — flatten them into their inner entries.
@@ -2056,6 +2126,15 @@ registry_sweep() {
         SCOPE=$(printf '%s' "$e" | jq -r '.scope')
         TARGET=$(printf '%s' "$e" | jq -r '.target')
         PROJECT=$(printf '%s' "$e" | jq -r '.project')
+
+        # A filtered sweep verifies only the entries the caller asked about,
+        # but every other entry still has to survive into $kept — skipping it
+        # silently here would prune it from the registry.
+        if [ -n "$SWEEP_FILTER" ] \
+           && [ "$tool" != "$SWEEP_FILTER" ] && [ "$type" != "$SWEEP_FILTER" ]; then
+            kept=$(printf '%s' "$kept" | jq -c --argjson e "$e" '. + [$e]')
+            continue
+        fi
 
         STATE=gone
         case "$type" in
@@ -2352,6 +2431,11 @@ printf '%s\n' "$selected" | while IFS= read -r tool; do
         printf '  [.] %-18s --target kilo supports the skill type only — skipped (%s)\n' "$name" "$type"
         continue
     fi
+    # handle_hook may default an empty --target to claude. That default belongs
+    # to the hook entry (registry_add records it, so a later global re-install
+    # refreshes the PostToolUse hook too), but it must not bleed into the tools
+    # processed after it in the same run — hence save here, restore below.
+    _target_saved=$TARGET
     case "$type" in
         skill)  handle_skill "$name" "$path" ;;
         hook)   handle_hook "$name" "$path" ;;
@@ -2390,20 +2474,26 @@ printf '%s\n' "$selected" | while IFS= read -r tool; do
             continue
             ;;
     esac
+    _target_eff=$TARGET
+    TARGET=$_target_saved
     # Declarative preconditions: surface unmet requires on install/status.
     if [ "$CMD" != remove ]; then
         check_requires "$name" "$(printf '%s' "$tool" | jq -c '.requires // []')" || true
     fi
     case "$CMD" in
-        install) registry_add "$name" "$type" "$path" "$SCOPE" "$TARGET" "$PROJECT" ;;
-        remove)  registry_remove "$name" "$type" "$SCOPE" "$TARGET" "$PROJECT" ;;
+        install) registry_add "$name" "$type" "$path" "$SCOPE" "$_target_eff" "$PROJECT" ;;
+        remove)  registry_remove "$name" "$type" "$SCOPE" "$_target_eff" "$PROJECT" ;;
     esac
 done
 
-# install reconciles the whole registry afterwards — the same verification as
-# `status --all`, so stale entries are pruned on every install.
+# install reconciles the registry afterwards — the same verification as
+# `status --all`, so stale entries are pruned on every install. An explicit
+# --what narrows the reconcile to that tool (or type): installing one hook into
+# one repo should not bury its five lines under a full-registry report. With
+# --what all the sweep stays complete.
 if [ "$CMD" = install ]; then
-    printf '\n-- registry reconcile --\n'
+    [ "$WHAT" = all ] || SWEEP_FILTER=$WHAT
+    printf '\n-- registry reconcile --%s\n' "${SWEEP_FILTER:+ ($SWEEP_FILTER)}"
     CMD=status
     registry_sweep
 fi
