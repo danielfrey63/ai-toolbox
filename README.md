@@ -173,7 +173,8 @@ ai-toolbox/
 └── tools/
     ├── catalog.json             ← der Tool-Katalog
     ├── bump-version.{sh,ps1}    ← Versions-Bumper
-    └── githooks/                ← pre-commit / post-commit
+    ├── githooks/                ← pre-commit / post-commit
+    └── terminal-paste-probe/    ← Diagnose: verschluckte Pastes in TUI-Apps (ConPTY-Test, Raw-Input-Logger)
 ```
 
 Jedes Skript gibt es in bash **und** PowerShell — Linux/macOS wie Windows.
