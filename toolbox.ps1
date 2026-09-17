@@ -18,10 +18,12 @@
 # Usage:
 #   toolbox.ps1 <install|status|remove> --target <claude|codex|agents|kilo>
 #               [--scope global|project] [--project PATH] [--what all|<name>|<type>]
-#               [--tagstyle plain|namespaced]
+#               [--tagstyle plain|namespaced|auto]
 #
 # --tagstyle applies only to hook installs — it sets the repo's
-# bumpversion.tagstyle (plain = v<version> tags for a single-artifact repo).
+# bumpversion.tagstyle (plain = v<version> tags for a single-artifact repo);
+# `auto` derives it from the number of versioned artifacts in the repo.
+# Hook installs default to --target claude (per-edit PostToolUse bumps).
 #
 # Idempotent: install re-links cleanly, remove deletes only our own links,
 # a foreign file/dir at the target is never clobbered.
@@ -29,7 +31,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.47.287'
+$APP_VERSION = '0.48.304'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -136,16 +138,22 @@ Examples:
         }
         { $_ -in '--tagstyle', 'tagstyle' } {
             Write-Output @'
---tagstyle <plain|namespaced>     Hook installs only.
+--tagstyle <plain|namespaced|auto>  Hook installs only.
   Sets the repo's `bumpversion.tagstyle` git config — determines how the
   versioning post-commit hook tags releases.
 
   plain        Tags `v<version>`           single-artifact repo (one app).
   namespaced   Tags `<name>/v<version>`    default if unset; for repos with
                                            multiple versioned artifacts.
+  auto         Count the repo's versioned artifacts (bump-version.sh --target
+               over every tracked file) and pick: >1 -> namespaced, else plain.
+               Scans the whole index, so it is slower than naming the style.
+
+  Hook installs default to --target claude, which adds the Claude Code
+  PostToolUse hook for per-edit BUILD bumps on top of the git hooks.
 
   Example:
-    toolbox install --what versioning-hooks --scope project --tagstyle plain
+    toolbox install --what versioning-hooks --scope project --tagstyle auto
 '@
         }
         { $_ -in '--all', 'all' } {
@@ -179,7 +187,7 @@ Examples:
 # Print the catalog as a readable table — answers "what can I install?".
 function Show-CatalogList {
     Write-Output "toolbox — available tools ($Catalog)"
-    Write-Output 'Usage: toolbox <install|status|remove|list|reconcile|validate> [--target claude|codex|agents|kilo] [--scope global|project] [--project PATH] [--what all|<name>|<type>] [--tagstyle plain|namespaced] [--all] [-h|--help]'
+    Write-Output 'Usage: toolbox <install|status|remove|list|reconcile|validate> [--target claude|codex|agents|kilo] [--scope global|project] [--project PATH] [--what all|<name>|<type>] [--tagstyle plain|namespaced|auto] [--all] [-h|--help]'
     Write-Output ''
     Write-Output ('  {0,-20} {1,-7} {2}' -f 'NAME', 'TYPE', 'DESCRIPTION')
     foreach ($t in (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools) {
@@ -419,6 +427,15 @@ if ($Cmd -notin @('install', 'status', 'remove', 'list', 'reconcile', 'validate'
 # --- options ------------------------------------------------------------------
 $Scope = 'global'; $Target = ''; $Project = ''; $What = 'all'; $TagStyle = ''
 $All = $false; $State = ''
+# Set while a handler runs on behalf of a recorded registry entry rather than a
+# direct CLI invocation. Registry-driven runs must reproduce what was recorded
+# (a hook entry with target="" stays target=""), so the --target default in
+# Handle-Hook applies to direct invocations only.
+$RegistryDriven = $false
+# When non-empty, Registry-Sweep verifies only entries whose tool name or type
+# matches, and passes every other entry through untouched. Used by the
+# post-install reconcile so an explicit --what does not print the whole registry.
+$SweepFilter = ''
 $i = 1
 while ($i -lt $args.Count) {
     $opt = [string]$args[$i]
@@ -449,7 +466,7 @@ while ($i -lt $args.Count) {
 if ($Target -and $Target -notin @('claude', 'codex', 'agents', 'kilo')) {
     [Console]::Error.WriteLine("toolbox: invalid --target: $Target"); exit 2
 }
-if ($TagStyle -and $TagStyle -notin @('plain', 'namespaced')) {
+if ($TagStyle -and $TagStyle -notin @('plain', 'namespaced', 'auto')) {
     [Console]::Error.WriteLine("toolbox: invalid --tagstyle: $TagStyle"); exit 2
 }
 if ($Scope -eq 'project') {
@@ -1143,7 +1160,9 @@ function Invoke-HookRegistryReinstall([string]$name, [string]$path) {
         return
     }
     $oscope = $script:Scope; $oproject = $script:Project; $otarget = $script:Target
+    $odriven = $script:RegistryDriven
     $script:Scope = 'project'
+    $script:RegistryDriven = $true
     $n = 0
     foreach ($e in $entries) {
         if (-not (Test-Path -LiteralPath $e.project)) {
@@ -1159,7 +1178,25 @@ function Invoke-HookRegistryReinstall([string]$name, [string]$path) {
         $n++
     }
     $script:Scope = $oscope; $script:Project = $oproject; $script:Target = $otarget
+    $script:RegistryDriven = $odriven
     Write-Output "  [i] $name  $n registered repo(s) re-installed"
+}
+
+# Count the repo's versioned artifacts by asking bump-version.sh --target for
+# every tracked file and counting the distinct artifacts it resolves to. The
+# bumper stays the single authority on what "is an artifact" — this only tallies
+# its verdicts, so the two can never drift apart.
+function Get-VersionArtifactCount([string]$repo) {
+    $bump = Join-Path $RepoRoot 'tools/bump-version.sh'
+    if (-not (Test-Path -LiteralPath $bump)) { return 0 }
+    $files = @(git -C $repo ls-files 2>$null)
+    if ($files.Count -eq 0) { return 0 }
+    $seen = [System.Collections.Generic.HashSet[string]]::new()
+    foreach ($f in $files) {
+        $t = (bash $bump --target "$repo/$f" 2>$null)
+        if ($t) { [void]$seen.Add([string]$t) }
+    }
+    return $seen.Count
 }
 
 function Handle-Hook([string]$name, [string]$path) {
@@ -1173,6 +1210,19 @@ function Handle-Hook([string]$name, [string]$path) {
         [Console]::Error.WriteLine("  [!] $name  --project is not a git repo: $Project"); return
     }
     $hd = Get-ActiveHooksDir $prepo
+    # A hook install without --target claude installs only the git hooks — the
+    # per-edit BUILD bumps (Claude Code PostToolUse) stay off, which is half the
+    # tool and is almost never what was meant. Default a direct invocation to
+    # claude; registry-driven re-installs keep the target they recorded.
+    # This has to happen before the install/remove split, not inside it: the
+    # default is what install records in the registry, so remove must derive
+    # the same target or its registry key would not match the entry.
+    if (-not $Target -and -not $script:RegistryDriven -and $Cmd -in @('install', 'remove')) {
+        $script:Target = 'claude'
+        if ($Cmd -eq 'install') {
+            Write-Output "  [i] $name  --target defaulted to claude (per-edit bumps) — pass --target codex/agents to override"
+        }
+    }
     switch ($Cmd) {
         'install' {
             # Migrate a legacy install: drop the core.hooksPath that pointed at
@@ -1191,17 +1241,26 @@ function Handle-Hook([string]$name, [string]$path) {
             if ($vpost -eq 'added') { Write-Output "  [+] $name  post-commit block added -> $hd/post-commit"; $fresh = $true }
             else { Write-Output "  [=] $name  post-commit block refreshed ($hd/post-commit)" }
             $curts = (git -C $prepo config --local bumpversion.tagstyle 2>$null)
-            if ($TagStyle) {
-                if ($curts -eq $TagStyle) {
-                    Write-Output "  [=] $name  bumpversion.tagstyle already $TagStyle"
+            # Resolve --tagstyle auto here rather than in a helper: a helper
+            # that both writes progress and returns the style would emit both
+            # down the pipeline, and the caller would get an array.
+            $wantts = $TagStyle
+            if ($wantts -eq 'auto') {
+                $cnt = Get-VersionArtifactCount $prepo
+                $wantts = if ($cnt -gt 1) { 'namespaced' } else { 'plain' }
+                Write-Output "  [i] $name  --tagstyle auto: $cnt versioned artifact(s) -> $wantts"
+            }
+            if ($wantts) {
+                if ($curts -eq $wantts) {
+                    Write-Output "  [=] $name  bumpversion.tagstyle already $wantts"
                 } else {
-                    git -C $prepo config --local bumpversion.tagstyle $TagStyle
-                    Write-Output "  [+] $name  bumpversion.tagstyle -> $TagStyle"
+                    git -C $prepo config --local bumpversion.tagstyle $wantts
+                    Write-Output "  [+] $name  bumpversion.tagstyle -> $wantts"
                 }
             } elseif ($curts) {
                 Write-Output "  [i] $name  bumpversion.tagstyle = $curts"
             } else {
-                Write-Output "  [i] $name  bumpversion.tagstyle = namespaced (default) — pass --tagstyle plain for a single-artifact repo"
+                Write-Output "  [i] $name  bumpversion.tagstyle = namespaced (default) — pass --tagstyle auto to derive it, or plain for a single-artifact repo"
             }
             # The post-commit hook creates tags; push.followTags makes the
             # next `git push` carry them along, so tags never silently lag
@@ -1896,7 +1955,17 @@ function Registry-Sweep {
         return
     }
     $kept = @()
+    # Every handler below acts on a recorded entry, not on CLI flags — no
+    # handler may substitute its own default for what the registry says.
+    $script:RegistryDriven = $true
     foreach ($e in $entries) {
+        # A filtered sweep verifies only the entries the caller asked about,
+        # but every other entry still has to survive into $kept — skipping it
+        # silently here would prune it from the registry.
+        if ($SweepFilter -and $e.tool -ne $SweepFilter -and $e.type -ne $SweepFilter) {
+            $kept += $e
+            continue
+        }
         $script:Scope   = $e.scope
         $script:Target  = $e.target
         $script:Project = $e.project
@@ -2162,6 +2231,11 @@ foreach ($tool in $selected) {
         Write-Output "  [.] $($tool.name)  --target kilo supports the skill type only — skipped ($($tool.type))"
         continue
     }
+    # Handle-Hook may default an empty --target to claude. That default belongs
+    # to the hook entry (Registry-Add records it, so a later global re-install
+    # refreshes the PostToolUse hook too), but it must not bleed into the tools
+    # processed after it in the same run — hence save here, restore below.
+    $targetSaved = $Target
     switch ($tool.type) {
         'skill'  { Handle-Skill $tool.name $tool.path }
         'hook'   { Handle-Hook $tool.name $tool.path }
@@ -2176,23 +2250,30 @@ foreach ($tool in $selected) {
             [Console]::Error.WriteLine("  [!] $($tool.name)  unknown type `"$($tool.type)`"")
         }
     }
+    $targetEff = $Target
+    $script:Target = $targetSaved
     # Declarative preconditions: surface unmet requires on install/status.
     if ($Cmd -ne 'remove' -and $tool.requires) {
         [void](Test-Requires $tool.name $tool.requires)
     }
     if ($tool.type -in @('skill', 'hook', 'config', 'bin', 'plugin', 'repo', 'mcp', 'release', 'installer')) {
         if ($Cmd -eq 'install') {
-            Registry-Add $tool.name $tool.type $tool.path $Scope $Target $Project
+            Registry-Add $tool.name $tool.type $tool.path $Scope $targetEff $Project
         } elseif ($Cmd -eq 'remove') {
-            Registry-Remove $tool.name $tool.type $Scope $Target $Project
+            Registry-Remove $tool.name $tool.type $Scope $targetEff $Project
         }
     }
 }
 
-# install reconciles the whole registry afterwards — the same verification as
-# `status --all`, so stale entries are pruned on every install.
+# install reconciles the registry afterwards — the same verification as
+# `status --all`, so stale entries are pruned on every install. An explicit
+# --what narrows the reconcile to that tool (or type): installing one hook into
+# one repo should not bury its five lines under a full-registry report. With
+# --what all the sweep stays complete.
 if ($Cmd -eq 'install') {
-    Write-Output "`n-- registry reconcile --"
+    if ($What -ne 'all') { $script:SweepFilter = $What }
+    $suffix = if ($SweepFilter) { " ($SweepFilter)" } else { '' }
+    Write-Output "`n-- registry reconcile --$suffix"
     $script:Cmd = 'status'
     Registry-Sweep
 }
