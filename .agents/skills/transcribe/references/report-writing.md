@@ -63,6 +63,13 @@ Some frames *are* the content — an architecture diagram, a chart with the key 
 
 **Skip this step entirely when:** the source is audio-only (no frames), `--no-save-md` was used (no persistent dir to write into), or the video is pure talking-head with no diagrams/charts/slides worth extracting. Zero illustrations is a valid outcome — don't manufacture them.
 
+**Audio-only with user-supplied screenshots.** Meeting recordings are often audio-only, while the user drops screenshots of the shared screen (participant tiles, slides, Confluence pages, chat messages) into the same directory. They replace the missing frame evidence, so treat them like illustrations:
+
+1. **Read every image** in the directory and match it to the transcript window it belongs to (file mtime vs. recording start helps order them).
+2. **Rename to `<base> - <Inhalt>.png`** with `git mv` when tracked (e.g. `20260828-0900 - PM Diskussion - Kandidatenliste.png`). Generic names (`screenshot-01.png`, `image1.png`, `<date> - screenshot-NN.png`) are never kept — the name must say what the picture shows.
+3. **Embed each image once** where it carries the most weight (Setting und Teilnehmer for participant tiles, the matching Summary `### <Thema>` group otherwise), as `![<Alt>](<<file>>)` plus an italic `*Abb. — <caption>*` line.
+4. **Reference by content, not by number**, in Inventar, Details, Abdeckung and Resources («Rollentabelle-Screenshot», not «Screenshot-03»).
+
 Otherwise, from the frames already read:
 
 1. **Select the decisive frames.** Pick the ones carrying an illustration that *materially aids understanding* — diagrams, architecture/data-flow slides, charts, tables, screenshots with substantive content. `[CUT]` frames are the prime candidates (slides land on scene cuts). Exclude talking-head, transitions, decorative title cards, and anything redundant. Be selective: typically **3–10** for a talk, often fewer.
