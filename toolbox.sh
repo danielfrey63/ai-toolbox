@@ -43,7 +43,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.51.329'
+APP_VERSION='0.52.334'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -1028,43 +1028,67 @@ EOF
 # foreign PostToolUse hooks survive a remove.
 #
 # Heuristic:
-#   1. command-string contains 'bump-version.sh'
-#   2. the script behind that path carries an `APP_VERSION=` declaration at
-#      line start (the AI-Toolbox self-marker). Skipped if the file isn't
-#      reachable, so re-installs after a repo move still match on stage 1.
+#   1. command-string contains 'bump-version' (the on-PATH launcher, or the
+#      pre-launcher form that named bump-version.sh by path)
+#   2. the toolbox's bump-version.sh carries an `APP_VERSION=` declaration at
+#      line start (the AI-Toolbox self-marker).
 
-# Canonical command we install — sibling-of-project layout (<prepo>/../ai-toolbox).
+# Canonical command we install: the path-free `bump-version` launcher on PATH
+# (~/.local/bin, generated per machine by _ensure_launchers — the same
+# mechanism the git-hook shim line uses). The earlier form hard-coded the
+# sibling-of-project layout ("$(git rev-parse --show-toplevel)/../ai-toolbox/
+# tools/bump-version.sh") and silently broke in every repo that is not next to
+# the toolbox: umbrella submodules, worktrees, repos under another root.
 _claude_hook_command() {  # void → string
-    printf 'bash "$(git rev-parse --show-toplevel)/../ai-toolbox/tools/bump-version.sh"'
+    printf 'bump-version'
 }
 
-# Stage-2 marker check on the referenced bumper script.
-_claude_hook_verify_marker() {  # prepo
-    local guess="$1/../ai-toolbox/tools/bump-version.sh"
-    [ -f "$guess" ] || return 0   # unreachable → accept stage-1 alone
-    grep -qE '^\$?APP_VERSION[[:space:]]*=' "$guess"
+# Stage-2 marker check on the toolbox's bumper script.
+_claude_hook_verify_marker() {  # prepo (unused — kept for the call shape)
+    local script="$REPO_ROOT/tools/bump-version.sh"
+    [ -f "$script" ] || return 0   # unreachable → accept stage-1 alone
+    grep -qE '^\$?APP_VERSION[[:space:]]*=' "$script"
 }
 
-# Idempotent install of our PostToolUse:Edit|Write hook.
+# First bump-version command in the project's PostToolUse hooks, or empty.
+_claude_hook_current() {  # prepo → string
+    jq -r '
+        [ (.hooks.PostToolUse // [])[] | (.hooks // [])[] | .command | tostring
+          | select(test("bump-version")) ] | .[0] // empty
+    ' "$1/.claude/settings.json" 2>/dev/null
+}
+
+# Idempotent install of our PostToolUse:Edit|Write hook. A pre-launcher entry
+# (sibling path) is migrated in place; any other custom bump-version command
+# is left alone.
 _claude_hook_install() {  # name prepo
     local name=$1 prepo=$2
     local settings="$prepo/.claude/settings.json"
     mkdir -p "$prepo/.claude"
     [ -f "$settings" ] || printf '{}\n' > "$settings"
-    local present
-    present=$(jq -r '
-        (.hooks.PostToolUse // [])
-        | map(select(((.hooks // [])
-                      | map(select(.command | tostring | test("bump-version\\.sh")))
-                      | length) > 0))
-        | length
-    ' "$settings" 2>/dev/null) || present=0
-    if [ "${present:-0}" -ge 1 ]; then
+    local cmd tmp current
+    cmd=$(_claude_hook_command)
+    current=$(_claude_hook_current "$prepo")
+    if [ "$current" = "$cmd" ]; then
         printf '  [=] %-18s claude PostToolUse already present\n' "$name"
         return 0
     fi
-    local cmd tmp
-    cmd=$(_claude_hook_command)
+    if [ -n "$current" ]; then
+        case "$current" in
+            *'/../ai-toolbox/tools/bump-version.sh'*)
+                tmp=$(jq --arg old "$current" --arg cmd "$cmd" '
+                    .hooks.PostToolUse |= map(
+                        .hooks |= map(if (.command | tostring) == $old then .command = $cmd else . end))
+                ' "$settings") || return 1
+                printf '%s\n' "$tmp" > "$settings"
+                printf '  [~] %-18s claude PostToolUse migrated to the path-free launcher (%s)\n' "$name" "$settings"
+                ;;
+            *)
+                printf '  [=] %-18s claude PostToolUse already present (custom command kept: %s)\n' "$name" "$current"
+                ;;
+        esac
+        return 0
+    fi
     tmp=$(jq --arg cmd "$cmd" '
         .hooks = (.hooks // {})
         | .hooks.PostToolUse = ((.hooks.PostToolUse // []) + [{
@@ -1084,7 +1108,7 @@ _claude_hook_state() {  # prepo → string
     match=$(jq -r '
         (.hooks.PostToolUse // [])
         | map(select(((.hooks // [])
-                      | map(select(.command | tostring | test("bump-version\\.sh")))
+                      | map(select(.command | tostring | test("bump-version")))
                       | length) > 0))
         | length
     ' "$settings" 2>/dev/null) || match=0
@@ -1105,7 +1129,7 @@ _claude_hook_remove() {  # name prepo
         if .hooks.PostToolUse then
             .hooks.PostToolUse |= map(
                 select(((.hooks // [])
-                        | map(select(.command | tostring | test("bump-version\\.sh")))
+                        | map(select(.command | tostring | test("bump-version")))
                         | length) == 0)
             )
             | if (.hooks.PostToolUse | length) == 0 then del(.hooks.PostToolUse) else . end
@@ -1192,15 +1216,32 @@ _is_legacy_hookpath() {  # prepo → 0/1
     [ -n "$cur" ] && _same_hookpath "$cur" "$REPO_ROOT/tools/githooks"
 }
 
-# Active hooks dir of a repo: core.hooksPath if set (absolute kept as-is, a
-# relative value resolved against the repo), else the default .git/hooks. We
-# follow whatever the repo already uses, so we coexist with husky/lefthook/etc.
-# A legacy core.hooksPath that points at our shared toolbox dir is treated as
-# unset (→ .git/hooks) so we never write our block into the toolbox itself.
+# Active hooks dir of a repo — what git itself will run: core.hooksPath if set
+# (absolute or repo-relative), else the repo's real hooks dir. Asking git
+# (`rev-parse --git-path hooks`) matters for worktrees and submodules, where
+# `.git` is a file and the hooks live in the common dir (.git/worktrees/… share
+# the main repo's hooks, submodules keep theirs in <umbrella>/.git/modules/…);
+# "<prepo>/.git/hooks" does not exist there. We follow whatever the repo
+# already uses, so we coexist with husky/lefthook/etc. A legacy core.hooksPath
+# that points at our shared toolbox dir is treated as unset so we never write
+# our block into the toolbox itself. --path-format needs git ≥ 2.31; older
+# gits fall back to the config-only resolution.
 _active_hooksdir() {  # prepo → abspath
-    local prepo=$1 cur
+    local prepo=$1 dir cur
+    if _is_legacy_hookpath "$prepo"; then
+        if dir=$(git -C "$prepo" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && [ -n "$dir" ]; then
+            printf '%s/hooks' "$dir"
+        else
+            printf '%s/.git/hooks' "$prepo"
+        fi
+        return
+    fi
+    if dir=$(git -C "$prepo" rev-parse --path-format=absolute --git-path hooks 2>/dev/null) && [ -n "$dir" ]; then
+        printf '%s' "$dir"
+        return
+    fi
     cur=$(git -C "$prepo" config --local core.hooksPath 2>/dev/null || true)
-    if [ -n "$cur" ] && ! _same_hookpath "$cur" "$REPO_ROOT/tools/githooks"; then
+    if [ -n "$cur" ]; then
         case "$cur" in
             /*|[A-Za-z]:[/\\]*) printf '%s' "$cur" ;;
             *) printf '%s/%s' "$prepo" "$cur" ;;

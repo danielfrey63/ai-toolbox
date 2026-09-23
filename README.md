@@ -97,7 +97,7 @@ Skills, Agents, Scripts, Plugins und `CLAUDE.md`.
 
 `toolbox install` schreibt **keine** `core.hooksPath`-Umleitung mehr, sondern eine
 einzelne, markierte Shim-Zeile in die `pre-commit`/`post-commit` des aktiven
-Hook-Verzeichnisses (`.git/hooks` bzw. ein vorhandenes `core.hooksPath`-Ziel):
+Hook-Verzeichnisses. Welches das ist, sagt Git selbst (`git rev-parse --git-path hooks`): ein vorhandenes `core.hooksPath`-Ziel, sonst das echte Hook-Verzeichnis des Repos. Bei Worktrees und Submodulen ist `.git` eine Datei und die Hooks liegen im Common-Dir (`<hauptrepo>/.git/hooks` bzw. `<umbrella>/.git/modules/<name>/hooks`); auch dort landet die Zeile am richtigen Ort.
 
 ```sh
 toolbox-bump pre-commit   # ai-toolbox:versioning-hooks (managed - do not edit)
@@ -110,6 +110,8 @@ wie Windows-git-bash). Bestehende Hooks im selben File bleiben unangetastet —
 entfernt/aktualisiert wird nur die markierte Zeile. Die eigentliche Bump-Logik
 liegt zentral in der Toolbox; ein `git pull` dort propagiert Verbesserungen an
 alle Repos automatisch.
+
+Der Claude-Code-PostToolUse-Hook in `<repo>/.claude/settings.json` folgt demselben Prinzip: sein Befehl ist schlicht `bump-version`, der zweite Launcher aus `~/.local/bin`. Die frühere Form `bash "$(git rev-parse --show-toplevel)/../ai-toolbox/tools/bump-version.sh"` setzte voraus, dass die Toolbox neben dem Repo liegt, und brach still in jedem anderen Layout (Submodule eines Umbrella-Repos, Worktrees, Repos unter einem anderen Wurzelverzeichnis). Ein Re-Install migriert die alte Form in place (`[~] … migrated to the path-free launcher`); da `settings.json` versioniert ist, gehört die Änderung danach committet.
 
 **Build-Outputs ausnehmen:** Abgeleitete Dateien, die eine `APP_VERSION` nur als Kopie der Quelle tragen (z.B. ein Single-File-Bundle `index.html`, das `build.js` aus `index.template.html` erzeugt), markiert das Repo in `.gitattributes` mit `index.html -bump`. Der Bumper (`bump-version.sh`/`.ps1`) behandelt sie dann nie als Artefakt — weder der Per-Edit- noch der Pre-Commit-Hook fasst sie an, und im Commit-Log erscheint nur noch die Quelle.
 

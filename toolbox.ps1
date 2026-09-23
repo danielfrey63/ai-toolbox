@@ -31,7 +31,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.48.304'
+$APP_VERSION = '0.49.310'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -857,16 +857,36 @@ function Show-ReadmeHint {
 
 # ── Claude-Code PostToolUse helpers (used by Handle-Hook when --target claude) ──
 # Mirror of the Bash helpers in toolbox.sh — same two-stage heuristic:
-#   1. command-string contains 'bump-version.sh'
-#   2. the script behind that path carries an APP_VERSION= declaration at line
+#   1. command-string contains 'bump-version' (the on-PATH launcher, or the
+#      pre-launcher form that named bump-version.sh by path)
+#   2. the toolbox's bump-version.sh carries an APP_VERSION= declaration at line
 #      start (the AI-Toolbox self-marker). Skipped if the file is unreachable.
 
-function Get-ClaudeHookCommand { 'bash "$(git rev-parse --show-toplevel)/../ai-toolbox/tools/bump-version.sh"' }
+# Canonical command: the path-free `bump-version` launcher on PATH (~/.local/bin,
+# generated per machine by Ensure-Launchers — the same mechanism the git-hook shim
+# line uses). The earlier sibling-of-project form broke in every repo that is not
+# next to the toolbox (umbrella submodules, worktrees, repos under another root).
+function Get-ClaudeHookCommand { 'bump-version' }
 
 function Test-ClaudeHookMarker([string]$prepo) {
-    $guess = Join-Path $prepo '../ai-toolbox/tools/bump-version.sh'
-    if (-not (Test-Path -LiteralPath $guess)) { return $true }   # unreachable → accept stage-1
-    return [bool](Select-String -LiteralPath $guess -Pattern '^\$?APP_VERSION\s*=' -Quiet)
+    $script = Join-Path $RepoRoot 'tools/bump-version.sh'
+    if (-not (Test-Path -LiteralPath $script)) { return $true }   # unreachable → accept stage-1
+    return [bool](Select-String -LiteralPath $script -Pattern '^\$?APP_VERSION\s*=' -Quiet)
+}
+
+# First bump-version command in the project's PostToolUse hooks, or $null.
+function Get-ClaudeHookCurrent([string]$prepo) {
+    $json = _Read-ClaudeSettings $prepo
+    if (-not $json -or -not $json.PSObject.Properties.Match('hooks').Count -or
+        -not $json.hooks.PSObject.Properties.Match('PostToolUse').Count) { return $null }
+    foreach ($entry in @($json.hooks.PostToolUse)) {
+        if ($entry.PSObject.Properties.Match('hooks').Count) {
+            foreach ($h in @($entry.hooks)) {
+                if ("$($h.command)" -match 'bump-version') { return "$($h.command)" }
+            }
+        }
+    }
+    return $null
 }
 
 function _Read-ClaudeSettings([string]$prepo) {
@@ -899,17 +919,38 @@ function Get-ClaudeHookState([string]$prepo) {
     foreach ($entry in @($json.hooks.PostToolUse)) {
         if ($entry.PSObject.Properties.Match('hooks').Count) {
             foreach ($h in @($entry.hooks)) {
-                if ($h.command -match 'bump-version\.sh') { return 'yes' }
+                if ($h.command -match 'bump-version') { return 'yes' }
             }
         }
     }
     return 'no'
 }
 
-# Idempotent install of our PostToolUse:Edit|Write hook.
+# Idempotent install of our PostToolUse:Edit|Write hook. A pre-launcher entry
+# (sibling path) is migrated in place; any other custom bump-version command is
+# left alone.
 function Install-ClaudeHook([string]$name, [string]$prepo) {
-    if ((Get-ClaudeHookState $prepo) -eq 'yes') {
+    $cmd = Get-ClaudeHookCommand
+    $current = Get-ClaudeHookCurrent $prepo
+    if ($current -eq $cmd) {
         Write-Output "  [=] $name  claude PostToolUse already present"
+        return
+    }
+    if ($current) {
+        if ($current -like '*/../ai-toolbox/tools/bump-version.sh*') {
+            $json = _Read-ClaudeSettings $prepo
+            foreach ($entry in @($json.hooks.PostToolUse)) {
+                if (-not $entry.PSObject.Properties.Match('hooks').Count) { continue }
+                foreach ($h in @($entry.hooks)) {
+                    if ("$($h.command)" -eq $current) { $h.command = $cmd }
+                }
+            }
+            _Write-ClaudeSettings $prepo $json
+            $settings = Join-Path $prepo '.claude/settings.json'
+            Write-Output "  [~] $name  claude PostToolUse migrated to the path-free launcher ($settings)"
+        } else {
+            Write-Output "  [=] $name  claude PostToolUse already present (custom command kept: $current)"
+        }
         return
     }
     $json = _Read-ClaudeSettings $prepo
@@ -950,7 +991,7 @@ function Remove-ClaudeHook([string]$name, [string]$prepo) {
         $hasOurs = $false
         if ($entry.PSObject.Properties.Match('hooks').Count) {
             foreach ($h in @($entry.hooks)) {
-                if ($h.command -match 'bump-version\.sh') { $hasOurs = $true; break }
+                if ($h.command -match 'bump-version') { $hasOurs = $true; break }
             }
         }
         if (-not $hasOurs) { $kept += $entry }
@@ -1055,12 +1096,24 @@ function Test-LegacyHookPath([string]$prepo) {
     return [bool]($cur -and (Test-SamePath $cur (Join-Path $RepoRoot 'tools/githooks')))
 }
 
-# Active hooks dir: core.hooksPath if set (and not our shared toolbox dir), else
-# the default .git/hooks. A legacy pointer at the toolbox dir is treated as unset
-# so we never write our block into the toolbox itself.
+# Active hooks dir — what git itself will run: core.hooksPath if set (absolute
+# or repo-relative), else the repo's real hooks dir. Asking git (`rev-parse
+# --git-path hooks`) matters for worktrees and submodules, where `.git` is a file
+# and the hooks live in the common dir; "<prepo>/.git/hooks" does not exist
+# there. A legacy pointer at the toolbox dir is treated as unset so we never
+# write our block into the toolbox itself. --path-format needs git >= 2.31;
+# older gits fall back to the config-only resolution.
 function Get-ActiveHooksDir([string]$prepo) {
     $cur = (git -C $prepo config --local core.hooksPath 2>$null)
-    if ($cur -and -not (Test-SamePath $cur (Join-Path $RepoRoot 'tools/githooks'))) {
+    $legacy = [bool]($cur -and (Test-SamePath $cur (Join-Path $RepoRoot 'tools/githooks')))
+    if ($legacy) {
+        $common = (git -C $prepo rev-parse --path-format=absolute --git-common-dir 2>$null)
+        if ($common) { return (Join-Path $common 'hooks') }
+        return (Join-Path $prepo '.git/hooks')
+    }
+    $dir = (git -C $prepo rev-parse --path-format=absolute --git-path hooks 2>$null)
+    if ($dir) { return $dir }
+    if ($cur) {
         if ([System.IO.Path]::IsPathRooted($cur)) { return $cur }
         return (Join-Path $prepo $cur)
     }
