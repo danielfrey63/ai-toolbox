@@ -22,6 +22,8 @@ Narrative writing reliably drops entities that the video mentioned only in passi
 
   If only one of the two holds, the mapping is **medium-confidence**; if only weak / circumstantial evidence (a single off-hand name, no avatar), it's **low-confidence** — keep the bare letter in the transcript later. Mark medium / low explicitly with `(?)` in the entry so the post-analysis step can tell which labels to leave alone.
 
+  **Every label that stays unresolved is an open question, not a dead end.** Carry it into the `### Offene Sprecherzuordnung` subsection at the end of Analysis (see below), where the reader can close it in one pass. Silently dropping an unattributed contribution loses exactly the input that questions, objections, and decisions tend to arrive in.
+
   **Canonical name format**:
   - Default: **first name only** (`Andrea`, `Urs`, `Maurice`).
   - On collision (two speakers with the same first name): append the shortest unique surname prefix that disambiguates, with a single space — `Andrea B` vs `Andrea T`. If the first letters also collide, extend by one letter at a time until unique (`Andrea Br` vs `Andrea Bo`). Never include the full surname — first names are what people actually use in conversation; the surname prefix is just a disambiguator.
@@ -155,7 +157,7 @@ The Summary is the reader's main entry point — it must stand alone. A busy rea
 
 ## Analysis (top-level section, comes third)
 
-Synthesized, judgmental layer on top of Übersicht + Summary. Six subsections in order:
+Synthesized, judgmental layer on top of Übersicht + Summary. Seven subsections in order:
 
 ### Inventar (canonical names + Konsistenz-Check variants)
 
@@ -189,6 +191,24 @@ This section is the audit mechanism, not the highlight. Keep it dry and short. I
 
 ### Resources
 When relevant, surface the most useful entries from `## Resources` (Projects + Docs especially) — the concrete things a viewer can click on after watching. Skip this section if the resources are thin or off-topic.
+
+**Read the links off the screen, not just out of the audio.** Presenters rarely dictate a URL, but they show it: the browser address bar while walking through a Confluence page, a Jira key in a tab title or slide footer, a page ID in a wiki link, a share/UNC path in an explorer window, a database connection name in a SQL client. During the frame pass, collect every such reference with the `[MM:SS]` of the frame it was read from — that timestamp is the evidence, so the reader can check the frame instead of trusting the OCR-by-eye. Rules:
+
+- **Verbatim from the frame**, hostname and path included (`confluence.sbb.ch/spaces/DFA/pages/3866788910/...`). Do not reconstruct a URL from a page title you only heard — list the title instead and mark it `(gehört, nicht gesehen)`.
+- **Strip session state.** Deep links whose only distinguishing part is a session or object GUID (`...dlg.aspx?id=<guid>`) are not reusable; keep the host and endpoint, drop the GUID, say why.
+- **Tickets and pages named only in speech** (`Story 1663`, `die Berechtigungsseite`) go in as spoken, tagged `nicht verifiziert` until someone resolves them against the tracker. Never guess a project key.
+- **Name resolution counts as content**: if a page ID and a page title were seen together, keep both — the ID survives renames, the title survives space moves.
+
+### Offene Sprecherzuordnung
+*(only if the transcript carries speaker labels and at least one label — or one cluster of a split speaker — stayed unresolved after the Personen & Stimmen pass)*
+
+This is the reader's worklist: every contribution the report could not attribute, in one table, so the person who was in the room can close the gaps in a single pass and the transcript can be corrected afterwards. One row per contribution (not per label — a label may hold several distinct remarks, and a diarizer on a room microphone routinely splits one person into several labels):
+
+| Zeit | Wortmeldung | Label | Kandidaten |
+|---|---|---|---|
+| `[MM:SS]` | short verbatim quote — enough to recognise the moment, not the whole turn | `SPEAKER_NN` | who it could be, from the participant list |
+
+Lead with one sentence naming the pool of possible speakers (participants minus the presenter, with any known constraint such as "remote until ~16:00"), then the table, then flag the rows that matter for the record — a question that triggered a decision, an objection, a commitment — so the reader closes those first. Do not fold this into Details or Abdeckung: those are about content coverage; this is about attribution.
 
 ## Report layout (append to `<base>.md`)
 
@@ -233,5 +253,12 @@ any Whisper-misrecognized terms; skip empty category headings>
 the "alle berücksichtigt"-line>
 
 ### Resources
-<curated subset of the ## Resources extracted in protocol.md, if relevant>
+<curated subset of the ## Resources extracted in protocol.md, plus every URL /
+page ID / ticket key / share path read off the frames, each with the [MM:SS]
+it was seen at; heard-only references tagged «nicht verifiziert»>
+
+### Offene Sprecherzuordnung
+<only with unresolved speaker labels: pool of candidates in one sentence, then
+one table row per unattributed contribution — [MM:SS] | quote | label |
+candidates — and a pointer to the rows that carry a decision or commitment>
 ```
