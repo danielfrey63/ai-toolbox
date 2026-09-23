@@ -67,6 +67,10 @@ Some frames *are* the content — an architecture diagram, a chart with the key 
 
 **Skip this step entirely when:** the source is audio-only (no frames), `--no-save-md` was used (no persistent dir to write into), or the video is pure talking-head with no diagrams/charts/slides worth extracting. Zero illustrations is a valid outcome — don't manufacture them.
 
+**The spec is the only way an illustration comes into being.** Never crop frames by hand with ffmpeg or Pillow, however quick it looks: a hand-made PNG has no spec, no manifest, no dedup, no SUSPECT check and no way to be regenerated — and it skips the QS list below, which is how a whole set of screen-share crops once shipped with the browser tab bar and the Windows taskbar still on them. If a crop needs something the script cannot do, extend the script (as `redact` was added for user lists) rather than stepping around it.
+
+**Screen-share recordings: the content is the app window, never the screen.** A Teams/Zoom share of a browser or desktop app carries chrome that is not content and must stay outside the bbox: the browser's tab bar and address bar (top ~12–14 % of a 1080p frame), the OS taskbar (bottom ~5 %), the meeting client's participant strip or camera tiles (right or bottom ~13 %), window title bars and the meeting toolbar. Start the bbox at the app's content area and let the margin-trim take only uniform borders from there — it will not remove chrome for you. Confluence pages, SQL clients, Delphi masks and Omada dialogs all follow the same rule: page body, editor pane, dialog body.
+
 **Audio-only with user-supplied screenshots.** Meeting recordings are often audio-only, while the user drops screenshots of the shared screen (participant tiles, slides, Confluence pages, chat messages) into the same directory. They replace the missing frame evidence, so treat them like illustrations:
 
 1. **Read every image** in the directory and match it to the transcript window it belongs to (file mtime vs. recording start helps order them).
@@ -94,7 +98,7 @@ Otherwise, from the frames already read:
    [ { "id": 1, "timestamp": 734.0, "bbox": [0.08, 0.12, 0.84, 0.76],
        "caption": "Zielarchitektur DfA-GIS", "type": "Architektur" } ]
    ```
-   `timestamp` is in seconds (the absolute `t=` of the frame). `<base>` is the report base (the `.md` stem from the header's saved-files lines).
+   `timestamp` is in seconds (the absolute `t=` of the frame). `<base>` is the report base (the `.md` stem from the header's saved-files lines). An optional `"redact": [[x, y, w, h], …]` (same normalized frame coordinates as `bbox`) blacks out regions **before** the crop — user lists with real names, IDs, e-mail addresses in a permissions mask. Say in the caption that the list is redacted. This keeps personal data out of the repo without a hand-edited PNG.
 6. **Run the cropper**, passing the `**Video file:**` path from the report header verbatim:
    ```bash
    python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" \

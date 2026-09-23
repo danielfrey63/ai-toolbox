@@ -26,7 +26,8 @@ Spec JSON (list):
 
 `bbox` is [x, y, w, h] normalized to 0..1 (resolution-independent, so the
 model's rough box works regardless of the source frame size). Omit `bbox`
-to keep the whole frame.
+to keep the whole frame. An optional `"redact": [[x, y, w, h], ...]` in the
+same coordinates blacks out regions before the crop (user lists, IDs).
 
 Idempotent: the spec is the desired state. Re-running with the same spec
 clears prior `ill_*.png` and reproduces identical output.
@@ -83,12 +84,24 @@ def _normalize_bbox(bbox: "list | None") -> tuple[float, float, float, float]:
     return x, y, w, h
 
 
-def _crop_one(ffmpeg: str, video: str, t: float, bbox, out_path: Path) -> bool:
-    """Single ffmpeg fast-seek + native-resolution crop to PNG. True on success."""
+def _crop_one(ffmpeg: str, video: str, t: float, bbox, out_path: Path, redact=None) -> bool:
+    """Single ffmpeg fast-seek + native-resolution crop to PNG. True on success.
+
+    `redact` is a list of normalized frame boxes blacked out *before* the
+    crop - user lists, IDs and addresses in a permissions mask must not reach
+    the repo, and a hand-edited PNG cannot be regenerated. Same coordinate
+    space as `bbox`, so the model marks both from the same frame."""
     x, y, w, h = _normalize_bbox(bbox)
+    filters = []
+    for box in redact or []:
+        rx, ry, rw, rh = _normalize_bbox(box)
+        filters.append(
+            f"drawbox=x=in_w*{rx:.5f}:y=in_h*{ry:.5f}:w=in_w*{rw:.5f}:h=in_h*{rh:.5f}:color=black:t=fill"
+        )
     # crop=W:H:X:Y with in_w/in_h expressions -> crop happens at native size,
     # no scaling, so on-screen text stays crisp.
-    crop = f"crop=in_w*{w:.5f}:in_h*{h:.5f}:in_w*{x:.5f}:in_h*{y:.5f}"
+    filters.append(f"crop=in_w*{w:.5f}:in_h*{h:.5f}:in_w*{x:.5f}:in_h*{y:.5f}")
+    crop = ",".join(filters)
     cmd = [
         ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
         *cpu.ffmpeg_flags(),
@@ -445,7 +458,7 @@ def main() -> int:
         slug = _slug(caption or etype)
         name = f"ill_{eid:02d}_t{int(t):05d}" + (f"_{slug}" if slug else "") + ".png"
         path = out_dir / name
-        if _crop_one(ffmpeg, video, t, entry.get("bbox"), path):
+        if _crop_one(ffmpeg, video, t, entry.get("bbox"), path, entry.get("redact")):
             items.append({
                 "id": eid, "timestamp": round(t, 2), "timestamp_label": _fmt_ts(t),
                 "caption": caption, "type": etype, "_path": str(path),

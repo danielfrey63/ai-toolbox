@@ -224,7 +224,7 @@ Write the full three-section report (`## Übersicht`, `## Summary`, `## Analysis
 
 Append (don't overwrite) — the stub header above stays intact. For URL sources without `--save-md`, skip this step entirely and just answer in chat.
 
-**Embed the key illustrations (if Step 4 produced any).** For each entry in `<base>.illustrations/manifest.json`, drop a Markdown image at the most relevant spot in the report — usually inside the Summary `### <Thema>` group whose topic the illustration depicts, or right under the Chapter-Struktur entry it belongs to. Use a **relative** path so the `.md` stays portable, and the manifest's caption + timestamp:
+**Embed the key illustrations (if Step 4 produced any).** Illustrations exist only as output of `illustrate.py` driven by `<base>.illustrations.spec.json` — never as hand-cropped frames (no spec means no manifest, no dedup, no QS, no reproducibility; the spec's `bbox` is also what keeps browser chrome and the OS taskbar out, and its `redact` boxes what keeps user lists out). For each entry in `<base>.illustrations/manifest.json`, drop a Markdown image at the most relevant spot in the report — usually inside the Summary `### <Thema>` group whose topic the illustration depicts, or right under the Chapter-Struktur entry it belongs to. Use a **relative** path so the `.md` stays portable, and the manifest's caption + timestamp:
 
 ```markdown
 ![Zielarchitektur DfA-GIS](<base>.illustrations/ill_01_t00734_zielarchitektur-dfa-gis.png)
