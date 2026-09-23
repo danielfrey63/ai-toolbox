@@ -242,7 +242,16 @@ def prefill(title: str, segments: list[dict], ocr: dict | None, vtt_path: Path |
             f"| {st['label']} | {fmt_ts(st['seconds'])} ({st['share']:.0%}) | {st['turns']} | "
             f"[{fmt_ts(st['first'])}]–[{fmt_ts(st['last'])}] | {name} | {conf} | {ev} |"
         )
-    lines += ["", "## Participants", ""]
+    lines += [
+        "", "## Overrides", "",
+        "_One row per transcript block that someone who was in the room attributes by hand - for the "
+        "contributions a shared microphone filed under the presenter's label. The timestamp is the block's "
+        "`[MM:SS]` in transcript.md; the name replaces the label for that block (and its VTT cues) only._",
+        "",
+        "| Zeit | Name | Wortmeldung |",
+        "|---|---|---|",
+        "", "## Participants", "",
+    ]
     if names:
         lines += ["| Name | Source |", "|---|---|"]
         for p in plates:
@@ -313,21 +322,105 @@ def apply_mapping(segments: list[dict], mapping: dict[str, str]) -> list[dict]:
     return [dict(s, speaker=mapping.get(s.get("speaker"), s.get("speaker"))) for s in segments]
 
 
-def apply_to_files(base: Path, mapping: dict[str, str]) -> list[Path]:
-    """Substitute `[LABEL]` / `<v LABEL>` in transcript.md and .vtt in place."""
-    touched: list[Path] = []
-    for suffix in (".transcript.md", ".vtt"):
-        p = base.with_name(base.name + suffix)
-        if not p.is_file():
+def parse_overrides(path: Path) -> dict[str, str]:
+    """`[MM:SS]` -> name from the Overrides table: one transcript block that a
+    person who was in the room attributed by hand. A room microphone puts
+    several people under one label, so a label-wide name cannot express
+    «this question came from Márton»; the override can."""
+    out: dict[str, str] = {}
+    in_section = False
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if line.startswith("## "):
+            in_section = line[3:].strip().lower().startswith("overrides")
             continue
-        text = p.read_text(encoding="utf-8")
+        if not in_section or not line.startswith("|"):
+            continue
+        cells = [c.strip().strip("`") for c in line.strip("|").split("|")]
+        if len(cells) < 2 or not TS_RE.fullmatch(cells[0]) or not cells[1] or cells[1].lower() == "name":
+            continue
+        out[cells[0].strip("[]")] = cells[1].strip("` ")
+    return out
+
+
+TS_RE = re.compile(r"\[?\d{1,2}:\d{2}(?::\d{2})?\]?")
+BLOCK_RE = re.compile(r"^\[(\d{1,2}:\d{2}(?::\d{2})?)\] \[([^\]]+)\]")
+
+
+def _block_starts(segments: list[dict]) -> list[tuple[str, float, float]]:
+    """(MM:SS, start, end) of every rendered transcript block, so an override
+    keyed by the block's timestamp can cover all of its segments."""
+    from transcribe import merge_speaker_turns  # noqa: PLC0415
+
+    return [(fmt_ts(float(b["start"])), float(b["start"]), float(b["end"]))
+            for b in merge_speaker_turns(segments)]
+
+
+def apply_overrides(segments: list[dict], overrides: dict[str, str]) -> list[dict]:
+    """Rename the speaker of every segment inside an overridden block."""
+    if not overrides:
+        return segments
+    spans = [(s, e, overrides[ts]) for ts, s, e in _block_starts(segments) if ts in overrides]
+    out = []
+    for seg in segments:
+        st = float(seg["start"])
+        name = next((n for s, e, n in spans if s <= st <= e), None)
+        out.append(dict(seg, speaker=name) if name else seg)
+    return out
+
+
+def apply_to_files(base: Path, mapping: dict[str, str], overrides: dict[str, str] | None = None) -> list[Path]:
+    """Substitute `[LABEL]` / `<v LABEL>` in transcript.md and .vtt in place;
+    then rename the blocks the Overrides table names (transcript lines by
+    their timestamp, VTT cues by falling inside that block's time span)."""
+    overrides = overrides or {}
+    touched: list[Path] = []
+    tp = base.with_name(base.name + ".transcript.md")
+    spans: list[tuple[float, float, str]] = []
+    if tp.is_file():
+        lines = tp.read_text(encoding="utf-8").splitlines()
+        starts = [(i, m.group(1)) for i, l in enumerate(lines) if (m := BLOCK_RE.match(l))]
+        new_lines = list(lines)
+        for k, (i, ts) in enumerate(starts):
+            m = BLOCK_RE.match(lines[i])
+            label = m.group(2)
+            name = overrides.get(ts) or mapping.get(label)
+            if name and name != label:
+                new_lines[i] = lines[i].replace(f"[{label}]", f"[{name}]", 1)
+            if ts in overrides:
+                nxt = starts[k + 1][1] if k + 1 < len(starts) else None
+                spans.append((_ts_seconds(ts), _ts_seconds(nxt) if nxt else float("inf"), overrides[ts]))
+        if new_lines != lines:
+            text = tp.read_text(encoding="utf-8")
+            tp.write_text("\n".join(new_lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+            touched.append(tp)
+    vp = base.with_name(base.name + ".vtt")
+    if vp.is_file():
+        text = vp.read_text(encoding="utf-8")
         new = text
         for label, name in mapping.items():
-            new = new.replace(f"[{label}]", f"[{name}]").replace(f"<v {label}>", f"<v {name}>")
+            new = new.replace(f"<v {label}>", f"<v {name}>")
+        if spans:
+            out, cue_start = [], None
+            for raw in new.splitlines():
+                if "-->" in raw:
+                    m = VTT_TS_RE.search(raw)
+                    cue_start = _vtt_seconds(m) if m else None
+                elif cue_start is not None and raw.startswith("<v "):
+                    name = next((n for s, e, n in spans if s <= cue_start < e), None)
+                    if name:
+                        raw = VOICE_TAG_RE.sub(f"<v {name}>", raw, count=1)
+                out.append(raw)
+            new = "\n".join(out) + ("\n" if new.endswith("\n") else "")
         if new != text:
-            p.write_text(new, encoding="utf-8")
-            touched.append(p)
+            vp.write_text(new, encoding="utf-8")
+            touched.append(vp)
     return touched
+
+
+def _ts_seconds(ts: str) -> float:
+    parts = [int(x) for x in ts.split(":")]
+    return parts[0] * 3600 + parts[1] * 60 + parts[2] if len(parts) == 3 else parts[0] * 60 + parts[1]
 
 
 def main() -> int:
@@ -350,10 +443,11 @@ def main() -> int:
         return 0
     if args.apply:
         base = Path(args.apply)
-        mapping = parse_mapping(base.with_name(base.name + ".speakers.md"))
-        touched = apply_to_files(base, mapping)
-        print(f"[speakers] {len(mapping)} name(s) applied to {len(touched)} file(s)"
-              + (": " + ", ".join(p.name for p in touched) if touched else ""))
+        sp = base.with_name(base.name + ".speakers.md")
+        mapping, overrides = parse_mapping(sp), parse_overrides(sp)
+        touched = apply_to_files(base, mapping, overrides)
+        print(f"[speakers] {len(mapping)} name(s) and {len(overrides)} override(s) applied to "
+              f"{len(touched)} file(s)" + (": " + ", ".join(p.name for p in touched) if touched else ""))
         return 0
     ap.print_help()
     return 2

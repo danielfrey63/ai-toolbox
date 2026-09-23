@@ -212,6 +212,8 @@ This is the reader's worklist: every contribution the report could not attribute
 
 Lead with one sentence naming the pool of possible speakers (participants minus the presenter, with any known constraint such as "remote until ~16:00"), then the table, then flag the rows that matter for the record — a question that triggered a decision, an objection, a commitment — so the reader closes those first. Do not fold this into Details or Abdeckung: those are about content coverage; this is about attribution.
 
+**When the user answers** (typically by writing the names into the table): rename the subsection to `### Sprecherzuordnung`, say who attributed and when, and push the answers back to where they render — labels that turn out to be one person go into the Name column of `<base>.speakers.md`, single whole blocks into its Overrides table, and statements inside mixed blocks into the compact transcript. The report's Personen & Rollen and any Summary bullet that said "a participant asked" get the name too.
+
 ## Report layout (append to `<base>.md`)
 
 ```markdown

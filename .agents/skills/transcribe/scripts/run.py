@@ -1124,10 +1124,15 @@ def main() -> int:
             speakers_file = speakers_path or (work / "speakers.md")
             if speakers_file.exists():
                 speaker_names = speakers_stage.parse_mapping(speakers_file)
-                transcript_segments = speakers_stage.apply_mapping(transcript_segments, speaker_names)
+                speaker_overrides = speakers_stage.parse_overrides(speakers_file)
+                transcript_segments = speakers_stage.apply_overrides(
+                    speakers_stage.apply_mapping(transcript_segments, speaker_names), speaker_overrides
+                )
                 print(
                     f"[transcribe] speakers: {len(speaker_names)} of {len(speakers)} labels named in "
-                    f"{speakers_file.name}" + (
+                    f"{speakers_file.name}"
+                    + (f", {len(speaker_overrides)} block override(s)" if speaker_overrides else "")
+                    + (
                         f", open: {', '.join(s for s in speakers if s not in speaker_names)}"
                         if len(speaker_names) < len(speakers) else ""
                     ),
