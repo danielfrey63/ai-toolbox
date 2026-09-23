@@ -212,6 +212,7 @@ from frames import (  # noqa: E402
 )
 from resources import collect as collect_resources, format_section as format_resources  # noqa: E402
 import ocr as ocr_stage  # noqa: E402
+import speakers as speakers_stage  # noqa: E402
 from setup import find_tool  # noqa: E402
 from transcribe import (  # noqa: E402
     VTT_GENERATOR_NOTE,
@@ -463,6 +464,7 @@ def main() -> int:
     turns_store: Path | None = None
     ocr_store: Path | None = None
     links_path: Path | None = None
+    speakers_path: Path | None = None
     if args.save_md:
         save_md_path = Path(args.save_md).expanduser().resolve()
     elif not args.no_save_md and not is_url(args.source):
@@ -591,6 +593,7 @@ def main() -> int:
         turns_store = save_md_path.parent / f"{base}.turns.json"
         ocr_store = save_md_path.parent / f"{base}.ocr.json"
         links_path = save_md_path.parent / f"{base}.links.md"
+        speakers_path = save_md_path.parent / f"{base}.speakers.md"
 
     if has_media:
         meta = get_metadata(video_path)
@@ -1114,6 +1117,37 @@ def main() -> int:
                 turns_cache.write_text(json.dumps(turns), encoding="utf-8")
             transcript_segments = align_speakers(transcript_segments, turns)
             speakers = sorted({t["speaker"] for t in turns}) if turns else []
+            # Speaker mapping lives in <base>.speakers.md: pre-filled once
+            # from the evidence at hand, then owned by the model and the
+            # user. When it exists, its names are what the transcript, the
+            # VTT and every later stage render - never the raw labels.
+            speakers_file = speakers_path or (work / "speakers.md")
+            if speakers_file.exists():
+                speaker_names = speakers_stage.parse_mapping(speakers_file)
+                transcript_segments = speakers_stage.apply_mapping(transcript_segments, speaker_names)
+                print(
+                    f"[transcribe] speakers: {len(speaker_names)} of {len(speakers)} labels named in "
+                    f"{speakers_file.name}" + (
+                        f", open: {', '.join(s for s in speakers if s not in speaker_names)}"
+                        if len(speaker_names) < len(speakers) else ""
+                    ),
+                    file=sys.stderr,
+                )
+            elif speakers:
+                try:
+                    speakers_file.write_text(
+                        speakers_stage.prefill(
+                            (dl.get("info") or {}).get("title") or Path(args.source).name,
+                            transcript_segments, ocr_result,
+                            speakers_file.with_name(f"{speakers_file.name[:-len('.speakers.md')]}.original.vtt"),
+                            Path(args.source).resolve().parent if not is_url(args.source) else None,
+                            APP_VERSION,
+                        ) + "\n",
+                        encoding="utf-8",
+                    )
+                    print(f"[transcribe] speakers    -> {speakers_file} (pre-filled, names open)", file=sys.stderr)
+                except OSError as exc:
+                    print(f"[transcribe] WARNING: could not write speakers.md: {exc}", file=sys.stderr)
             tag = f"{diarize_backend} ({len(speakers)} speakers)"
             transcript_source = f"{transcript_source} + {tag}" if transcript_source else tag
         except SystemExit as exc:
@@ -1269,6 +1303,10 @@ def main() -> int:
                 [f"- **Links:** [`{links_path.name}`](./{links_path.name}) - on-screen references (OCR)"]
                 if links_path and links_path.exists() else []
             ),
+            *(
+                [f"- **Speakers:** [`{speakers_path.name}`](./{speakers_path.name}) - label-to-name mapping (fill / correct here)"]
+                if speakers_path and speakers_path.exists() else []
+            ),
             "",
             "_Claude appends `## Übersicht` (Kernaussagen + Chapter-Struktur),"
             " `## Summary` (thematic bullet catalog), and `## Analysis`"
@@ -1403,6 +1441,12 @@ def main() -> int:
             f"- **On-screen references:** {len(ocr_refs)} on {n_read} OCR'd frames"
             + (f", {unsure} marked (?)" if unsure else "")
             + f" -> {where}"
+        )
+    if speakers_path and speakers_path.exists():
+        named = speakers_stage.parse_mapping(speakers_path)
+        emit(
+            f"- **Speakers:** {len(named)} label(s) named in [`{speakers_path.name}`](./{speakers_path.name})"
+            + (f" ({', '.join(f'{k} = {v}' for k, v in named.items())})" if named else " - all open")
         )
     if transcript_segments:
         in_range = " in range" if focused else ""

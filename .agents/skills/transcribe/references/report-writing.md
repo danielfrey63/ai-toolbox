@@ -22,6 +22,8 @@ Narrative writing reliably drops entities that the video mentioned only in passi
 
   If only one of the two holds, the mapping is **medium-confidence**; if only weak / circumstantial evidence (a single off-hand name, no avatar), it's **low-confidence** — keep the bare letter in the transcript later. Mark medium / low explicitly with `(?)` in the entry so the post-analysis step can tell which labels to leave alone.
 
+  **The decision is made in `<base>.speakers.md`, not here.** The script pre-filled that file with talk time per label, the participants it could see (screen name plates, caption voices, `transcribe-participants.txt`), the address hits with the labels around them and any caption-voice alignment. Fill its Name / Confidence / Evidence columns first (see the speaker-mapping step in SKILL.md), then write this Inventar category as a one-line-per-label summary of it. The user corrects the file, not the report — a re-run renders the corrected names everywhere.
+
   **Every label that stays unresolved is an open question, not a dead end.** Carry it into the `### Offene Sprecherzuordnung` subsection at the end of Analysis (see below), where the reader can close it in one pass. Silently dropping an unattributed contribution loses exactly the input that questions, objections, and decisions tend to arrive in.
 
   **Canonical name format**:

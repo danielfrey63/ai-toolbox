@@ -244,6 +244,8 @@ Place each image once, where it carries the most explanatory weight; don't scatt
 - Protocol: [`<base>.protocol.md`](file:///absolute/path/to/<base>.protocol.md) — metadata + frame list
 - Transcript: [`<base>.transcript.md`](file:///absolute/path/to/<base>.transcript.md) — full transcript
 - Kompakt: [`<base>.transcript-kompakt.md`](file:///absolute/path/to/<base>.transcript-kompakt.md) — condensed transcript (only when diarized)
+- Speakers: [`<base>.speakers.md`](file:///absolute/path/to/<base>.speakers.md) — label-to-name mapping, N open (only when diarized)
+- Links: [`<base>.links.md`](file:///absolute/path/to/<base>.links.md) — references read off the screen (video only)
 - Analysis: [`<base>.md`](file:///absolute/path/to/<base>.md) — Übersicht + Summary + full Analysis
 ```
 
@@ -253,15 +255,17 @@ Use the **absolute paths** from the `**Protocol file:**` / `**Transcript file:**
 
 **Surface the illustrations as images in chat (if any).** A `file://` link to a PNG renders in a terminal but not in the Claude mobile/desktop app, where the user often reads. So when `<base>.illustrations/manifest.json` lists crops, send them with **`SendUserFile`** (status `normal`) right after the Files block — the app renders them inline. Pass all crop paths in one call with a short `caption` (e.g. `"Schlüssel-Illustrationen aus dem Video"`); the user then sees the diagrams without opening the file. Skip when there are no illustrations.
 
-**Apply speaker-name mapping to the transcript (only when diarized).** If the run produced a diarized transcript (the Step 2 metadata says `Transcript: N segments (via assemblyai (transcript + diarization))` or similar) **and** the Inventar's *Personen & Stimmen* contains **high-confidence** mappings (frame evidence AND address-pattern evidence — see Step 4), substitute the anonymous speaker labels in `<base>.transcript.md` with the canonical first names you decided in the Inventar:
+**Speaker mapping lives in `<base>.speakers.md` (only when diarized).** The script pre-fills this file once, right after diarization: one row per label with talk time, turn count and active window, the participants it found (name plates read off the screen by the OCR stage, `<v Name>` tags of a platform VTT, and `transcribe-participants.txt` next to the recording — one `Name - role` per line, the cheapest way to hand it the cast), every address hit («Simon, …») with the labels speaking right before and after, self-introductions, and the caption voice each label overlaps most (pre-filled as `high` when the overlap is ≥ 60 %). **Do the speaker identification in that file, not in your head**: fill **Name** (canonical first name; `Andrea B` / `Andrea T` on collision), **Confidence** and **Evidence** for every label the evidence carries (frame evidence AND address-pattern evidence = high; one of the two = medium, write the name with `(?)`; neither = leave Name empty). Then substitute the names into the transcript deterministically:
 
-- For each high-confidence entry, run an `Edit` with `replace_all: true` on `<base>.transcript.md`: `[A]` → `[Urs]`, `[C]` → `[Andrea]`, etc. The substitution applies to every segment line in the transcript.
-- **Do NOT substitute** entries marked with `(?)` in the Inventar — keep their bare letters. The asymmetry signals to the reader which speakers are confidently identified and which remain provisional.
-- Names use the canonical form decided in the Inventar (first name; or `Andrea B` / `Andrea T`-style on collision).
+```bash
+python3 "C:/Users/Daniel/.claude/skills/transcribe/scripts/speakers.py" --apply "<base>"
+```
 
-Result: a reader opens `<base>.transcript.md` and sees `[12:34] [Urs] …` instead of `[12:34] [A] …`, which makes the transcript self-explanatory without cross-referencing the analysis file. The Inventar in `<base>.md` remains the audit trail for *why* `[A] = Urs`.
+That rewrites `[SPEAKER_00]` → `[Urs]` in `<base>.transcript.md` and `<v SPEAKER_00>` → `<v Urs>` in `<base>.vtt` for every named label; names marked `(?)` and empty rows are left as bare labels, so the reader sees which speakers are confidently identified and which remain provisional. A later `run.py` re-run reads the same file and renders the names itself, so corrections the user makes there survive every re-render; two labels given the same name merge (a room microphone routinely splits one person). The file is never overwritten — delete it to have it pre-filled again.
 
-If the transcript came from VTT captions or pure Whisper (no `[A]/[B]/…` labels in the first place), skip this substitution step entirely.
+The Inventar's *Personen & Stimmen* in `<base>.md` **summarises** that file (one line per named label with the evidence) — it is no longer where the decision is made — and the labels left without a name become the rows of `### Offene Sprecherzuordnung` (see `references/report-writing.md`).
+
+If the transcript came from VTT captions or pure Whisper (no `[A]/[B]/…` labels in the first place), no speakers file is written and this step is skipped.
 
 **Compact transcript (only when diarized).** After the speaker-name mapping, write a fourth companion `<base>.transcript-kompakt.md`: an editorially polished, condensed rendition of the diarized transcript. The raw transcript already merges consecutive same-speaker segments into turns — the compact file adds the human layer on top:
 
@@ -273,7 +277,7 @@ If the transcript came from VTT captions or pure Whisper (no `[A]/[B]/…` label
 
 Skip the compact file for non-diarized transcripts — without speakers it would just duplicate the transcript.
 
-**Step 6 — clean up.** The script prints a working directory at the end. If the user isn't going to ask follow-ups about this video, delete it with `rm -rf <dir>`. **If `--save-md` produced the companion files (`<base>.md` + `<base>.protocol.md` + `<base>.transcript.md` + `<base>.links.md` + `<base>.ocr.json`, plus `<base>.illustrations/` and `<base>.illustrations.spec.json` when illustrations were extracted), they live outside the work dir and are preserved** by the cleanup. The native OCR frames referenced from `links.md` are inside the work dir and go with it — resolve any `(?)` rows before deleting. If the user might follow up, leave the work dir in place too.
+**Step 6 — clean up.** The script prints a working directory at the end. If the user isn't going to ask follow-ups about this video, delete it with `rm -rf <dir>`. **If `--save-md` produced the companion files (`<base>.md` + `<base>.protocol.md` + `<base>.transcript.md` + `<base>.speakers.md` + `<base>.links.md` + `<base>.ocr.json`, plus `<base>.illustrations/` and `<base>.illustrations.spec.json` when illustrations were extracted), they live outside the work dir and are preserved** by the cleanup. The native OCR frames referenced from `links.md` are inside the work dir and go with it — resolve any `(?)` rows before deleting. If the user might follow up, leave the work dir in place too.
 
 ### CPU budget
 

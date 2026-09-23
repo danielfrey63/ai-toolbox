@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -190,7 +191,10 @@ def worker(args) -> int:
         f"(cuts + dHash changes >= {DHASH_CHANGE_BITS} bits)\n"
     )
     from rapidocr_onnxruntime import RapidOCR  # noqa: PLC0415 - worker env only
-    engine = RapidOCR()
+    accel = getattr(args, "accel", "cpu")
+    flags = {f"{m}_use_{accel}": True for m in ("det", "cls", "rec")} if accel in ("dml", "cuda") else {}
+    engine = RapidOCR(**flags)
+    sys.stderr.write(f"[ocr] engine ready ({accel})\n")
     result_frames: list[dict] = []
     for i, f in enumerate(candidates, 1):
         png = out_dir / f"ocr_t{int(f['t']):05d}.png"
@@ -221,11 +225,27 @@ def worker(args) -> int:
 
 # --- Host side --------------------------------------------------------------
 
+ACCEL_EXTRAS = {"dml": "onnxruntime-directml", "cuda": "onnxruntime-gpu"}
+
+
+def pick_accel() -> str:
+    """Which ONNX Runtime provider to try first. `TRANSCRIBE_OCR_ACCEL` pins
+    it (cpu | dml | cuda); `auto` (default) takes DirectML on Windows, where
+    it needs no driver setup and read a 1080p frame in 1.5 s against 5.9 s
+    on CPU, and stays on CPU elsewhere - CUDA needs matching cuDNN
+    libraries and is opt-in until it has been seen working."""
+    want = (os.environ.get("TRANSCRIBE_OCR_ACCEL") or "auto").strip().lower()
+    if want in ("cpu", "dml", "cuda"):
+        return want
+    return "dml" if sys.platform == "win32" else "cpu"
+
+
 def run(video: str, frames: list[dict], work: Path, ffmpeg: str, threads: int,
-        max_frames: int = DEFAULT_MAX_FRAMES) -> dict | None:
+        max_frames: int = DEFAULT_MAX_FRAMES, accel: str | None = None) -> dict | None:
     """Run the OCR worker in its isolated env. `frames` items: {t, seek, kind, jpg}.
     Returns the raw OCR dict or None when the stage could not run (no uv,
-    worker error) - the caller logs and carries on."""
+    worker error) - the caller logs and carries on. An accelerated attempt
+    that fails falls back to CPU once."""
     from setup import find_uv  # noqa: PLC0415
 
     uv = find_uv()
@@ -239,21 +259,28 @@ def run(video: str, frames: list[dict], work: Path, ffmpeg: str, threads: int,
     spec_path.write_text(json.dumps({
         "video": video, "ffmpeg": ffmpeg, "threads": threads, "frames": frames,
     }, ensure_ascii=False), encoding="utf-8")
-    cmd = [
-        uv, "run", "--no-project", "--with", OCR_PACKAGE, "--with", "pillow",
-        "python", str(Path(__file__).resolve()), "--worker",
-        "--frames", str(spec_path), "--out-dir", str(out_dir),
-        "--result", str(result_path), "--max-frames", str(max_frames),
-    ]
-    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
-    for line in (r.stderr or "").splitlines():
-        if line.startswith("[ocr]"):
-            sys.stderr.write(line + "\n")
-    if r.returncode != 0 or not result_path.exists():
+    accel = accel or pick_accel()
+    attempts = [accel, "cpu"] if accel != "cpu" else ["cpu"]
+    for use in attempts:
+        cmd = [uv, "run", "--no-project", "--with", OCR_PACKAGE, "--with", "pillow"]
+        if use in ACCEL_EXTRAS:
+            cmd += ["--with", ACCEL_EXTRAS[use]]
+        cmd += [
+            "python", str(Path(__file__).resolve()), "--worker",
+            "--frames", str(spec_path), "--out-dir", str(out_dir),
+            "--result", str(result_path), "--max-frames", str(max_frames), "--accel", use,
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        for line in (r.stderr or "").splitlines():
+            if line.startswith("[ocr]"):
+                sys.stderr.write(line + "\n")
+        if r.returncode == 0 and result_path.exists():
+            return json.loads(result_path.read_text(encoding="utf-8"))
         tail = "\n".join((r.stderr or "").strip().splitlines()[-5:])
-        sys.stderr.write(f"[ocr] WARNING: worker failed (exit {r.returncode}):\n{tail}\n")
-        return None
-    return json.loads(result_path.read_text(encoding="utf-8"))
+        sys.stderr.write(f"[ocr] WARNING: worker failed on {use} (exit {r.returncode}):\n{tail}\n")
+        if use != "cpu":
+            sys.stderr.write("[ocr] retrying on cpu\n")
+    return None
 
 
 # --- Reference extraction ---------------------------------------------------
@@ -342,8 +369,67 @@ def extract_refs(ocr: dict, min_score: float = DEFAULT_MIN_SCORE) -> list[dict]:
     for r in out:
         r["seen"].sort()
         r["ok"] = r["score"] >= min_score
+    _flag_ticket_extensions(out)
+    _flag_host_lookalikes(out)
     out.sort(key=lambda r: (REF_ORDER.index(r["type"]), r["first"]))
     return out
+
+
+def _flag_ticket_extensions(refs: list[dict]) -> None:
+    """`DFABETRIEB-17668` next to `DFABETRIEB-1766` on the same frame is the
+    `&` after the key read as `8`, not a second ticket. A key whose number
+    extends a shorter key of the same project seen on a shared frame is
+    demoted to (?) with the shorter one named."""
+    tickets = [r for r in refs if r["type"] == "ticket"]
+    for r in tickets:
+        proj, num = r["value"].rsplit("-", 1)
+        for o in tickets:
+            if o is r:
+                continue
+            oproj, onum = o["value"].rsplit("-", 1)
+            if oproj != proj or len(onum) >= len(num) or not num.startswith(onum):
+                continue
+            if set(r["seen"]) & set(o["seen"]):
+                r["ok"] = False
+                r["notes"].append(f"extends {o['value']} on the same frame - likely an OCR slip")
+                break
+
+
+def _levenshtein(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if abs(len(a) - len(b)) > 1:
+        return 2
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def _host_of(r: dict) -> str:
+    return urlparse(r["value"]).netloc.lower() if r["type"] == "url" else r["value"].lower()
+
+
+def _flag_host_lookalikes(refs: list[dict]) -> None:
+    """`flow.sb.ch` beside `flow.sbb.ch`: a host one edit away from a host
+    seen more often is an OCR slip, not a second system. Applies to bare
+    hosts and to the host part of URLs."""
+    sightings: dict[str, int] = {}
+    for r in refs:
+        if r["type"] in ("url", "host"):
+            sightings[_host_of(r)] = sightings.get(_host_of(r), 0) + len(r["seen"])
+    for r in refs:
+        if r["type"] not in ("url", "host"):
+            continue
+        h = _host_of(r)
+        for other, n in sightings.items():
+            if other != h and n > sightings[h] and _levenshtein(h, other) == 1:
+                r["ok"] = False
+                r["notes"].append(f"host one edit away from {other} - likely an OCR slip")
+                break
 
 
 def format_links(refs: list[dict], title: str, n_frames: int, min_score: float,
@@ -398,6 +484,8 @@ def main() -> int:
     ap.add_argument("--out-dir", help="worker: where native PNGs go")
     ap.add_argument("--result", help="worker: where to write ocr.json")
     ap.add_argument("--max-frames", type=int, default=DEFAULT_MAX_FRAMES)
+    ap.add_argument("--accel", default="cpu", choices=["cpu", "dml", "cuda"],
+                    help="worker: ONNX Runtime provider to use")
     ap.add_argument("--render", help="re-render links.md from an existing <base>.ocr.json")
     ap.add_argument("--min-score", type=float, default=DEFAULT_MIN_SCORE)
     args = ap.parse_args()
