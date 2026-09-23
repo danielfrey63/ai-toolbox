@@ -211,6 +211,8 @@ from frames import (  # noqa: E402
     parse_time,
 )
 from resources import collect as collect_resources, format_section as format_resources  # noqa: E402
+import ocr as ocr_stage  # noqa: E402
+from setup import find_tool  # noqa: E402
 from transcribe import (  # noqa: E402
     VTT_GENERATOR_NOTE,
     filter_range,
@@ -310,6 +312,29 @@ def main() -> int:
         type=int,
         default=80,
         help="Cap on additional cut frames extracted (default 80)",
+    )
+    ap.add_argument(
+        "--no-ocr",
+        action="store_true",
+        help="Skip the on-screen reference pass. By default the scene-cut frames "
+        "and every visually changed regular frame are re-extracted at native "
+        "resolution and read by RapidOCR (isolated uv env); URLs, wiki page IDs, "
+        "ticket keys, hosts and share paths land in <base>.links.md with the "
+        "[MM:SS] they were seen at. Cached in <base>.ocr.json (--fresh recomputes).",
+    )
+    ap.add_argument(
+        "--ocr-max-frames",
+        type=int,
+        default=60,
+        help="Cap on frames the OCR pass reads (default 60; cuts win, regular "
+        "candidates are thinned evenly)",
+    )
+    ap.add_argument(
+        "--ocr-min-score",
+        type=float,
+        default=0.85,
+        help="RapidOCR confidence below which a reference is marked (?) in "
+        "<base>.links.md (default 0.85)",
     )
     ap.add_argument(
         "--scene-settle-seconds",
@@ -436,6 +461,8 @@ def main() -> int:
     # re-runs (skip STT + diarization when the source is reprocessed).
     seg_store: Path | None = None
     turns_store: Path | None = None
+    ocr_store: Path | None = None
+    links_path: Path | None = None
     if args.save_md:
         save_md_path = Path(args.save_md).expanduser().resolve()
     elif not args.no_save_md and not is_url(args.source):
@@ -562,6 +589,8 @@ def main() -> int:
         transcript_path = save_md_path.parent / f"{base}.transcript.md"
         seg_store = save_md_path.parent / f"{base}.segments.json"
         turns_store = save_md_path.parent / f"{base}.turns.json"
+        ocr_store = save_md_path.parent / f"{base}.ocr.json"
+        links_path = save_md_path.parent / f"{base}.links.md"
 
     if has_media:
         meta = get_metadata(video_path)
@@ -744,6 +773,77 @@ def main() -> int:
         list(frames) + list(cut_frames),
         key=lambda f: (f["timestamp_seconds"], f.get("kind") == "cut"),
     )
+
+    # On-screen references. The analysis JPEGs only *detect* where the
+    # screen changed; the OCR worker re-extracts those moments natively and
+    # reads them. Cached like the segments so a re-run re-renders for free.
+    ocr_result: dict | None = None
+    ocr_refs: list[dict] = []
+    if all_frames and not args.no_ocr:
+        ocr_cache = ocr_store or (work / "ocr" / "ocr.json")
+        if not args.fresh and ocr_cache.exists():
+            try:
+                ocr_result = json.loads(ocr_cache.read_text(encoding="utf-8"))
+                print(
+                    f"[transcribe] on-screen references: resumed from {ocr_cache.name} "
+                    f"({len(ocr_result.get('frames', []))} frames)",
+                    file=sys.stderr,
+                )
+            except (OSError, ValueError) as exc:
+                print(f"[transcribe] OCR cache unreadable ({exc}) - recomputing", file=sys.stderr)
+                ocr_result = None
+        if ocr_result is None:
+            # Cut frames were captured after the settle delay - read the same moment.
+            cut_seq = sorted(cut_times)
+            def _seek_of(f: dict) -> float:
+                t = f["timestamp_seconds"]
+                if f.get("kind") != "cut" or args.scene_settle_seconds <= 0:
+                    return t
+                nxt = next((c for c in cut_seq if c > t), None)
+                return min(t + args.scene_settle_seconds, nxt - 0.3) if nxt else t + args.scene_settle_seconds
+            print(
+                f"[transcribe] reading on-screen references (RapidOCR, up to "
+                f"{args.ocr_max_frames} frames)...",
+                file=sys.stderr,
+            )
+            ocr_result = ocr_stage.run(
+                video_path,
+                [{"t": f["timestamp_seconds"], "seek": _seek_of(f), "kind": f.get("kind", "regular"),
+                  "jpg": f["path"]} for f in all_frames],
+                work,
+                find_tool("ffmpeg") or "ffmpeg",
+                cpu.per_process(1),
+                max_frames=args.ocr_max_frames,
+            )
+            if ocr_result is not None and ocr_store:
+                try:
+                    ocr_store.write_text(
+                        json.dumps({"skill_version": APP_VERSION, **ocr_result}, ensure_ascii=False, indent=1),
+                        encoding="utf-8",
+                    )
+                except OSError as exc:
+                    print(f"[transcribe] WARNING: could not cache OCR result: {exc}", file=sys.stderr)
+        if ocr_result is not None:
+            ocr_refs = ocr_stage.extract_refs(ocr_result, args.ocr_min_score)
+            n_read = len(ocr_result.get("frames", []))
+            unsure = sum(1 for r in ocr_refs if not r["ok"])
+            print(
+                f"[transcribe] on-screen references: {len(ocr_refs)} found on {n_read} frames"
+                + (f", {unsure} below score {args.ocr_min_score:.2f} marked (?)" if unsure else ""),
+                file=sys.stderr,
+            )
+            links_target = links_path or (work / "links.md")
+            try:
+                links_target.write_text(
+                    ocr_stage.format_links(
+                        ocr_refs, (dl.get("info") or {}).get("title") or Path(args.source).name,
+                        n_read, args.ocr_min_score, APP_VERSION,
+                    ) + "\n",
+                    encoding="utf-8",
+                )
+                print(f"[transcribe] links       -> {links_target}", file=sys.stderr)
+            except OSError as exc:
+                print(f"[transcribe] WARNING: could not write links.md: {exc}", file=sys.stderr)
 
     # Diarization is on by default (auto = local first). When nothing is
     # configured, default-auto degrades silently to a plain transcript;
@@ -1165,6 +1265,10 @@ def main() -> int:
             f"- **Duration:** {format_time(full_duration)} ({full_duration:.1f}s)",
             f"- **Protocol:** [`{protocol_path.name}`](./{protocol_path.name}) - metadata + frame list",
             f"- **Transcript:** [`{transcript_path.name}`](./{transcript_path.name}) - full transcript",
+            *(
+                [f"- **Links:** [`{links_path.name}`](./{links_path.name}) - on-screen references (OCR)"]
+                if links_path and links_path.exists() else []
+            ),
             "",
             "_Claude appends `## Übersicht` (Kernaussagen + Chapter-Struktur),"
             " `## Summary` (thematic bullet catalog), and `## Analysis`"
@@ -1291,6 +1395,15 @@ def main() -> int:
         )
     if all_frames:
         emit(f"- **Frame size:** {args.resolution}px wide")
+    if ocr_result is not None:
+        n_read = len(ocr_result.get("frames", []))
+        unsure = sum(1 for r in ocr_refs if not r["ok"])
+        where = f"[`{links_path.name}`](./{links_path.name})" if links_path else f"`{work / 'links.md'}`"
+        emit(
+            f"- **On-screen references:** {len(ocr_refs)} on {n_read} OCR'd frames"
+            + (f", {unsure} marked (?)" if unsure else "")
+            + f" -> {where}"
+        )
     if transcript_segments:
         in_range = " in range" if focused else ""
         emit(
@@ -1394,6 +1507,7 @@ def main() -> int:
     resources_grouped = collect_resources(
         info.get("description") or "",
         transcript_segments or [],
+        frame_refs=ocr_refs,
     )
     if resources_grouped:
         emit()

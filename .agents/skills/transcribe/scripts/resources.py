@@ -67,9 +67,12 @@ TECH_DOCS_HOSTS = {
 }
 DATE_PATH_RE = re.compile(r"/\d{4}/\d{1,2}(?:/|$)")
 
-CATEGORY_ORDER = ["project", "docs", "article", "video", "social", "other"]
+WORKSPACE_HOST_PREFIXES = ("confluence.", "jira.", "wiki.", "atlassian.")
+
+CATEGORY_ORDER = ["project", "workspace", "docs", "article", "video", "social", "other"]
 CATEGORY_LABELS = {
     "project": "Projects",
+    "workspace": "Wiki & Tracker",
     "docs": "Docs",
     "article": "Articles",
     "video": "Videos",
@@ -158,6 +161,10 @@ def categorize(url: str) -> str:
         return "video"
     if host in SOCIAL_HOSTS:
         return "social"
+    # Enterprise wiki / tracker instances (confluence.<corp>, jira.<corp>,
+    # wiki.<corp>) - the links a meeting recording actually shows.
+    if any(host.startswith(pfx) for pfx in WORKSPACE_HOST_PREFIXES) or "/pages/" in path or "/browse/" in path:
+        return "workspace"
 
     if (
         host.startswith("docs.")
@@ -187,10 +194,15 @@ def _fmt_ts(seconds: float) -> str:
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
 
 
-def collect(description: str, transcript_segments: list[dict]) -> dict[str, list[dict]]:
+def collect(description: str, transcript_segments: list[dict],
+            frame_refs: list[dict] | None = None) -> dict[str, list[dict]]:
     """Returns ``{category: [items]}`` where items have keys
     ``url`` (normalized), ``display`` (short form), ``sources`` (list of
-    "description" or "transcript@MM:SS")."""
+    "description", "transcript@MM:SS" or "frame@MM:SS").
+
+    ``frame_refs`` are the references ocr.py read off the screen; only the
+    URL-typed ones join here (page IDs, ticket keys, hosts and paths stay in
+    ``<base>.links.md``, which is the canonical on-screen list)."""
     groups: dict[str, dict[str, dict]] = {}
 
     def add(url: str, source: str) -> None:
@@ -214,6 +226,12 @@ def collect(description: str, transcript_segments: list[dict]) -> dict[str, list
         for u in extract_urls(text):
             add(u, f"transcript@{_fmt_ts(seg.get('start', 0) or 0)}")
 
+    for ref in frame_refs or []:
+        if ref.get("type") != "url":
+            continue
+        mark = "" if ref.get("ok", True) else " (?)"
+        add(ref["value"], f"frame@{_fmt_ts(ref.get('first', 0) or 0)}{mark}")
+
     out: dict[str, list[dict]] = {}
     for cat in CATEGORY_ORDER:
         if cat in groups:
@@ -229,7 +247,8 @@ def format_section(grouped: dict[str, list[dict]]) -> str:
     lines = [
         "## Resources",
         "",
-        f"_Aggregated from video description and transcript ({total} unique URLs)._",
+        f"_Aggregated from video description, transcript and on-screen text ({total} unique URLs; "
+        f"`frame@MM:SS` = read off the screen by OCR, `(?)` = low OCR confidence)._",
         "",
     ]
     for cat in CATEGORY_ORDER:

@@ -64,6 +64,7 @@ Five stages. The visual stage is skipped automatically for audio-only sources; e
 - **Scene cuts** — an `scdet` pass scores every frame's pixel-difference; a knee-point heuristic picks a per-video threshold (no static cut-off). Each cut becomes one frame after a settle-delay (default 1.0 s) so transitions / dialogs finish rendering. `--no-scene`, `--scene-threshold F`.
 - **Gap-filled sampling** — a duration-aware budget (≤30s → ~30 frames … 3-10min → ~80) is distributed into the gaps *between* cuts rather than at uniform intervals, so cut-dense regions don't waste budget and long uncovered spans get coverage. 512px JPEGs; `--resolution 1024` for on-screen text.
 - **Auto-chunk** — videos > 10 min split into ~10-min chunks, each with the dense focused budget. `--no-chunk` reverts to sparse single-pass; `--start`/`--end` zeroes in on one section.
+- **On-screen references** — cut frames and visually changed regular frames are re-extracted at native resolution and read by RapidOCR (isolated `uv` env). URLs, wiki page IDs, ticket keys, hosts and share paths are written to `<base>.links.md` with the `[MM:SS]` they were seen at; low-confidence rows are marked `(?)` for a targeted look at the frame. Raw OCR text is cached in `<base>.ocr.json`. `--no-ocr`, `--ocr-max-frames N`, `--ocr-min-score F`.
 
 ### 4. Hear — transcript
 
@@ -215,6 +216,7 @@ Other knobs (passed to `scripts/run.py`):
 - `--scene-threshold F` — override the auto-tuned scdet threshold (default: knee-point on the score distribution).
 - `--scene-min-gap S` — minimum seconds between consecutive cut frames (default 2.0; de-clusters animation/B-roll bursts).
 - `--scene-max-frames N` — cap on additional cut frames (default 80, applied separately from `--max-frames`).
+- `--no-ocr` — skip the on-screen reference pass; `--ocr-max-frames N` (default 60) caps the frames it reads, `--ocr-min-score F` (default 0.85) sets the confidence under which a reference is marked `(?)` in `<base>.links.md`.
 - `--scene-settle-seconds S` — seconds after a detected cut to wait before extracting (default 1.0). Lets UI transitions render so cut frames don't land on loading-state pixels. Set to 0 for the old just-before-cut behavior.
 - `--whisper azure-diarize|groq|openai|whisper-local` — pin a specific transcription backend (no cascade). Default: local-first cascade `whisper-local` → `azure-diarize` → `groq` → `openai`, each failure falling through to the next configured backend.
 - `--no-whisper` — disable transcription entirely; frames only.
