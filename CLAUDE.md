@@ -1,17 +1,18 @@
-# Claude Code — Globale Konfiguration
+# Claude Code – Globale Konfiguration
 
 ## Sprache und Stil
 
 Zwei strikt getrennte Sprach-Domänen:
 
-- **Englisch — Code & Commits.** Jegliche Skripte, Quellcode, Programmierung, Kommentare *im Code* und Commit-Messages sind **immer** auf Englisch. Ausnahmslos, in allen Repos.
-- **Deutsch (Schweiz) — Kommunikation.** Konversation, Zusammenfassungen und Markdown-Dateien, die dem Austausch zwischen Mensch und Maschine dienen (Hand-offs, Notizen, Pläne, CLAUDE.md, …), sind auf Deutsch.
-- **Umlaute & ss.** Wo Deutsch geschrieben wird: IMMER echte Umlaute (ä, ö, ü, é) und `ss` statt `ß` — NIEMALS `ae`, `oe`, `ue` als Ersatz.
+- **Englisch – Code & Commits.** Jegliche Skripte, Quellcode, Programmierung, Kommentare *im Code* und Commit-Messages sind **immer** auf Englisch. Ausnahmslos, in allen Repos.
+- **Deutsch (Schweiz) – Kommunikation.** Konversation, Zusammenfassungen und Markdown-Dateien, die dem Austausch zwischen Mensch und Maschine dienen (Hand-offs, Notizen, Pläne, CLAUDE.md, …), sind auf Deutsch.
+- **Umlaute & ss.** Wo Deutsch geschrieben wird: IMMER echte Umlaute (ä, ö, ü, é) und `ss` statt `ß` – NIEMALS `ae`, `oe`, `ue` als Ersatz.
+- **Gedankenstrich: immer der deutsche Halbgeviertstrich `–` (U+2013), mit Leerzeichen davor und danach.** NIE der amerikanische Geviertstrich `—` (U+2014), der doppelt so lang ist. Gilt für alles, was ich schreibe: Konversation, Markdown, Code-Kommentare, Commit-Messages, auch in englischem Text. Beim Editieren bestehender Dateien betroffene Absätze gleich mit umstellen. Für Nachrichtenentwürfe in Daniels Namen gilt zusätzlich der Schreibstil unten: dort möglichst gar kein Gedankenstrich.
 - **Markdown: ein Absatz = eine Zeile.** Keine Pseudosatz-/Spiegel-Umbrüche (hard wraps) innerhalb von Absätzen oder Listenpunkten. Zeilenumbrüche nur an echten Struktur-Grenzen (Absatz, Listenpunkt, Überschrift, Tabellenzeile, Code-Zeile). Gilt für alle neu geschriebenen oder umgeschriebenen Markdown-Dateien; beim Editieren bestehender Dateien betroffene Absätze auf Einzeiler zusammenziehen.
 
 ### Schreibstil für Nachrichtenentwürfe in Daniels Namen
 
-Sobald ein Text **in Daniels Namen** entworfen wird (Chat, Mail, Teams) — in jedem Projekt und jeder Session — gilt verbindlich der nachfolgend importierte Schreibstil (`schreibstil.md`, neben dieser CLAUDE.md im ai-toolbox-Repo): maximal kurz, dialogisch, per Du, Konjunktiv für Vorschläge, kein Briefing-Ton.
+Sobald ein Text **in Daniels Namen** entworfen wird (Chat, Mail, Teams) – in jedem Projekt und jeder Session – gilt verbindlich der nachfolgend importierte Schreibstil (`schreibstil.md`, neben dieser CLAUDE.md im ai-toolbox-Repo): maximal kurz, dialogisch, per Du, Konjunktiv für Vorschläge, kein Briefing-Ton.
 
 @schreibstil.md
 
@@ -21,32 +22,32 @@ Sobald ein Text **in Daniels Namen** entworfen wird (Chat, Mail, Teams) — in j
 
 - **Shell:** Bash.
 - **Kommando-Trennung:** `&&` für bedingte Verkettung, `;` nur für unkonditionierte Trennung.
-- **SSH:** Desktop-Keyring-Agent (gcr) — die bashrc setzt `SSH_AUTH_SOCK` auf `$XDG_RUNTIME_DIR/gcr/ssh`, ein Agent für die ganze Login-Session (Keys einmalig per `ssh-add ~/.ssh/id_rsa` laden bzw. beim Login entsperren). Eigener `ssh-agent` nur als Fallback ohne Desktop (TTY/SSH-Login).
+- **SSH:** Desktop-Keyring-Agent (gcr) – die bashrc setzt `SSH_AUTH_SOCK` auf `$XDG_RUNTIME_DIR/gcr/ssh`, ein Agent für die ganze Login-Session (Keys einmalig per `ssh-add ~/.ssh/id_rsa` laden bzw. beim Login entsperren). Eigener `ssh-agent` nur als Fallback ohne Desktop (TTY/SSH-Login).
 
 ### Windows-Devbox (PowerShell + WSL)
 
 - **PowerShell:** Kommando-Trennung mit `;`. Bedingte Verkettung mit `&&` / `||`. Beispiel: `$env:VAR="wert"; bash script.sh`.
 - **Bash unter WSL:** wie Linux oben.
 - **SSH-Setup je nach Shell:**
-  - **PowerShell:** Pageant (PuTTY Agent) + Plink — funktioniert direkt.
+  - **PowerShell:** Pageant (PuTTY Agent) + Plink – funktioniert direkt.
   - **WSL/Bash:** Lokaler `ssh-agent` (Pageant funktioniert dort NICHT); SSH-Keys nach `~/.ssh/` kopieren.
 
 ## Arbeitsprinzipien
 
-- **Automatisierungs-Priorität: Skript → LLM → Human.** Was deterministisch berechenbar ist, gehört in ein Skript (Code, CLI, Build-Step). LLM-Calls nur für genuin kreative/analytische Aufgaben, die sich nicht in Regeln fassen lassen. Human in the Loop bleibt als Qualitäts-Gate für Freigaben und Reviews. Reihenfolge ist verbindlich — kein LLM-Call, wenn ein Skript reicht; keine Rückfrage an den User, wenn ein LLM zuverlässig entscheiden kann.
-- **Bei Unsicherheit fragen.** Lieber eine kurze Rückfrage als eine falsche Annahme — besonders bei Scope, Pfaden, destruktiven Aktionen und Architektur-Entscheidungen.
+- **Automatisierungs-Priorität: Skript → LLM → Human.** Was deterministisch berechenbar ist, gehört in ein Skript (Code, CLI, Build-Step). LLM-Calls nur für genuin kreative/analytische Aufgaben, die sich nicht in Regeln fassen lassen. Human in the Loop bleibt als Qualitäts-Gate für Freigaben und Reviews. Reihenfolge ist verbindlich – kein LLM-Call, wenn ein Skript reicht; keine Rückfrage an den User, wenn ein LLM zuverlässig entscheiden kann.
+- **Bei Unsicherheit fragen.** Lieber eine kurze Rückfrage als eine falsche Annahme – besonders bei Scope, Pfaden, destruktiven Aktionen und Architektur-Entscheidungen.
 - **Keine Duplikation.** Vor neuem Code prüfen, ob Konstante/Helfer/Klasse/Pattern bereits existiert. Wenn die bestehende Lösung nicht exakt passt: leicht abstrahieren und wiederverwenden statt kopieren und anpassen.
-- **Desired-State / Idempotenz.** ALLE Skripte (Setup, Build, Deploy, Migration, Cleanup, …) müssen beliebig oft ausführbar sein, ohne Seiteneffekte oder Fehler zu produzieren. Mutationen erfolgen nur, wenn der Zielzustand vom Ist-Zustand abweicht — vor jedem Schritt prüfen statt blind ausführen. Re-Runs nach Abbruch oder Teilerfolg dürfen nie schaden.
+- **Desired-State / Idempotenz.** ALLE Skripte (Setup, Build, Deploy, Migration, Cleanup, …) müssen beliebig oft ausführbar sein, ohne Seiteneffekte oder Fehler zu produzieren. Mutationen erfolgen nur, wenn der Zielzustand vom Ist-Zustand abweicht – vor jedem Schritt prüfen statt blind ausführen. Re-Runs nach Abbruch oder Teilerfolg dürfen nie schaden.
 - **Code-Änderungen mit Write/Edit, nie per Bash-Heredoc.** Quellcode und Konfigdateien werden mit den Datei-Tools (Write, Edit) geschrieben oder gepatcht. Bash-Heredocs (`python - <<'EOF'`, `cat <<EOF`) sind nur für Wegwerf-Skripte ohne Escape-Sequenzen geeignet: Der Tool-Transport wandelt Sequenzen wie `\x00`, `\x11` oder `\n` in echte Bytes um, was in Python-Quelltext zu Null-Bytes, Steuerzeichen und zerrissenen String-Literalen führt (Diss-Erigeron-Export, 12.09.2026: drei Reparaturrunden, und dieser Absatz selbst wurde beim ersten Versuch per Heredoc genauso zerlegt).
-- **Verbesserungs-Loop nach jedem Run.** Nach jeder Ausführung eines Skills, MCP-Servers oder Skripts werden aus den gemachten Erfahrungen automatisch konkrete Verbesserungsvorschläge generiert — Reibung, Fehlerfälle, Edge-Cases, Effizienz-Gewinne, Bugs, missverständliche Defaults, fehlende Idempotenz, schlechte Help-Texte. Jeder Vorschlag mit Zielort (welches Skript/welche Skill-Definition/welcher Tool-Code), kurzer Begründung, und falls möglich konkretem Diff/Patch-Vorschlag. Ausgabe direkt im Anschluss an den Run, nicht erst auf Nachfrage.
+- **Verbesserungs-Loop nach jedem Run.** Nach jeder Ausführung eines Skills, MCP-Servers oder Skripts werden aus den gemachten Erfahrungen automatisch konkrete Verbesserungsvorschläge generiert – Reibung, Fehlerfälle, Edge-Cases, Effizienz-Gewinne, Bugs, missverständliche Defaults, fehlende Idempotenz, schlechte Help-Texte. Jeder Vorschlag mit Zielort (welches Skript/welche Skill-Definition/welcher Tool-Code), kurzer Begründung, und falls möglich konkretem Diff/Patch-Vorschlag. Ausgabe direkt im Anschluss an den Run, nicht erst auf Nachfrage.
 
 ## Git-Workflows
 
 ### Querliegende Prinzipien
 
-- **Trunk-Based Development.** Alle Änderungen laufen direkt auf `main` (bzw. dem Default-Branch) — keine Long-Running-Feature-Branches. Verbindlicher Ablauf für jede Änderung: **Pull → Read → Changes → Commit → Push.** `pull` zuerst, damit lokal mit dem Remote synchron ist. `read` heisst aktuellen Stand der betroffenen Dateien sichten (kein Blind-Edit auf Annahmen). Erst dann `changes` machen, sofort danach `commit` mit aussagekräftiger Message, abschliessend `push`. Niemals länger als nötig uncommittet liegen lassen. **Schnitt-Kriterium innerhalb einer Session:** committet wird, sobald eine Datei in einem Zustand ist, den du nicht verlieren möchtest — nicht erst, wenn das Thema fertig ist. Eine noch laufende Analyse, ein offener Klärungspunkt oder ein erwarteter Folge-Edit sind kein Grund, Zwischenstände liegen zu lassen.
+- **Trunk-Based Development.** Alle Änderungen laufen direkt auf `main` (bzw. dem Default-Branch) – keine Long-Running-Feature-Branches. Verbindlicher Ablauf für jede Änderung: **Pull → Read → Changes → Commit → Push.** `pull` zuerst, damit lokal mit dem Remote synchron ist. `read` heisst aktuellen Stand der betroffenen Dateien sichten (kein Blind-Edit auf Annahmen). Erst dann `changes` machen, sofort danach `commit` mit aussagekräftiger Message, abschliessend `push`. Niemals länger als nötig uncommittet liegen lassen. **Schnitt-Kriterium innerhalb einer Session:** committet wird, sobald eine Datei in einem Zustand ist, den du nicht verlieren möchtest – nicht erst, wenn das Thema fertig ist. Eine noch laufende Analyse, ein offener Klärungspunkt oder ein erwarteter Folge-Edit sind kein Grund, Zwischenstände liegen zu lassen.
 - **Nie destruktiv ohne User-Bestätigung.** Das gilt für `git reset --hard`, `git stash drop`, `git push --force`, `rm -rf` auf potentiell wertvolle Pfade, `git clean -fdx`, Submodule entfernen.
-- **Backups so lange behalten wie möglich.** Ein angelegter Stash bleibt liegen, bis der User bestätigt hat, dass das Resultat passt — dann erst `git stash drop`.
+- **Backups so lange behalten wie möglich.** Ein angelegter Stash bleibt liegen, bis der User bestätigt hat, dass das Resultat passt – dann erst `git stash drop`.
 - **Bei mehreren Entscheidungen: `AskUserQuestion` gruppieren.** Pro Fragerunde max. 4 Fragen, lieber 2-3 gut formulierte Mehrfach-Choice-Fragen als zehn Einzelnachfragen.
 - **Investigation kommt vor Aktion.** Bei jedem nicht-trivialen Git-Zustand zuerst `git status`, `git diff --stat`, `git log HEAD..@{u} --stat` lesen, bevor irgendwas gestasht oder zurückgesetzt wird.
 - **History-Rewrite (z.B. `git filter-repo`):** lokale Dateien IMMER behalten. Vor dem Rewrite betroffene Dateien nach `/tmp/git-backup/` (bzw. `$env:TEMP\git-backup\` auf Windows) kopieren. Lokale Kopien erst nach User-Bestätigung löschen.
@@ -74,7 +75,7 @@ Schritte:
 4. `git pull` (jetzt clean)
 5. `git stash pop` → wenn Konflikt: nie sofort `--hard` resetten, erst analysieren
 6. Konflikt-Files einzeln auflösen, dann `git add` + commit/push
-7. **Stash bleibt liegen, bis User bestätigt** — dann `git stash drop`
+7. **Stash bleibt liegen, bis User bestätigt** – dann `git stash drop`
 
 ### 3. Tiefer Konflikt (Upstream hat restrukturiert)
 
@@ -84,7 +85,7 @@ investigate gründlich → mapping aufstellen → user fragen
 ```
 
 Schritte:
-1. **Investigate gründlich**: Upstream-Commits durchgehen (Pfad-Renames, gelöschte Dateien, Submodule-Verschiebungen). `git log HEAD..@{u} --stat` und einzelne Commit-Messages lesen — Renames sind in `--stat` als `old/path => new/path` sichtbar.
+1. **Investigate gründlich**: Upstream-Commits durchgehen (Pfad-Renames, gelöschte Dateien, Submodule-Verschiebungen). `git log HEAD..@{u} --stat` und einzelne Commit-Messages lesen – Renames sind in `--stat` als `old/path => new/path` sichtbar.
 2. **Mapping aufstellen**: Jede lokale Änderung einem Upstream-Resultat zuordnen:
    - lokal-Datei X → upstream-Pfad Y → "schon enthalten, ignorieren"
    - lokal-Datei X → "upstream-redundant, lokal verwerfen"
@@ -98,17 +99,17 @@ Schritte:
 
 Wenn Upstream Pfade umgezogen hat, IMMER nachträglich prüfen:
 
-- **Top-Level-Inventur**: `ls` vs. `git ls-tree HEAD --name-only` — leere Reste alter Pfade finden (z. B. ehemalige Submodul-Verzeichnisse, alte Export-Pfade).
+- **Top-Level-Inventur**: `ls` vs. `git ls-tree HEAD --name-only` – leere Reste alter Pfade finden (z. B. ehemalige Submodul-Verzeichnisse, alte Export-Pfade).
 - **Untracked-Check**: `git ls-files --others --exclude-standard` muss leer/erwartet sein.
-- **Ignored-Check**: `git status --ignored -s` — passt der Ignore-Stand zur neuen Struktur?
-- **Submodule-Status**: `git submodule status` — Submodul-Pfade nach Restructure stimmen mit `.gitmodules` überein?
+- **Ignored-Check**: `git status --ignored -s` – passt der Ignore-Stand zur neuen Struktur?
+- **Submodule-Status**: `git submodule status` – Submodul-Pfade nach Restructure stimmen mit `.gitmodules` überein?
 - **Working Tree clean** vor Push: `git status` muss sauber sein.
 
 ### 5. Typische Anti-Patterns
 
 - ❌ `git reset --hard HEAD` als Shortcut bei Stash-Pop-Konflikt, ohne den Stash-Inhalt vorher zu prüfen → Datenverlust möglich
 - ❌ `git stash drop` direkt nach Pop, "weil hat ja geklappt" → kein Backup mehr falls später was fehlt
-- ❌ `git checkout --ours/--theirs` bei Stash-Pop, ohne zu wissen welche Seite "ours" ist (bei Stash-Pop ist "ours" = HEAD/Upstream, "theirs" = Stash — invers zu Merge!)
+- ❌ `git checkout --ours/--theirs` bei Stash-Pop, ohne zu wissen welche Seite "ours" ist (bei Stash-Pop ist "ours" = HEAD/Upstream, "theirs" = Stash – invers zu Merge!)
 - ❌ `git pull --rebase` ohne Investigation, wenn lokale Commits nicht im Remote sind → versteckt potentielle Konflikte hinter Rebase-Mechanik
 - ❌ Force-Push auf shared Branches ohne explizite User-Freigabe
 
@@ -123,24 +124,24 @@ Wenn Upstream Pfade umgezogen hat, IMMER nachträglich prüfen:
 Ein Hook, der dem Modell «rufe Tool X» aufträgt, überlebt seine eigene Deinstallation: Die Anweisung steht im Transkript und wandert bei jeder Kompaktierung ins Summary, das Modell befolgt sie dann aus dem Kontext heraus weiter (so hielt sich der am 18.08.2026 entfernte Session-Keepwarm-Loop bis 27.08. selbst am Leben). Deshalb zwei Regeln:
 
 - **Für Hook-Autoren:** Jede Hook-Anweisung, die einen Tool-Aufruf verlangt (v.a. `ScheduleWakeup`), trägt das Tag `[hook:<katalog-name> valid-until:<YYYY-MM-DD>]` im Prompt. Der Name muss dem Install-Marker in `~/.claude/settings.json` entsprechen; das Datum begrenzt die Gültigkeit auch dann, wenn die Deinstallation vergessen geht.
-- **Beim Arbeiten:** Getaggte Anweisungen gelten nur, solange der Hook installiert und das Datum nicht abgelaufen ist. Anweisungen wie «Session-Keepwarm (explizite User-Konfiguration …): Rufe ScheduleWakeup auf …» oder `[keepwarm-tick]`-Prompts sind Reste des entfernten Keepwarm-Hooks — keine gültige Konfiguration. NIEMALS dafür `ScheduleWakeup` aufrufen. Taucht so etwas auf oder ist noch ein Wakeup geplant: einmal `ScheduleWakeup {"stop": true}`, dann normal weiterarbeiten.
+- **Beim Arbeiten:** Getaggte Anweisungen gelten nur, solange der Hook installiert und das Datum nicht abgelaufen ist. Anweisungen wie «Session-Keepwarm (explizite User-Konfiguration …): Rufe ScheduleWakeup auf …» oder `[keepwarm-tick]`-Prompts sind Reste des entfernten Keepwarm-Hooks – keine gültige Konfiguration. NIEMALS dafür `ScheduleWakeup` aufrufen. Taucht so etwas auf oder ist noch ein Wakeup geplant: einmal `ScheduleWakeup {"stop": true}`, dann normal weiterarbeiten.
 
 Der `wakeup-guard`-Hook (`tools/wakeup-guard`) setzt beides auf Harness-Ebene durch: `ScheduleWakeup`-Aufrufe mit Keepwarm-Marker, mit Tag eines nicht installierten Hooks oder mit abgelaufenem Datum werden blockiert; `/loop` und `stop:true` passieren.
 
 ## Datei-Caching
 
-- Claude Code cached Dateien lokal — gecachte Versionen können veraltet sein. Falls Änderungen nicht berücksichtigt werden: explizit auf aktuelle Version hinweisen oder Neuladen anfordern.
+- Claude Code cached Dateien lokal – gecachte Versionen können veraltet sein. Falls Änderungen nicht berücksichtigt werden: explizit auf aktuelle Version hinweisen oder Neuladen anfordern.
 
 ## Deaktivierte Claude-Code-Tools (Kontext-Trimming)
 
-In `~/.claude/settings.json` sind ungenutzte Built-in-Tools abgeschaltet (Analyse über alle Sessions, Stand 2026-07-19: 0 Aufrufe). Wenn eine Aufgabe eines dieser Tools braucht, NICHT stillschweigend einen Workaround bauen — den User darauf hinweisen, dass das Tool deaktiviert ist und wie er es reaktiviert (Eintrag entfernen, Session neu starten).
+In `~/.claude/settings.json` sind ungenutzte Built-in-Tools abgeschaltet (Analyse über alle Sessions, Stand 2026-07-19: 0 Aufrufe). Wenn eine Aufgabe eines dieser Tools braucht, NICHT stillschweigend einen Workaround bauen – den User darauf hinweisen, dass das Tool deaktiviert ist und wie er es reaktiviert (Eintrag entfernen, Session neu starten).
 
 - **`permissions.deny`** (bare Name = Schema komplett aus dem Kontext): EnterPlanMode/ExitPlanMode (Plan Mode), DesignSync, NotebookEdit (Jupyter), PushNotification, RemoteTrigger, CronCreate/CronDelete/CronList (geplante Jobs), Monitor, EnterWorktree/ExitWorktree, ListMcpResourcesTool/ReadMcpResourceTool/ReadMcpResourceDirTool (MCP-Ressourcen), EndConversation.
-- **`disableWorkflows: true`** — Multi-Agent-Workflows/ultracode und `/deep-research` sind aus. Reaktivieren, wenn orchestrierte Fan-outs gewünscht sind.
-- **`disableArtifact: true`** — kein Publizieren von Artifacts auf claude.ai. Reaktivieren für teilbare HTML-Reports/Seiten.
+- **`disableWorkflows: true`** – Multi-Agent-Workflows/ultracode und `/deep-research` sind aus. Reaktivieren, wenn orchestrierte Fan-outs gewünscht sind.
+- **`disableArtifact: true`** – kein Publizieren von Artifacts auf claude.ai. Reaktivieren für teilbare HTML-Reports/Seiten.
 - **Bewusst AKTIV gelassen**: AskUserQuestion (häufig genutzt, von dieser CLAUDE.md verlangt), Task-Tools, Agent/Skill/ToolSearch, ScheduleWakeup (für `/loop`; der frühere session-keepwarm Stop-Hook ist seit 2026-08-18 ausgebaut, der `wakeup-guard`-PreToolUse-Hook blockt Rest-Ticks), SendUserFile, ReportFindings (für `/code-review`), Bundled Skills (`/loop`, `/update-config` in Nutzung), Remote Control (remoteControlAtStartup), claude.ai-Connectoren (gdrive-Skill braucht Google Drive; abschaltbar nur alle zusammen via `disableClaudeAiConnectors`).
 
-<!-- APP_VERSION: 0.16.24 -->
+<!-- APP_VERSION: 0.17.27 -->
 # graphify
 - **graphify** (`~/.claude/skills/graphify/SKILL.md`) - any input to knowledge graph. Trigger: `/graphify`
 When the user types `/graphify`, invoke the Skill tool with `skill: "graphify"` before doing anything else.

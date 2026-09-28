@@ -1,10 +1,10 @@
 # Schreibstil Daniel Frey – für Nachrichtenentwürfe
 
-Gilt für **alle Nachrichten-/Antwortentwürfe in Daniels Namen** (Chat, Mail, Teams) — in allen Projekten und Sessions. Ziel: Texte klingen wie von Dani, nicht wie eine Doku.
+Gilt für **alle Nachrichten-/Antwortentwürfe in Daniels Namen** (Chat, Mail, Teams) – in allen Projekten und Sessions. Ziel: Texte klingen wie von Dani, nicht wie eine Doku.
 
 Dieses Dokument ist eine **laufend geschärfte Referenz**: Es bildet immer nur den aktuellen Stand ab. Keine historischen Vermerke („früher", „geändert"). Jede neue Stil-Rückmeldung von Dani wird als zusätzliche Differenzierung eingearbeitet, damit der nächste Entwurf näher am Ziel liegt.
 
-Quelle/Schwester-Kopie: `dokumentations-tools/dfa-betrieb/schreibstil.md` (versioniert, DfA-Kontext). Bei neuen Stil-Rückmeldungen beide Dateien nachführen.
+Quelle/Schwester-Kopie: `sbb/1-dfa-betrieb/schreibstil.md` (versioniert, DfA-Kontext, inzwischen ausführlicher). Bei neuen Stil-Rückmeldungen beide Dateien nachführen.
 
 ## Kernprinzipien
 
@@ -26,7 +26,7 @@ Quelle/Schwester-Kopie: `dokumentations-tools/dfa-betrieb/schreibstil.md` (versi
 - **Konjunktiv für Vorschläge** („würde ich", „wäre", „gerne"). Angebote, keine Befehle.
 - **„wir/uns"** fürs Team.
 - **Indikativ nur für Belegtes.** Hypothetische Folgen im Konjunktiv („besonders heikel würde das …"); milde Quantifizierer („einiges" statt „vieles").
-- **Kein Gedankenstrich (—).** In der Schweiz unüblich. Gedanken lieber in zwei einfache Sätze trennen. Wenn schon ein Strich, dann der einfache Bindestrich (-).
+- **Kein Gedankenstrich, schon gar nicht der amerikanische (—).** In der Schweiz unüblich. Gedanken lieber in zwei einfache Sätze trennen. Wenn schon ein Strich, dann der einfache Bindestrich (-).
 
 ## Sprache
 
@@ -36,8 +36,8 @@ Quelle/Schwester-Kopie: `dokumentations-tools/dfa-betrieb/schreibstil.md` (versi
 
 Standard ist der Stil oben. Bekannte Differenzierungen:
 
-- **Chat / Teams / Mail (Dialog):** Ich-Form für die eigene Haltung / den nächsten Schritt („ich würde…"), direkte Anrede mit Vorname. Aber: Geht es um die **Rolle / die Verantwortlichkeiten** (nicht ums eigene Tun), die Rolle in 3. Person nennen („der Team-Coach") — auch mitten in einer Chat-Nachricht.
-- **Dokument- / Rollentext (z. B. Rollenbeschrieb):** die Rolle in 3. Person nennen („der Team-Coach", „bis das Team es ohne Team-Coach durchführt") statt „ich". Sachlicher Register — aber gleich knapp.
+- **Chat / Teams / Mail (Dialog):** Ich-Form für die eigene Haltung / den nächsten Schritt („ich würde…"), direkte Anrede mit Vorname. Aber: Geht es um die **Rolle / die Verantwortlichkeiten** (nicht ums eigene Tun), die Rolle in 3. Person nennen („der Team-Coach"), auch mitten in einer Chat-Nachricht.
+- **Dokument- / Rollentext (z. B. Rollenbeschrieb):** die Rolle in 3. Person nennen („der Team-Coach", „bis das Team es ohne Team-Coach durchführt") statt „ich". Sachlicher Register, aber gleich knapp.
 
 ## Don'ts
 
