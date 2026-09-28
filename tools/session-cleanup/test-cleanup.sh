@@ -39,10 +39,14 @@ U_E1="aaaaaaa9-0000-4000-8000-000000000001"
 U_E2="aaaaaaa9-0000-4000-8000-000000000002"
 U_E3="aaaaaaa9-0000-4000-8000-000000000003"
 U_OPEN="aaaaaaa9-0000-4000-8000-000000000004"
+U_C9A="aaaaaaa8-0000-4000-8000-000000000001"
+U_C9B="aaaaaaa8-0000-4000-8000-000000000002"
 
 line_user()  { printf '{"type":"user","sessionId":"%s","timestamp":"%s","content":"%s"}\n' "$1" "$2" "$3"; }
 line_asst()  { printf '{"type":"assistant","sessionId":"%s","timestamp":"%s","content":"%s"}\n' "$1" "$2" "$3"; }
 line_title() { printf '{"type":"custom-title","sessionId":"%s","customTitle":"%s"}\n' "$1" "$2"; }
+# The link a compaction leaves in the predecessor when it continues the conversation in a fresh file.
+line_cont()  { printf '{"type":"continued-in","timestamp":"%s","sessionId":"%s","continuedInSessionId":"%s"}\n' "$TS1" "$1" "$2"; }
 # Shared opening of a session that exists as two copies: the common byte prefix both sides carry.
 common_lines() { line_user "$1" "$TS0" "hello there"; line_asst "$1" "$TS1" "hi back"; }
 # Deterministic bulk content to push a transcript over the size threshold (~260 bytes/line).
@@ -60,7 +64,7 @@ build_fixtures() {
     mkdir -p "$hb/sessions" \
         "$P/proj-p0" "$P/proj-p1-old" "$P/proj-p1-new" "$P/proj-p3-old" "$P/proj-p3-new" \
         "$P/proj-p4-old" "$P/proj-p4-new" "$P/proj-p5-old" "$P/proj-p5-new" \
-        "$P/proj-p6" "$P/proj-p7" "$P/proj-p8" "$P/proj-p2"
+        "$P/proj-p6" "$P/proj-p7" "$P/proj-p8" "$P/proj-p9" "$P/proj-p2"
 
     # Phase 0: marker matches trimmed and case-insensitively; a title merely containing it stays.
     { common_lines "$U_DEL"; line_title "$U_DEL" " delete "; } > "$P/proj-p0/$U_DEL.jsonl"
@@ -121,6 +125,14 @@ build_fixtures() {
         > "$P/proj-p8/$U_C8A.jsonl"
     { line_title "$U_C8B" "Refactor"; line_user "$U_C8B" "$TS0" "branch two"; pad_lines "$U_C8B" 1500; } \
         > "$P/proj-p8/$U_C8B.jsonl"
+
+    # Phase 1b continuation chain: same title, different histories, both above the threshold - but
+    # the predecessor names the successor in a "continued-in" entry (compaction into a fresh file).
+    # One conversation: nothing trashed, nothing reported.
+    { line_title "$U_C9A" "Chain"; line_user "$U_C9A" "$TS0" "before the compaction"; pad_lines "$U_C9A" 1500
+      line_cont "$U_C9A" "$U_C9B"; } > "$P/proj-p9/$U_C9A.jsonl"
+    { line_title "$U_C9B" "Chain"; line_user "$U_C9B" "$TS1" "This session is being continued from a previous conversation"
+      pad_lines "$U_C9B" 1500; } > "$P/proj-p9/$U_C9B.jsonl"
 
     # Phase 2: small unnamed (goes, sidecar rides along), big unnamed (stays), small titled (stays),
     # small unnamed but open (stays via the session registry).
@@ -202,6 +214,10 @@ run_suite() { # engine: sh | ps
     assert_kept "$sandbox" proj-p8 "$U_C8A" "phase 1b: collision copy A stays"
     assert_kept "$sandbox" proj-p8 "$U_C8B" "phase 1b: collision copy B stays"
     assert_contains "$out" 'same title "Refactor"' "phase 1b: collision reported"
+    assert_kept "$sandbox" proj-p9 "$U_C9A" "phase 1b: chain predecessor stays"
+    assert_kept "$sandbox" proj-p9 "$U_C9B" "phase 1b: chain successor stays"
+    assert_contains "$out" 'continuation chain "Chain"' "phase 1b: chain logged as one conversation"
+    assert_not_contains "$out" 'same title "Chain"' "phase 1b: chain not reported as a collision"
     assert_trashed "$sandbox" proj-p2 "$U_E1" "phase 2: small unnamed session trashed"
     if [ -d "$sandbox/.claude/projects-trash/$TODAY/proj-p2/$U_E1" ]; then
         pass "phase 2: sidecar moved along"
@@ -221,9 +237,12 @@ run_suite() { # engine: sh | ps
         local ftxt; ftxt=$(cat "$findings")
         assert_contains "$ftxt" "ParallelWork" "findings.txt lists the diverged pair"
         assert_contains "$ftxt" "Refactor" "findings.txt lists the title collision"
+        assert_not_contains "$ftxt" "Chain" "findings.txt leaves the continuation chain out"
     else
         fail "findings.txt written"
     fi
+    assert_contains "$out2" "findings unchanged since the previous run" \
+        "run 2 suppresses the notification for unchanged findings"
     assert_contains "$out" "done: 1 marked, 4 duplicate(s) and 1 empty session(s) trashed, 1 batch(es) purged" \
         "run 1 totals"
     assert_contains "$out2" "done: 0 marked, 0 duplicate(s) and 0 empty session(s) trashed, 0 batch(es) purged" \

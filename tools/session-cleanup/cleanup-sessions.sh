@@ -121,6 +121,18 @@ session_title() {
     printf '(no user message)'
 }
 
+# The session this one was continued in, on stdout (empty when never continued): when a compaction
+# moves the conversation into a fresh file (harness behaviour seen 2026-09-20), the predecessor gets a
+# "continued-in" entry naming the successor and the successor starts with the compact summary. Such a
+# pair is one conversation split in two files, and the resume picker shows only the head - the
+# inherited title is no collision.
+continued_in() {
+    # `|| true`: with pipefail a session without the entry makes grep fail the pipeline, and set -e
+    # would abort the run on the assignment.
+    grep '"type"[[:space:]]*:[[:space:]]*"continued-in"' "$1" 2>/dev/null | tail -1 \
+        | sed -nE 's/.*"continuedInSessionId"[[:space:]]*:[[:space:]]*"([0-9a-fA-F-]{36})".*/\1/p' || true
+}
+
 # The /rename title of a session, returned in CUSTOM_TITLE (not on stdout: a $(...) call would run in
 # a subshell and drop the cache below). Exit status 0 when the session carries a "custom-title" entry
 # at all - an unparsable entry yields an empty title but still counts as titled, so the keep-protection
@@ -427,6 +439,25 @@ for project_dir in "$PROJECTS_DIR"/*/; do
     for title in "${!title_map[@]}"; do
         count=$(printf '%s' "${title_map[$title]}" | grep -c .) || true
         [ "$count" -ge 2 ] || continue
+        # A session that was continued in another member of the group (compaction into a fresh file,
+        # linked by a "continued-in" entry) is the same conversation, not a namesake: the picker shows
+        # only the head, the predecessor holds the full history. Predecessors leave the group untouched;
+        # a pair that is only a chain is no collision at all.
+        # (`|| continue`, not `&&`: under set -e a trailing false test would abort the whole run)
+        ids=$(while IFS= read -r f; do [ -n "$f" ] || continue; basename "$f" .jsonl; done <<< "${title_map[$title]}")
+        members=""; chain=""
+        while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            succ=$(continued_in "$f")
+            if [ -n "$succ" ] && printf '%s\n' "$ids" | grep -qxF "$succ"; then
+                id=$(basename "$f" .jsonl); chain="${chain:+$chain, }${id:0:8} -> ${succ:0:8}"
+            else
+                members="$members$f"$'\n'
+            fi
+        done <<< "${title_map[$title]}"
+        [ -z "$chain" ] || log "continuation chain \"$title\" in $project_name: $chain - one conversation, not a collision"
+        count=$(printf '%s' "$members" | grep -c .) || true
+        [ "$count" -ge 2 ] || continue
         # The rename protection preserves a name the user gave - but when the same name lives on in
         # a bigger session of the same project, a namesake below the empty threshold carries no keep
         # intent of its own. It goes to trash; only namesakes that are all above the threshold are
@@ -435,7 +466,7 @@ for project_dir in "$PROJECTS_DIR"/*/; do
             [ -n "$f" ] || continue
             printf '%s	%s
 ' "$(session_total_size "$f")" "$f"
-        done <<< "${title_map[$title]}" | sort -rn)
+        done <<< "$members" | sort -rn)
         keeper_f=$(printf '%s
 ' "$sorted" | head -1 | cut -f2-)
         keeper_id=$(basename "$keeper_f" .jsonl)
@@ -532,19 +563,32 @@ log "done: $marked marked, $deduped duplicate(s) and $moved empty session(s) tra
 
 # Findings that need a human decision (diverged copies, title collisions) are written to findings.txt
 # and raised as desktop notifications (one per finding), because scheduled runs have no visible
-# console. A failed notification never breaks the run.
+# console. Notifications go out only when the findings changed since the previous run - re-raising
+# the same undecided pair three times a day is noise; findings.txt keeps the current list either way,
+# and disappears once nothing is left to decide. A failed notification never breaks the run.
 if [ "$DRY_RUN" != 1 ] && [ "${#findings_titles[@]}" -gt 0 ]; then
+    body=""
+    for ((i = 0; i < ${#findings_titles[@]}; i++)); do
+        body="$body"$'\n'"${findings_titles[$i]}"$'\n'"${findings_bodies[$i]}"$'\n'
+    done
+    previous=""
+    [ -f "$TRASH_DIR/findings.txt" ] && previous=$(tail -n +2 "$TRASH_DIR/findings.txt")
+    findings_changed=1
+    [ "$(printf '%s' "$previous" | sed -e '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')" = "$(printf '%s' "$body" | sed -e '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')" ] && findings_changed=0
     {
         echo "Session-Cleanup-Befunde vom $(date '+%Y-%m-%d %H:%M') - Auflösung: Session umbenennen (/rename) oder wegwerfen"
-        for ((i = 0; i < ${#findings_titles[@]}; i++)); do
-            printf '\n%s\n%s\n' "${findings_titles[$i]}" "${findings_bodies[$i]}"
-        done
+        printf '%s' "$body"
     } > "$TRASH_DIR/findings.txt"
-    if [ "$NO_NOTIFY" != 1 ] && command -v notify-send >/dev/null 2>&1; then
+    if [ "$findings_changed" = 0 ]; then
+        log "findings unchanged since the previous run - notification suppressed ($TRASH_DIR/findings.txt)"
+    elif [ "$NO_NOTIFY" != 1 ] && command -v notify-send >/dev/null 2>&1; then
         for ((i = 0; i < ${#findings_titles[@]} && i < 5; i++)); do
             notify-send "${findings_titles[$i]}" "${findings_bodies[$i]}" 2>/dev/null || true
         done
     fi
+elif [ "$DRY_RUN" != 1 ] && [ -f "$TRASH_DIR/findings.txt" ]; then
+    rm -f "$TRASH_DIR/findings.txt"
+    log "no findings left - findings.txt removed"
 fi
 
 if [ "$DRY_RUN" != 1 ]; then

@@ -145,6 +145,21 @@ function Get-CustomTitle([System.IO.FileInfo]$file) {
     return $title
 }
 
+# The session this one was continued in: when a compaction moves the conversation into a fresh file
+# (harness behaviour seen 2026-09-20), the predecessor gets a "continued-in" entry naming the successor
+# and the successor starts with the compact summary. Such a pair is one conversation split in two
+# files, and the resume picker shows only the head - the inherited title is no collision. $null when
+# the session was never continued. Cached like the titles.
+$script:continuedInCache = @{}
+function Get-ContinuedIn([System.IO.FileInfo]$file) {
+    if ($script:continuedInCache.ContainsKey($file.FullName)) { return $script:continuedInCache[$file.FullName] }
+    $id = $null
+    $hit = Select-String -LiteralPath $file.FullName -Pattern '"type"\s*:\s*"continued-in"' | Select-Object -Last 1
+    if ($hit -and $hit.Line -match '"continuedInSessionId"\s*:\s*"([0-9a-fA-F-]{36})"') { $id = $Matches[1] }
+    $script:continuedInCache[$file.FullName] = $id
+    return $id
+}
+
 # Total footprint of a session: transcript plus sidecar directory (subagent transcripts).
 function Get-SessionSize([System.IO.FileInfo]$transcript) {
     $size = $transcript.Length
@@ -399,11 +414,26 @@ foreach ($projectDir in Get-ChildItem $projectsDir -Directory) {
     }
     foreach ($t in $titles.GetEnumerator()) {
         if ($t.Value.Count -lt 2) { continue }
+        # A session that was continued in another member of the group (compaction into a fresh file,
+        # linked by a "continued-in" entry) is the same conversation, not a namesake: the picker shows
+        # only the head, the predecessor holds the full history. Predecessors leave the group untouched;
+        # a pair that is only a chain is no collision at all.
+        $ids = @($t.Value | ForEach-Object { $_.BaseName })
+        $chainNames = @()
+        $links = foreach ($f in $t.Value) {
+            $succ = Get-ContinuedIn $f
+            if ($succ -and ($ids -contains $succ)) { $chainNames += $f.FullName; "$($f.Name.Substring(0, 8)) -> $($succ.Substring(0, 8))" }
+        }
+        if ($chainNames.Count -gt 0) {
+            Write-Log "continuation chain `"$($t.Key)`" in $($projectDir.Name): $($links -join ', ') - one conversation, not a collision"
+        }
+        $members = @($t.Value | Where-Object { $chainNames -notcontains $_.FullName })
+        if ($members.Count -lt 2) { continue }
         # The rename protection preserves a name the user gave - but when the same name lives on in
         # a bigger session of the same project, a namesake below the empty threshold carries no keep
         # intent of its own. It goes to trash; only namesakes that are all above the threshold are
         # reported as a collision.
-        $bySize = @($t.Value | Sort-Object { Get-SessionSize $_ } -Descending)
+        $bySize = @($members | Sort-Object { Get-SessionSize $_ } -Descending)
         $remaining = [Collections.Generic.List[object]]::new()
         $remaining.Add($bySize[0])
         foreach ($f in ($bySize | Select-Object -Skip 1)) {
@@ -487,16 +517,33 @@ Write-Log "done: $marked marked, $deduped duplicate(s) and $moved empty session(
 # Scheduled runs have no visible console, so the outcome goes to the Action Center: one summary toast
 # when something was trashed or purged, plus one toast per finding that needs a human decision
 # (diverged copies, title collisions; also written to findings.txt, kept on screen via -Reminder).
-# Runs with nothing to report stay silent. Show-Toast (tools/notify) routes the WinRT call through
-# Windows PowerShell 5.1 without a console window. A failed notification never breaks the run.
+# Runs with nothing to report stay silent. Findings are toasted only when they changed since the
+# previous run - three runs a day re-raising the same undecided pair is noise, findings.txt keeps the
+# current list either way. Show-Toast (tools/notify) routes the WinRT call through Windows PowerShell
+# 5.1 without a console window. A failed notification never breaks the run.
 $acted = $marked + $deduped + $moved + $purged
+$findingsChanged = $false
 if (-not $DryRun -and $script:findings.Count -gt 0) {
     $findingsFile = Join-Path $trashDir 'findings.txt'
     $header = "Session-Cleanup-Befunde vom $(Get-Date -Format 'yyyy-MM-dd HH:mm') - Auflösung: Session umbenennen (/rename) oder wegwerfen"
     $body = ($script:findings | ForEach-Object { "$($_.Title)`n$($_.Body)" }) -join "`n`n"
+    $previous = ''
+    if (Test-Path -LiteralPath $findingsFile) {
+        # Everything after the dated header line is the comparable body.
+        $previous = ((Get-Content -LiteralPath $findingsFile -Raw -Encoding UTF8) -split "`n", 2)[1]
+    }
+    $findingsChanged = ($previous.Trim() -ne $body.Trim())
     Set-Content -LiteralPath $findingsFile -Value ($header + "`n`n" + $body) -Encoding UTF8
+    if (-not $findingsChanged) { Write-Log "findings unchanged since the previous run - toast suppressed ($findingsFile)" }
+} elseif (-not $DryRun) {
+    # Nothing left to decide: the list from the previous run must not linger.
+    $findingsFile = Join-Path $trashDir 'findings.txt'
+    if (Test-Path -LiteralPath $findingsFile) {
+        Remove-Item -LiteralPath $findingsFile -Force
+        Write-Log "no findings left - findings.txt removed"
+    }
 }
-if (-not $DryRun -and -not $NoNotify -and ($acted + $script:findings.Count) -gt 0) {
+if (-not $DryRun -and -not $NoNotify -and ($acted -gt 0 -or $findingsChanged)) {
     try {
         . (Join-Path $PSScriptRoot '..\notify\toast.ps1')
         $sender = @{ AppId = 'AIToolbox.SessionCleanup'; AppName = 'AI-Toolbox Session Cleanup' }
@@ -504,8 +551,10 @@ if (-not $DryRun -and -not $NoNotify -and ($acted + $script:findings.Count) -gt 
             Show-Toast @sender -Title 'Session-Cleanup gelaufen' `
                 -Body "$marked markiert, $deduped Duplikat(e), $moved leere Session(s) in den Papierkorb; $purged Batch(es) endgültig gelöscht"
         }
-        foreach ($f in ($script:findings | Select-Object -First 5)) {
-            Show-Toast @sender -Title $f.Title -Body $f.Body -Reminder
+        if ($findingsChanged) {
+            foreach ($f in ($script:findings | Select-Object -First 5)) {
+                Show-Toast @sender -Title $f.Title -Body $f.Body -Reminder
+            }
         }
     } catch {
         Write-Log "notification failed: $($_.Exception.Message)"
