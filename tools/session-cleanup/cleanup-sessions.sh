@@ -3,7 +3,7 @@
 # redundant duplicate copies into a trash folder and purges trash entries past retention. Bash port
 # of cleanup-sessions.ps1 — see that file for the full phase descriptions. Desired-state and
 # idempotent: re-runs only act on sessions that currently match the criteria.
-set -euo pipefail
+set -Eeuo pipefail
 
 MAX_SIZE_BYTES=$((250 * 1024))
 # Never touch sessions with activity within this window (0 = no age guard). Sessions worth keeping
@@ -47,6 +47,24 @@ log() {
 "
     echo "$line"
 }
+
+# Under set -e a failing command aborts the run silently: log lines are buffered until the end, so
+# nothing reaches cleanup.log and the exit status is the only trace (2026-09-28: a grep without a
+# match inside a helper ended two runs with exit 1 and no log line). The ERR trap flushes the
+# buffered lines, records where the abort happened and raises it on the desktop. set -E above makes
+# the trap fire inside functions and subshells too; only the main shell writes, so a failure inside
+# a $(...) substitution is reported once, from the assignment that consumed it.
+on_error() {
+    local status=$1 line=$2 cmd=$3
+    [ "$BASHPID" = "$$" ] || exit "$status"
+    log "ABORTED with exit $status at line $line: $cmd"
+    if [ "$DRY_RUN" != 1 ]; then printf '%s' "$log_lines" >> "$LOG_FILE" 2>/dev/null || true; fi
+    if [ "$NO_NOTIFY" != 1 ] && command -v notify-send >/dev/null 2>&1; then
+        notify-send "Session-Cleanup abgebrochen" "Exit $status in Zeile $line: $cmd" 2>/dev/null || true
+    fi
+    exit "$status"
+}
+trap 'on_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 now=$(date +%s)
 today_batch="$TRASH_DIR/$(date +%Y-%m-%d)"

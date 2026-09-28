@@ -171,8 +171,13 @@ assert_not_contains() { # haystack needle description
     case "$1" in *"$2"*) fail "$3 (unexpected: $2)" ;; *) pass "$3" ;; esac
 }
 
+assert_exit_zero() { # status output description
+    if [ "$1" = 0 ]; then pass "$3"; else fail "$3 (exit $1)"; printf '%s
+' "$2" | tail -n 5 | sed 's/^/       | /'; fi
+}
+
 run_suite() { # engine: sh | ps
-    local engine=$1 sandbox open_pid out out2
+    local engine=$1 sandbox open_pid out out2 st st2
     sandbox=$(mktemp -d)
     # The registry entry must name a process the engine sees as alive: this test shell for bash
     # (kill -0), the always-present System process (PID 4) for PowerShell (Get-Process).
@@ -180,17 +185,21 @@ run_suite() { # engine: sh | ps
     build_fixtures "$sandbox" "$open_pid"
 
     if [ "$engine" = sh ]; then
-        out=$(HOME="$sandbox" bash "$CLEANUP_SH" --no-notify 2>&1)
-        out2=$(HOME="$sandbox" bash "$CLEANUP_SH" --no-notify 2>&1)
+        out=$(HOME="$sandbox" bash "$CLEANUP_SH" --no-notify 2>&1); st=$?
+        out2=$(HOME="$sandbox" bash "$CLEANUP_SH" --no-notify 2>&1); st2=$?
     else
         local win_profile win_script
         win_profile=$(cygpath -w "$sandbox")
         win_script=$(cygpath -w "$CLEANUP_PS1")
-        out=$(USERPROFILE="$win_profile" "$PS_EXE" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$win_script" -NoNotify 2>&1)
-        out2=$(USERPROFILE="$win_profile" "$PS_EXE" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$win_script" -NoNotify 2>&1)
+        out=$(USERPROFILE="$win_profile" "$PS_EXE" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$win_script" -NoNotify 2>&1); st=$?
+        out2=$(USERPROFILE="$win_profile" "$PS_EXE" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$win_script" -NoNotify 2>&1); st2=$?
     fi
 
     echo "== $engine =="
+    # A run that dies halfway leaves a half-cleaned sandbox and a truncated log; the content asserts
+    # below would then fail one by one without naming the cause, so the exit status comes first.
+    assert_exit_zero "$st" "$out" "run 1 exits 0"
+    assert_exit_zero "$st2" "$out2" "run 2 exits 0"
     assert_trashed "$sandbox" proj-p0 "$U_DEL" "phase 0: DELETE-marked session trashed"
     assert_kept "$sandbox" proj-p0 "$U_DELBUG" "phase 0: title merely containing the marker stays"
     assert_trashed "$sandbox" proj-p1-old "$U_DUP" "phase 1: contained old copy trashed"
@@ -255,7 +264,33 @@ run_suite() { # engine: sh | ps
     fi
 }
 
+# The bash port buffers its log lines until the end, so an abort under set -e used to leave no trace
+# but the exit status. The ERR trap must flush the buffer with an ABORTED line, to stdout and to
+# cleanup.log. Provoked with a stat shim that fails on every call.
+test_abort_trap() {
+    local sandbox out st
+    sandbox=$(mktemp -d)
+    build_fixtures "$sandbox" "$$"
+    mkdir -p "$sandbox/bin"
+    printf '#!/usr/bin/env bash
+exit 1
+' > "$sandbox/bin/stat"
+    chmod +x "$sandbox/bin/stat"
+    out=$(HOME="$sandbox" PATH="$sandbox/bin:$PATH" bash "$CLEANUP_SH" --no-notify 2>&1); st=$?
+    echo "== sh abort trap =="
+    if [ "$st" != 0 ]; then pass "aborted run exits non-zero"; else fail "aborted run exits non-zero (exit 0)"; fi
+    assert_contains "$out" "ABORTED with exit 1 at line" "abort is reported with exit status and line"
+    assert_contains "$out" "stat -c" "abort names the failing command"
+    if [ "$(grep -c 'ABORTED with exit 1 at line' "$sandbox/.claude/projects-trash/cleanup.log" 2>/dev/null)" = 1 ]; then
+        pass "abort line flushed to cleanup.log exactly once"
+    else
+        fail "abort line flushed to cleanup.log exactly once"
+    fi
+    [ "${KEEP_SANDBOX:-0}" = 1 ] && echo "  sandbox kept at $sandbox" || rm -rf "$sandbox"
+}
+
 run_suite sh
+test_abort_trap
 
 PS_EXE=""
 if command -v pwsh >/dev/null 2>&1; then PS_EXE=pwsh
