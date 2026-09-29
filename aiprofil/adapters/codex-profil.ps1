@@ -9,6 +9,13 @@
 # FOUNDRY_API_KEY — Codex refuses inline keys; env_key must reference an env
 # variable. Legacy ANTHROPIC_FOUNDRY_* keys are honoured as fallback.
 #
+# Deployment catalog (optional): CODEX_MODEL_DEPLOYMENTS=a,b writes one
+# [profiles."<provider>-<a>"] per deployment (codex --profile <provider>-<a>)
+# and drops stale ones of the provider; without CODEX_MODEL_DEPLOYMENT the
+# default model stays. CODEX_PROVIDER_ID (default azure, own env var
+# AZURE_<ID>_API_KEY), CODEX_BASE_URL, CODEX_API_VERSION and CODEX_API_KEY
+# shape the [model_providers.<id>] block. See codex-profil.sh for details.
+#
 # Subscription mode (CODEX_AUTH=chatgpt) instead targets the built-in openai
 # provider with the ChatGPT sign-in (codex login): sets forced_login_method,
 # drops the Azure repoint, and uses CODEX_MODEL (or the Codex default) as
@@ -22,7 +29,7 @@
 #         project  no Codex analog -> skipped with a note
 # =============================================================================
 
-$APP_VERSION = '0.4.14'
+$APP_VERSION = '0.5.24'
 
 $_CxScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 
@@ -102,11 +109,48 @@ function _Cx-TomlDel {
     return ,$out.ToArray()
 }
 
+# Drop every section whose name starts with $Prefix, is not in $Keep and (if
+# $Provider is non-empty) carries model_provider = "$Provider". Blank lines
+# travel with the section that follows them. Mirrors _cx_toml_drop.
+function _Cx-TomlDrop {
+    param([string[]]$Lines, [string]$Prefix, [string]$Provider, [string[]]$Keep)
+    $out = New-Object System.Collections.Generic.List[string]
+    $sec = New-Object System.Collections.Generic.List[string]
+    $st = @{ name = ''; droppable = $false; hasprov = $false }
+    $nb = 0
+    $isDropped = {
+        $st.droppable -and ($Provider -eq '' -or $st.hasprov) -and ($Keep -notcontains $st.name)
+    }
+    foreach ($raw in $Lines) {
+        if ($raw -match '^\s*$') { $nb++; continue }
+        if ($raw -match '^\[(?<s>[^\]]*)\]') {
+            if (-not (& $isDropped)) { $out.AddRange($sec) }
+            $sec.Clear()
+            $st.name = $Matches['s']
+            $st.droppable = $st.name.StartsWith($Prefix, [System.StringComparison]::Ordinal)
+            $st.hasprov = $false
+            while ($nb -gt 0) { $sec.Add(''); $nb-- }
+            $sec.Add($raw); continue
+        }
+        while ($nb -gt 0) { $sec.Add(''); $nb-- }
+        if ($raw -match '^\s*model_provider\s*=\s*(?<v>.*)$') {
+            if (($Matches['v'] -replace '"', '').TrimEnd() -eq $Provider) { $st.hasprov = $true }
+        }
+        $sec.Add($raw)
+    }
+    $keepLast = -not (& $isDropped)
+    if ($keepLast) {
+        $out.AddRange($sec)
+        while ($nb -gt 0) { $out.Add(''); $nb-- }
+    }
+    return ,$out.ToArray()
+}
+
 function _Cx-List {
     Write-Host "Profiles ($_CxProfilesDir):"
     Get-ChildItem "$_CxProfilesDir\*.env" -ErrorAction SilentlyContinue | ForEach-Object {
         $name = $_.BaseName
-        if (Select-String -Path $_.FullName -Pattern '^(CODEX_MODEL_DEPLOYMENT|CODEX_AUTH)=' -Quiet) {
+        if (Select-String -Path $_.FullName -Pattern '^(CODEX_MODEL_DEPLOYMENTS?|CODEX_AUTH)=' -Quiet) {
             Write-Host ("  {0,-16} [codex-capable]" -f $name)
         } else {
             Write-Host ("  {0,-16} (no codex block)" -f $name)
@@ -163,11 +207,13 @@ function _Cx-Use {
     if (-not (Test-Path $f)) { _Cx-Fail "profile not found: $f"; return }
 
     # A profile is Codex-capable iff it names an Azure deployment
-    # (CODEX_MODEL_DEPLOYMENT) or a subscription login (CODEX_AUTH=chatgpt).
-    $auth       = _Cx-ProfileVal $f 'CODEX_AUTH'
-    $deployment = _Cx-ProfileVal $f 'CODEX_MODEL_DEPLOYMENT'
-    $model      = _Cx-ProfileVal $f 'CODEX_MODEL'
-    if (-not $auth -and -not $deployment) {
+    # (CODEX_MODEL_DEPLOYMENT), a deployment catalog (CODEX_MODEL_DEPLOYMENTS)
+    # or a subscription login (CODEX_AUTH=chatgpt).
+    $auth        = _Cx-ProfileVal $f 'CODEX_AUTH'
+    $deployment  = _Cx-ProfileVal $f 'CODEX_MODEL_DEPLOYMENT'
+    $deployments = _Cx-ProfileVal $f 'CODEX_MODEL_DEPLOYMENTS'
+    $model       = _Cx-ProfileVal $f 'CODEX_MODEL'
+    if (-not $auth -and -not $deployment -and -not $deployments) {
         _Cx-Info "profile '$name' has no CODEX_* keys — nothing for the codex target."
         return
     }
@@ -178,14 +224,24 @@ function _Cx-Use {
         return
     } else {
         $mode = 'azure'
+        # Provider id: 'azure' (default) keeps AZURE_OPENAI_API_KEY; any
+        # other id gets its own env var so several backends coexist.
+        $provider = _Cx-ProfileVal $f 'CODEX_PROVIDER_ID'
+        if (-not $provider) { $provider = 'azure' }
+        $envKey = if ($provider -eq 'azure') { 'AZURE_OPENAI_API_KEY' }
+                  else { 'AZURE_' + $provider.ToUpperInvariant().Replace('-', '_') + '_API_KEY' }
+        $baseUrl    = _Cx-ProfileVal $f 'CODEX_BASE_URL'
+        $apiVersion = _Cx-ProfileVal $f 'CODEX_API_VERSION'
         $resource = _Cx-ProfileVal $f 'FOUNDRY_RESOURCE'
         if (-not $resource) { $resource = _Cx-ProfileVal $f 'ANTHROPIC_FOUNDRY_RESOURCE' }
-        $apiKey = _Cx-ProfileVal $f 'FOUNDRY_API_KEY'
+        $apiKey = _Cx-ProfileVal $f 'CODEX_API_KEY'
+        if (-not $apiKey) { $apiKey = _Cx-ProfileVal $f 'FOUNDRY_API_KEY' }
         if (-not $apiKey) { $apiKey = _Cx-ProfileVal $f 'ANTHROPIC_FOUNDRY_API_KEY' }
-        if (-not $resource) {
-            _Cx-Fail "profile '$name' sets CODEX_MODEL_DEPLOYMENT but no FOUNDRY_RESOURCE."
+        if (-not $baseUrl -and -not $resource) {
+            _Cx-Fail "profile '$name' has Codex deployments but neither CODEX_BASE_URL nor FOUNDRY_RESOURCE."
             return
         }
+        if (-not $baseUrl) { $baseUrl = "https://$resource.openai.azure.com/openai/v1" }
     }
 
     # desired-state: patch config.toml only where it deviates.
@@ -207,13 +263,36 @@ function _Cx-Use {
         if ($model) { $lines = _Cx-TomlSet $lines '' 'model' $model }
         else { $lines = _Cx-TomlDel $lines '' 'model' }
     } else {
-        $lines = _Cx-TomlSet $lines '' 'model' $deployment
-        $lines = _Cx-TomlSet $lines '' 'model_provider' 'azure'
-        $lines = _Cx-TomlDel $lines '' 'forced_login_method'
-        $lines = _Cx-TomlSet $lines 'model_providers.azure' 'name' 'Azure OpenAI'
-        $lines = _Cx-TomlSet $lines 'model_providers.azure' 'base_url' "https://$resource.openai.azure.com/openai/v1"
-        $lines = _Cx-TomlSet $lines 'model_providers.azure' 'env_key' 'AZURE_OPENAI_API_KEY'
-        $lines = _Cx-TomlSet $lines 'model_providers.azure' 'wire_api' 'responses'
+        # Only a single CODEX_MODEL_DEPLOYMENT repoints the default model;
+        # a catalog-only profile leaves the top level (e.g. ChatGPT) alone.
+        if ($deployment) {
+            $lines = _Cx-TomlSet $lines '' 'model' $deployment
+            $lines = _Cx-TomlSet $lines '' 'model_provider' $provider
+            $lines = _Cx-TomlDel $lines '' 'forced_login_method'
+        }
+        $psec = "model_providers.$provider"
+        $pname = if ($provider -eq 'azure') { 'Azure OpenAI' } else { "Azure OpenAI ($provider)" }
+        $lines = _Cx-TomlSet $lines $psec 'name' $pname
+        $lines = _Cx-TomlSet $lines $psec 'base_url' $baseUrl
+        $lines = _Cx-TomlSet $lines $psec 'env_key' $envKey
+        $lines = _Cx-TomlSet $lines $psec 'wire_api' 'responses'
+        # api-version lives in its own sub-table; an inline query_params key
+        # would clash with it, so it is always removed.
+        $lines = _Cx-TomlDel $lines $psec 'query_params'
+        if ($apiVersion) { $lines = _Cx-TomlSet $lines "$psec.query_params" 'api-version' $apiVersion }
+        else { $lines = _Cx-TomlDrop $lines "$psec.query_params" '' @() }
+        # One Codex profile per catalog deployment, named <provider>-<deployment>;
+        # stale ones of this provider are dropped.
+        $keep = @()
+        foreach ($d in ($deployments -split ',')) {
+            $d = $d -replace '\s', ''
+            if (-not $d) { continue }
+            $sec = "profiles.`"$provider-$d`""
+            $keep += $sec
+            $lines = _Cx-TomlSet $lines $sec 'model' $d
+            $lines = _Cx-TomlSet $lines $sec 'model_provider' $provider
+        }
+        $lines = _Cx-TomlDrop $lines "profiles.`"$provider-" $provider $keep
     }
 
     $newText = ($lines -join $nl)
@@ -226,7 +305,11 @@ function _Cx-Use {
         _Cx-Ok "model -> $shownModel, provider openai, login chatgpt ($file)"
     } else {
         [System.IO.File]::WriteAllText($file, $newText)
-        _Cx-Ok "model -> $deployment, provider azure ($file)"
+        if ($deployment) { _Cx-Ok "model -> $deployment, provider $provider ($file)" }
+        if ($keep.Count -gt 0) {
+            $shown = ($keep | ForEach-Object { $_ -replace '^profiles\."(.*)"$', '$1' }) -join ', '
+            _Cx-Ok "profiles for provider ${provider}: $shown ($file)"
+        }
     }
 
     if ($mode -eq 'chatgpt') {
@@ -235,12 +318,12 @@ function _Cx-Use {
             _Cx-Info "no Codex login found — run 'codex login' once to sign in with the ChatGPT account."
         }
     } elseif (-not $apiKey) {
-        _Cx-Warn "no FOUNDRY_API_KEY in profile — set AZURE_OPENAI_API_KEY yourself."
+        _Cx-Warn "no CODEX_API_KEY/FOUNDRY_API_KEY in profile — set $envKey yourself."
     } else {
-        [System.Environment]::SetEnvironmentVariable('AZURE_OPENAI_API_KEY', $apiKey, 'Process')
-        if ($doGlobal) { [System.Environment]::SetEnvironmentVariable('AZURE_OPENAI_API_KEY', $apiKey, 'User') }
+        [System.Environment]::SetEnvironmentVariable($envKey, $apiKey, 'Process')
+        if ($doGlobal) { [System.Environment]::SetEnvironmentVariable($envKey, $apiKey, 'User') }
         $scopeLabel = if ($doGlobal) { 'session + user' } else { 'session' }
-        _Cx-Ok "AZURE_OPENAI_API_KEY set ($scopeLabel)"
+        _Cx-Ok "$envKey set ($scopeLabel)"
     }
 }
 
@@ -259,18 +342,20 @@ switch ($_CxAction) {
         Write-Host "Actions:"
         Write-Host "  list                          profiles (Codex-capable marked)"
         Write-Host "  status                        show config target + current model/provider"
-        Write-Host "  use <profile> [--scope ...]   write config.toml + set AZURE_OPENAI_API_KEY"
+        Write-Host "  use <profile> [--scope ...]   write config.toml + set the provider's API key"
         Write-Host "                                (--scope session|user; idempotent)"
         Write-Host ""
         Write-Host "Profiles dir: $_CxProfilesDir"
         Write-Host "Profile keys consumed:"
         Write-Host "  Azure mode:        FOUNDRY_RESOURCE, FOUNDRY_API_KEY, CODEX_MODEL_DEPLOYMENT"
+        Write-Host "  Azure catalog:     CODEX_MODEL_DEPLOYMENTS=a,b,..  -> profiles `"<provider>-<a>`", ..."
+        Write-Host "                     [CODEX_PROVIDER_ID] [CODEX_BASE_URL] [CODEX_API_VERSION] [CODEX_API_KEY]"
         Write-Host "  Subscription mode: CODEX_AUTH=chatgpt [CODEX_MODEL]  (sign-in via codex login)"
         Write-Host "Installation: toolbox install --what codex-profil"
     }
 }
 
 Remove-Item -Path Function:\_Cx-ResolveProfilesDir, Function:\_Cx-ConfigFile, Function:\_Cx-ProfileVal, `
-    Function:\_Cx-TomlSet, Function:\_Cx-TomlDel, Function:\_Cx-List, Function:\_Cx-Status, Function:\_Cx-Use, `
+    Function:\_Cx-TomlSet, Function:\_Cx-TomlDel, Function:\_Cx-TomlDrop, Function:\_Cx-List, Function:\_Cx-Status, Function:\_Cx-Use, `
     Function:\_Cx-Info, Function:\_Cx-Ok, Function:\_Cx-Warn, Function:\_Cx-Fail -ErrorAction SilentlyContinue
 Remove-Variable -Name _CxScriptDir, _CxProfilesDir, _CxAction, _CxRest -ErrorAction SilentlyContinue

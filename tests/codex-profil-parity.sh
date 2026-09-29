@@ -22,7 +22,7 @@
 # repo and the real ~/.codex are never touched.
 # =============================================================================
 
-APP_VERSION='0.2.2'
+APP_VERSION='0.3.5'
 
 set -u
 
@@ -60,6 +60,18 @@ CODEX_MODEL=gpt-parity-sub
 EOF
 cat > "$PROFILES/maxplain.env" <<'EOF'
 CODEX_AUTH=chatgpt
+EOF
+cat > "$PROFILES/catalog.env" <<'EOF'
+CODEX_PROVIDER_ID=cat-res
+CODEX_BASE_URL=https://cat-res.cognitiveservices.azure.com/openai
+CODEX_API_VERSION=2025-04-01-preview
+CODEX_API_KEY=sk-catalog
+CODEX_MODEL_DEPLOYMENTS=gpt-a, gpt-b.1,gpt-c
+EOF
+cat > "$PROFILES/catalogshrunk.env" <<'EOF'
+CODEX_PROVIDER_ID=cat-res
+CODEX_BASE_URL=https://cat-res.cognitiveservices.azure.com/openai
+CODEX_MODEL_DEPLOYMENTS=gpt-b.1
 EOF
 
 FOREIGN_CONFIG=$(cat <<'EOF'
@@ -157,6 +169,44 @@ if grep -q '# personal codex config' "$HOME_SH/config.toml" \
     ok "azure/foreign: foreign content preserved"
 else
     bad "azure/foreign: foreign content lost"
+fi
+
+echo "codex-parity: deployment catalog over chatgpt (top level untouched)"
+step "chatgpt-pinned/before-catalog" maxpinned
+step "catalog/over-chatgpt" catalog
+if grep -q '^model = "gpt-parity-sub"' "$HOME_SH/config.toml" \
+   && grep -q '^model_provider = "openai"' "$HOME_SH/config.toml"; then
+    ok "catalog: top-level model/provider untouched"
+else
+    bad "catalog: top-level model/provider changed"
+fi
+if grep -q '^\[profiles\."cat-res-gpt-b\.1"\]' "$HOME_SH/config.toml" \
+   && grep -q '^env_key = "AZURE_CAT_RES_API_KEY"' "$HOME_SH/config.toml" \
+   && grep -q '^\[model_providers\.cat-res\.query_params\]' "$HOME_SH/config.toml"; then
+    ok "catalog: profiles, env_key and api-version written"
+else
+    bad "catalog: profiles/env_key/api-version missing"
+fi
+if [ "$(grep -c '^\[profiles\."cat-res-' "$HOME_SH/config.toml")" -eq 3 ]; then
+    ok "catalog: three profiles"
+else
+    bad "catalog: expected three profiles"
+fi
+
+echo "codex-parity: shrunk catalog drops stale profiles and api-version"
+step "catalog/shrunk" catalogshrunk
+if [ "$(grep -c '^\[profiles\."cat-res-' "$HOME_SH/config.toml")" -eq 1 ] \
+   && ! grep -q 'query_params' "$HOME_SH/config.toml" \
+   && grep -q 'mcp_servers.docs' "$HOME_SH/config.toml" \
+   && grep -q 'profiles.fast' "$HOME_SH/config.toml"; then
+    ok "catalog/shrunk: stale profiles + api-version gone, foreign kept"
+else
+    bad "catalog/shrunk: stale state left or foreign content lost"
+fi
+if python -c "import sys,tomllib;tomllib.load(open(sys.argv[1],'rb'))" "$HOME_SH/config.toml" 2>/dev/null; then
+    ok "catalog/shrunk: config is valid TOML"
+elif command -v python >/dev/null 2>&1; then
+    bad "catalog/shrunk: config is NOT valid TOML"
 fi
 
 # --- summary ------------------------------------------------------------------

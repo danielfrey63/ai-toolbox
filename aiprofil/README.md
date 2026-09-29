@@ -81,6 +81,19 @@ Adapter translation of the generic keys:
 belong to their adapters. A profile without a Foundry backend just omits the
 generic keys.
 
+### Codex deployment catalog
+
+A profile with `CODEX_MODEL_DEPLOYMENTS=a,b,…` registers one Codex profile per deployment, selectable via `codex --profile <provider>-<deployment>`. The default model stays untouched unless the profile also sets `CODEX_MODEL_DEPLOYMENT`, so the catalog coexists with the ChatGPT subscription mode.
+
+| Key | Effect |
+|---|---|
+| `CODEX_PROVIDER_ID` | own `[model_providers.<id>]` block (default `azure`); env var `AZURE_<ID>_API_KEY` (`azure` keeps `AZURE_OPENAI_API_KEY`) |
+| `CODEX_BASE_URL` | overrides the base URL derived from `FOUNDRY_RESOURCE` (e.g. a `*.cognitiveservices.azure.com/openai` endpoint; Codex appends `/responses`) |
+| `CODEX_API_VERSION` | writes `[model_providers.<id>.query_params] api-version` |
+| `CODEX_API_KEY` | key for this provider (falls back to `FOUNDRY_API_KEY`); `--scope user` persists it, so it never needs to be set by hand |
+
+Profiles named `<provider>-*` that point at the provider but are no longer listed are dropped. Catalog-only profiles carry no CC keys; apply them with `--target codex`, otherwise aiprofil also resets CC (see `profiles/nes.env.example`).
+
 ### Codex subscription mode
 
 A profile with `CODEX_AUTH=chatgpt` (e.g. `max`) repoints Codex at the
@@ -94,10 +107,7 @@ adapter hints at it when `auth.json` is missing. Azure mode conversely removes
 ## How the Codex edit stays safe
 
 `codex-profil` patches `${CODEX_HOME:-~/.codex}/config.toml` desired-state:
-only the top-level `model` / `model_provider` keys and the
-`[model_providers.azure]` section are touched, everything else (other
-providers, profiles, MCP config) is preserved. If nothing deviates, the file
-is left untouched.
+only the top-level `model` / `model_provider` keys, the profile's `[model_providers.<id>]` section (plus its `query_params`) and the `[profiles."<id>-*"]` catalog sections are touched, everything else (other providers, foreign profiles, MCP config) is preserved. If nothing deviates, the file is left untouched.
 
 ## How the Kilo edit stays safe
 

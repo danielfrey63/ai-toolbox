@@ -26,7 +26,7 @@
 #   codex         shell + config   User scope + config   (skip)
 # =============================================================================
 
-$APP_VERSION = '0.7.26'
+$APP_VERSION = '0.8.27'
 $_ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $_Adapters  = Join-Path $_ScriptDir 'adapters'
 
@@ -96,7 +96,7 @@ switch ($_action) {
             $name = $_.BaseName
             $markers = '[cc]'
             if (Select-String -Path $_.FullName -Pattern '^KILO_PROVIDER_ID=' -Quiet) { $markers += ' [kilo]' }
-            if (Select-String -Path $_.FullName -Pattern '^(CODEX_MODEL_DEPLOYMENT|CODEX_AUTH)=' -Quiet) { $markers += ' [codex]' }
+            if (Select-String -Path $_.FullName -Pattern '^(CODEX_MODEL_DEPLOYMENTS?|CODEX_AUTH)=' -Quiet) { $markers += ' [codex]' }
             if ($name -eq $env:CC_PROFILE) {
                 Write-Host ("  * {0,-16} {1} (active)" -f $name, $markers) -ForegroundColor Green
             } else {

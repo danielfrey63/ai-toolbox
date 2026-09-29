@@ -26,7 +26,7 @@
 #   codex         shell + config   shell + config        (skip)
 # =============================================================================
 
-APP_VERSION='0.7.26'
+APP_VERSION='0.8.27'
 
 _aiprofil_main() {
     local script_dir adapters profiles_dir
@@ -111,7 +111,7 @@ _aiprofil_main() {
             name="$(basename "$f" .env)"
             markers="[cc]"
             grep -Eq '^KILO_PROVIDER_ID=' "$f" && markers+=" [kilo]"
-            grep -Eq '^(CODEX_MODEL_DEPLOYMENT|CODEX_AUTH)=' "$f" && markers+=" [codex]"
+            grep -Eq '^(CODEX_MODEL_DEPLOYMENTS?|CODEX_AUTH)=' "$f" && markers+=" [codex]"
             if [[ "$name" == "${CC_PROFILE:-}" ]]; then
                 printf '  * %-16s %s \033[32m(active)\033[0m\n' "$name" "$markers"
             else
