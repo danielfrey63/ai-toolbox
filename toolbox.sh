@@ -43,7 +43,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.52.334'
+APP_VERSION='0.54.344'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -1058,6 +1058,57 @@ _claude_hook_current() {  # prepo → string
     ' "$1/.claude/settings.json" 2>/dev/null
 }
 
+# How many bump-version commands the project's PostToolUse hooks carry. Counts
+# individual commands, not the blocks holding them: two commands inside one
+# block fire just as twice as two blocks with one each.
+_claude_hook_count() {  # prepo → integer
+    local n
+    n=$(jq -r '
+        [ (.hooks.PostToolUse // [])[] | (.hooks // [])[] | .command | tostring
+          | select(test("bump-version")) ] | length
+    ' "$1/.claude/settings.json" 2>/dev/null) || n=0
+    printf '%s' "${n:-0}"
+}
+
+# Collapse duplicate bump-version PostToolUse entries down to the first one.
+# Every surplus entry bumps BUILD again on the same edit, so a duplicate is not
+# cosmetic — it silently doubles (or triples) every version step. The first
+# match keeps its block, matcher and statusMessage: it is the entry the normal
+# install path below then migrates or leaves alone, and preserving its shape
+# means a deliberately customised entry is not rewritten by the dedup. Blocks
+# left without any hook are dropped; blocks still holding a foreign hook stay.
+_claude_hook_dedup() {  # name prepo → 0, prints when it changed something
+    local name=$1 prepo=$2
+    local settings="$prepo/.claude/settings.json"
+    [ -f "$settings" ] || return 0
+    local n tmp
+    n=$(_claude_hook_count "$prepo")
+    [ "${n:-0}" -gt 1 ] || return 0
+    tmp=$(jq '
+        def isbump: ((.command? // "") | tostring | test("bump-version"));
+        (.hooks.PostToolUse // []) as $blocks
+        | [ range(0; ($blocks | length)) as $bi
+            | range(0; (($blocks[$bi].hooks // []) | length)) as $hi
+            | select($blocks[$bi].hooks[$hi] | isbump)
+            | [$bi, $hi] ] as $hits
+        | if ($hits | length) <= 1 then .
+          else ($hits[0]) as $keep
+          | .hooks.PostToolUse = (
+              [ range(0; ($blocks | length)) as $bi
+                | $blocks[$bi]
+                | .hooks = ( [ (.hooks // []) | to_entries[]
+                               | select(((.value | isbump) | not) or ([$bi, .key] == $keep))
+                               | .value ] )
+              ]
+              | map(select(((.hooks // []) | length) > 0))
+            )
+          end
+    ' "$settings") || return 0
+    printf '%s\n' "$tmp" > "$settings"
+    printf '  [~] %-18s claude PostToolUse: %d bump-version entries collapsed into one (%s)\n' \
+        "$name" "$n" "$settings"
+}
+
 # Idempotent install of our PostToolUse:Edit|Write hook. A pre-launcher entry
 # (sibling path) is migrated in place; any other custom bump-version command
 # is left alone.
@@ -1068,6 +1119,10 @@ _claude_hook_install() {  # name prepo
     [ -f "$settings" ] || printf '{}\n' > "$settings"
     local cmd tmp current
     cmd=$(_claude_hook_command)
+    # Collapse any duplicates first, so the single-match logic below sees the
+    # one entry it expects and reports on it instead of stopping at .[0] while
+    # a surplus entry keeps double-bumping.
+    _claude_hook_dedup "$name" "$prepo"
     current=$(_claude_hook_current "$prepo")
     if [ "$current" = "$cmd" ]; then
         printf '  [=] %-18s claude PostToolUse already present\n' "$name"
@@ -1100,19 +1155,20 @@ _claude_hook_install() {  # name prepo
     printf '  [+] %-18s claude PostToolUse -> %s\n' "$name" "$settings"
 }
 
-# Echo 'yes' | 'no' | 'no-settings' for the project's PostToolUse state.
+# Echo 'yes' | 'duplicate' | 'no' | 'no-settings' for the project's PostToolUse
+# state. `duplicate` is reported separately rather than folded into `yes`: more
+# than one bump-version entry means every edit bumps BUILD more than once, which
+# looks healthy from the outside but silently inflates the version. Surfacing it
+# puts the repo on the status punch list, and a re-install repairs it.
 _claude_hook_state() {  # prepo → string
     local settings="$1/.claude/settings.json"
     [ -f "$settings" ] || { printf 'no-settings'; return; }
     local match
-    match=$(jq -r '
-        (.hooks.PostToolUse // [])
-        | map(select(((.hooks // [])
-                      | map(select(.command | tostring | test("bump-version")))
-                      | length) > 0))
-        | length
-    ' "$settings" 2>/dev/null) || match=0
-    [ "${match:-0}" -ge 1 ] && printf 'yes' || printf 'no'
+    match=$(_claude_hook_count "$1")
+    if [ "${match:-0}" -gt 1 ]; then printf 'duplicate'
+    elif [ "${match:-0}" -eq 1 ]; then printf 'yes'
+    else printf 'no'
+    fi
 }
 
 # Remove our PostToolUse entries — guarded by the two-stage heuristic.
@@ -1171,7 +1227,9 @@ _ensure_launchers() {  # void
     bump_body="#!/bin/sh
 # bump-version — AI-Toolbox per-file version bumper, on PATH for git hooks.
 # Generated by \`toolbox install\`; regenerated on every hook install.
-exec sh \"$tb/tools/bump-version.sh\" \"\$@\"
+# bash, not sh: the bumper uses bash-only syntax (here-strings), so a dash
+# /bin/sh would fail on it — the impl's own shebang must win.
+exec bash \"$tb/tools/bump-version.sh\" \"\$@\"
 "
     hook_body="#!/bin/sh
 # toolbox-bump — AI-Toolbox git-hook entry point, on PATH so repo hooks invoke
@@ -1514,6 +1572,7 @@ handle_hook() {
                 cl_state=$(_claude_hook_state "$prepo")
                 case "$cl_state" in
                     yes)         cl_suffix=', claude=present' ;;
+                    duplicate)   cl_suffix=', claude=duplicate-double-bumps' ;;
                     no)          cl_suffix=', claude=missing-from-settings' ;;
                     no-settings) cl_suffix=', claude=missing-no-settings' ;;
                 esac
@@ -1523,7 +1582,8 @@ handle_hook() {
                 if ! _hook_shim_is_portable "$prepo"; then
                     printf '  [! ] %-18s %s (old shim path — re-install to migrate to toolbox-bump%s)\n' "$name" "$prepo" "$cl_suffix"
                     STATE=partial
-                elif [ "$cl_state" = "no" ] || [ "$cl_state" = "no-settings" ]; then
+                elif [ "$cl_state" = "no" ] || [ "$cl_state" = "no-settings" ] \
+                     || [ "$cl_state" = "duplicate" ]; then
                     printf '  [! ] %-18s %s (tagstyle=%s%s)\n' "$name" "$prepo" "${curts:-namespaced}" "$cl_suffix"
                     STATE=partial
                 else
@@ -2081,7 +2141,10 @@ _heal_hook_targets() {  # entries_json → healed_json
         gi=$((gi + 1))
         project=$(printf '%s' "$g" | jq -r '.[0].project')
         cs=$(_claude_hook_state "$project" 2>/dev/null || printf 'no')
-        if [ "$cs" = yes ]; then expected='claude'; else expected=''; fi
+        # `duplicate` still means the claude hook is patched in — it is a
+        # health problem, not an absence, so it resolves the target the same
+        # way `yes` does.
+        if [ "$cs" = yes ] || [ "$cs" = duplicate ]; then expected='claude'; else expected=''; fi
         winner=$(printf '%s' "$g" | jq -c --arg t "$expected" '
             (map(select(.target == $t)) + [.[0]]) | .[0] | .target = $t
         ')
