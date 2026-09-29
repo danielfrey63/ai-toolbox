@@ -18,7 +18,8 @@ aiprofil/
 ├── adapters/
 │   ├── cc-profil.sh / .ps1    CC env adapter (sourced)
 │   ├── kilo-profil.sh / .ps1  Kilo kilo.jsonc adapter (plain exec)
-│   └── codex-profil.sh / .ps1 Codex config.toml + env adapter (sourced)
+│   ├── codex-profil.sh / .ps1 Codex config.toml + env adapter (sourced)
+│   └── codex-catalog.py       Azure deployments -> Codex model catalog (shared helper)
 ├── profiles/                  SHARED profile source
 │   ├── <name>.env             real (gitignored — holds live keys)
 │   ├── *.env.example          committed templates
@@ -35,7 +36,7 @@ aiprofil use <profile> [--target cc|kilo|codex|both] [--scope session|user|proje
 | Switch | Values | Default | Meaning |
 |---|---|---|---|
 | `--target` | `cc` \| `kilo` \| `codex` \| `both` (alias `all`; list ok: `cc,codex`) | `both` | *which* tool |
-| `--scope`  | `session` \| `user` \| `project` | `user` | *how persistent* |
+| `--scope`  | `session` \| `user` \| `project` | `session` | *how persistent* |
 
 Scope maps per target; where a target has no analog it is **skipped with a note**:
 
@@ -83,7 +84,9 @@ generic keys.
 
 ### Codex deployment catalog
 
-A profile with `CODEX_MODEL_DEPLOYMENTS=a,b,…` registers one Codex profile per deployment, selectable via `codex --profile <provider>-<deployment>`. The default model stays untouched unless the profile also sets `CODEX_MODEL_DEPLOYMENT`, so the catalog coexists with the ChatGPT subscription mode.
+A catalog profile (one that sets `CODEX_PROVIDER_ID` or `CODEX_MODEL_DEPLOYMENTS`) lists its deployments **live from Azure** (`<base>/deployments`) at `use` time via the shared helper `adapters/codex-catalog.py` (python3) and registers one Codex profile per deployment as a profile file `$CODEX_HOME/<provider>-<deployment>.config.toml`, selectable via `codex --profile <provider>-<deployment>` (name reduced to `[A-Za-z0-9_-]`, since Codex ≥ 0.15x rejects dots: `gpt-6.1-sol` → `nes-gpt-6_1-sol`). Codex ≥ 0.15x also refuses `--profile` while legacy `[profiles.<name>]` tables exist, so the adapter removes those of its provider. Profile files carry a `# managed by codex-profil: provider=<id>` marker; only marked files are pruned when a deployment disappears. `CODEX_MODEL_DEPLOYMENTS` is only the offline fallback. The default model stays untouched unless the profile also sets `CODEX_MODEL_DEPLOYMENT`, so the catalog coexists with the ChatGPT subscription mode.
+
+The helper also writes `$CODEX_HOME/model-catalogs/<provider>.json`: Codex cannot list a custom provider's models, so its `/model` picker would otherwise show the ChatGPT account's catalog. Each entry copies the full metadata (reasoning levels, …) from Codex's own cache `models_cache.json` – exact model match first, else the highest version of the same variant (`gpt-6.1-sol` → `gpt-6-sol`); deployments without a match (embeddings, non-GPT) are skipped. When the profile repoints the default model, `model_catalog_json` points at that file; `codex-profil use max` removes it again. New Azure deployments appear with the next `use`.
 
 | Key | Effect |
 |---|---|
@@ -92,7 +95,7 @@ A profile with `CODEX_MODEL_DEPLOYMENTS=a,b,…` registers one Codex profile per
 | `CODEX_API_VERSION` | writes `[model_providers.<id>.query_params] api-version` |
 | `CODEX_API_KEY` | key for this provider (falls back to `FOUNDRY_API_KEY`); `--scope user` persists it, so it never needs to be set by hand |
 
-Profiles named `<provider>-*` that point at the provider but are no longer listed are dropped. Catalog-only profiles carry no CC keys; apply them with `--target codex`, otherwise aiprofil also resets CC (see `profiles/nes.env.example`).
+Catalog-only profiles carry no CC keys; apply them with `--target codex`, otherwise aiprofil also resets CC (see `profiles/nes.env.example`).
 
 ### Codex subscription mode
 
@@ -107,7 +110,7 @@ adapter hints at it when `auth.json` is missing. Azure mode conversely removes
 ## How the Codex edit stays safe
 
 `codex-profil` patches `${CODEX_HOME:-~/.codex}/config.toml` desired-state:
-only the top-level `model` / `model_provider` keys, the profile's `[model_providers.<id>]` section (plus its `query_params`) and the `[profiles."<id>-*"]` catalog sections are touched, everything else (other providers, foreign profiles, MCP config) is preserved. If nothing deviates, the file is left untouched.
+only the top-level `model` / `model_provider` / `model_catalog_json` keys, the profile's `[model_providers.<id>]` section (plus its `query_params`) are touched and legacy `[profiles."<id>-*"]` tables removed; profile files and `model-catalogs/<id>.json` live next to it, everything else (other providers, foreign profiles, MCP config) is preserved. If nothing deviates, the file is left untouched.
 
 ## How the Kilo edit stays safe
 

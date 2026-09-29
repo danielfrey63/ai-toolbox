@@ -18,7 +18,11 @@
 #   FOUNDRY_RESOURCE, FOUNDRY_API_KEY, CODEX_MODEL_DEPLOYMENT
 #
 # Deployment catalog (optional, combinable with the above):
-#   CODEX_MODEL_DEPLOYMENTS=a,b   one [profiles."<provider>-<a>"] per deployment
+#   Deployments are listed live from Azure by codex-catalog.py (python3),
+#   which also writes model-catalogs/<provider>.json for the /model picker
+#   (set as model_catalog_json when the profile repoints the default).
+#   CODEX_MODEL_DEPLOYMENTS=a,b   offline fallback list; one
+#                                 <provider>-<a>.config.toml profile file per deployment
 #                                 (codex --profile <provider>-<a>); stale ones of
 #                                 the provider are dropped. Without
 #                                 CODEX_MODEL_DEPLOYMENT the default model stays.
@@ -44,7 +48,7 @@
 #   project  no Codex analog -> skipped with a note
 # =============================================================================
 
-APP_VERSION='0.4.18'
+APP_VERSION='0.5.28'
 
 _codex_profil_main() {
     local script_dir profiles_dir
@@ -250,10 +254,38 @@ _codex_profil_main() {
             [[ -z "$base_url" ]] && base_url="https://${resource}.openai.azure.com/openai/v1"
         fi
 
-        # desired-state: patch config.toml only where it deviates.
         local file dir old new
         file="$(_cx_config_file)"; dir="$(dirname "$file")"
         mkdir -p "$dir"
+
+        # Catalog profiles (CODEX_PROVIDER_ID or CODEX_MODEL_DEPLOYMENTS) list
+        # their deployments live from Azure via codex-catalog.py, which also
+        # writes model-catalogs/<provider>.json for the /model picker;
+        # CODEX_MODEL_DEPLOYMENTS is only the offline fallback.
+        local catalog_rel="" catalog_ok=false
+        if [[ "$mode" == "azure" ]] && [[ -n "$(_cx_profile_val "$f" CODEX_PROVIDER_ID)" || -n "$deployments" ]]; then
+            catalog_rel="model-catalogs/${provider}.json"
+            local py="" c live rc home_arg out_arg
+            for c in python3 python; do
+                command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys' >/dev/null 2>&1 && { py="$c"; break; }
+            done
+            home_arg="$dir"; out_arg="${dir}/${catalog_rel}"
+            if command -v cygpath >/dev/null 2>&1; then home_arg="$(cygpath -w "$home_arg")"; out_arg="$(cygpath -w "$out_arg")"; fi
+            if [[ -z "$py" ]]; then
+                _cx_warn "no python found — model catalog skipped, using CODEX_MODEL_DEPLOYMENTS."
+            else
+                live="$(CODEX_CATALOG_API_KEY="$api_key" "$py" "${script_dir}/codex-catalog.py" \
+                    --base-url "$base_url" --codex-home "$home_arg" --out "$out_arg" --fallback "$deployments")"
+                rc=$?
+                case "$rc" in
+                    0) deployments="$live"; catalog_ok=true; _cx_ok "catalog from Azure: ${live//,/, }" ;;
+                    3) deployments="$live"; catalog_ok=true; _cx_warn "Azure unreachable — catalog from CODEX_MODEL_DEPLOYMENTS" ;;
+                    *) _cx_warn "model catalog not built (see above) — profiles from CODEX_MODEL_DEPLOYMENTS only." ;;
+                esac
+            fi
+        fi
+
+        # desired-state: patch config.toml only where it deviates.
         old=""; [[ -f "$file" ]] && old="$(cat "$file")"
         new="$old"
         _cx_apply() {  # <set|del|drop> <section|prefix> <key|provider> [value|keep]
@@ -266,15 +298,19 @@ _codex_profil_main() {
             # Without CODEX_MODEL the model key is dropped -> Codex default.
             _cx_apply set "" model_provider openai
             _cx_apply set "" forced_login_method chatgpt
+            _cx_apply del "" model_catalog_json
             if [[ -n "$model" ]]; then _cx_apply set "" model "$model"
             else _cx_apply del "" model; fi
         else
-            # Only a single CODEX_MODEL_DEPLOYMENT repoints the default model;
-            # a catalog-only profile leaves the top level (e.g. ChatGPT) alone.
+            # Only a single CODEX_MODEL_DEPLOYMENT repoints the default model
+            # (and the /model picker via model_catalog_json); a catalog-only
+            # profile leaves the top level (e.g. ChatGPT) alone.
             if [[ -n "$deployment" ]]; then
                 _cx_apply set "" model "$deployment"
                 _cx_apply set "" model_provider "$provider"
                 _cx_apply del "" forced_login_method
+                if [[ "$catalog_ok" == true ]]; then _cx_apply set "" model_catalog_json "$catalog_rel"
+                elif [[ -z "$catalog_rel" ]]; then _cx_apply del "" model_catalog_json; fi
             fi
             local psec="model_providers.${provider}"
             if [[ "$provider" == "azure" ]]; then _cx_apply set "$psec" name "Azure OpenAI"
@@ -287,19 +323,9 @@ _codex_profil_main() {
             _cx_apply del "$psec" query_params
             if [[ -n "$api_version" ]]; then _cx_apply set "${psec}.query_params" api-version "$api_version"
             else _cx_apply drop "${psec}.query_params" "" ""; fi
-            # One Codex profile per catalog deployment, named <provider>-<deployment>;
-            # stale ones of this provider are dropped.
-            local d keep="" sec
-            IFS=',' read -ra _cx_deps <<< "$deployments"
-            for d in "${_cx_deps[@]}"; do
-                d="$(printf '%s' "$d" | tr -d '[:space:]')"
-                [[ -n "$d" ]] || continue
-                sec="profiles.\"${provider}-${d}\""
-                keep="${keep:+${keep},}${sec}"
-                _cx_apply set "$sec" model "$d"
-                _cx_apply set "$sec" model_provider "$provider"
-            done
-            _cx_apply drop "profiles.\"${provider}-" "$provider" "$keep"
+            # Legacy [profiles."<provider>-*"] tables: Codex >= 0.15x refuses
+            # --profile while they exist; profiles are now separate files.
+            _cx_apply drop "profiles.\"${provider}-" "$provider" ""
         fi
         unset -f _cx_apply
 
@@ -311,7 +337,34 @@ _codex_profil_main() {
         else
             printf '%s\n' "$new" > "$file"
             [[ -n "$deployment" ]] && _cx_ok "model -> ${deployment}, provider ${provider} (${file})"
-            [[ -n "$keep" ]] && _cx_ok "profiles for provider ${provider}: $(printf '%s' "$keep" | sed -E 's/profiles\."([^"]*)"/\1/g; s/,/, /g') (${file})"
+        fi
+
+        # One Codex profile file per deployment: $CODEX_HOME/<name>.config.toml,
+        # name = <provider>-<deployment> reduced to [A-Za-z0-9_-] (Codex rejects
+        # dots), used via codex --profile <name>. Stale files carrying this
+        # provider's marker are removed; an empty list means "unknown"
+        # (catalog failed, no fallback) — then nothing is pruned.
+        if [[ "$mode" == "azure" ]]; then
+            local d pname pfile body marker="# managed by codex-profil: provider=${provider}" names=""
+            IFS=',' read -ra _cx_deps <<< "$deployments"
+            for d in "${_cx_deps[@]}"; do
+                d="$(printf '%s' "$d" | tr -d '[:space:]')"
+                [[ -n "$d" ]] || continue
+                pname="$(printf '%s' "${provider}-${d}" | tr -c 'A-Za-z0-9_-' '_')"
+                names="${names:+${names} }${pname}"
+                body="${marker}"$'\n'"model = \"${d}\""$'\n'"model_provider = \"${provider}\""
+                [[ "$catalog_ok" == true ]] && body+=$'\n'"model_catalog_json = \"${catalog_rel}\""
+                pfile="${dir}/${pname}.config.toml"
+                if [[ ! -f "$pfile" || "$(cat "$pfile")" != "$body" ]]; then printf '%s\n' "$body" > "$pfile"; fi
+            done
+            if [[ -n "$names" ]]; then
+                for pfile in "${dir}/${provider}-"*.config.toml; do
+                    [[ -f "$pfile" ]] || continue
+                    [[ "$(head -1 "$pfile")" == "$marker" ]] || continue
+                    [[ " ${names} " == *" $(basename "$pfile" .config.toml) "* ]] || rm -f "$pfile"
+                done
+                _cx_ok "profiles (codex --profile <name>): ${names// /, }"
+            fi
         fi
 
         if [[ "$mode" == "chatgpt" ]]; then
@@ -346,7 +399,8 @@ Actions:
 Profiles dir: ${profiles_dir}
 Profile keys consumed:
   Azure mode:        FOUNDRY_RESOURCE, FOUNDRY_API_KEY, CODEX_MODEL_DEPLOYMENT
-  Azure catalog:     CODEX_MODEL_DEPLOYMENTS=a,b,..  -> profiles "<provider>-<a>", ...
+  Azure catalog:     deployments listed live from Azure -> profile files <provider>-<a>.config.toml
+                     + model-catalogs/<provider>.json; CODEX_MODEL_DEPLOYMENTS=a,b = offline fallback
                      [CODEX_PROVIDER_ID] [CODEX_BASE_URL] [CODEX_API_VERSION] [CODEX_API_KEY]
   Subscription mode: CODEX_AUTH=chatgpt [CODEX_MODEL]  (sign-in via codex login)
 Installation: toolbox install --what codex-profil
