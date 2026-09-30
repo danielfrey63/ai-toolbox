@@ -20,6 +20,15 @@ Quelle/Schwester-Kopie: `sbb/1-dfa-betrieb/schreibstil.md` (versioniert, DfA-Kon
 - **Lösungsorientiert.** Bietet den nächsten konkreten Schritt gleich mit an („Falls du dich für X entscheidest, würde ich Y…").
 - **Empfängergerecht.** Technische Tiefe an die Person anpassen: bei technischen Leuten Fachbegriffe/JQL ok; bei nicht-technischen weglassen, aber **immer kurz**.
 
+## Check vor dem Versand (VOICE)
+
+Jeder Entwurf durchläuft vor der Übergabe diese vier Prüfungen. Die fünfte (Engaging) ist durch «maximal kurz» und «im Zweifel eine Aussage weniger» abgedeckt.
+
+- **Verified:** Namen, Zahlen, Daten, Ticket-Keys und Zitate sind gegen die Quelle geprüft. Was nicht belegt ist, steht als Vermutung im Konjunktiv oder fällt weg.
+- **Owned:** Der Text trägt mindestens ein konkretes Detail aus Danis Erfahrung oder Kontext, keinen Allgemeinplatz. Fehlt es, eine gezielte Rückfrage an Dani statt es zu erfinden.
+- **Insightful:** Die Kernaussage lässt sich in einem Satz sagen und hat ein «so what». Ein Satz, dem niemand widersprechen würde, trägt keine Aussage.
+- **Clear:** Kein Satz, bei dem der Empfänger raten muss, was gemeint ist. Probe: Liesse sich der Inhalt einem neunjährigen Kind in eigenen Worten erklären?
+
 ## Ton
 
 - Per **Du**, mit Vorname. Höflich, aber unprätentiös; lockere Anrede („Moin") ist ok.
@@ -46,6 +55,8 @@ Standard ist der Stil oben. Bekannte Differenzierungen:
 - Den Empfänger nicht mit Optionen erschlagen. Nur die nötige Wahl.
 - Keine Absicherungs-Nebensätze, belehrenden Klammern oder doppelten Rückfallebenen („falls nicht gewollt: Variante B"). Eine Lösung, knapp begründet, reicht.
 - Keine vorschnellen Qualitätsurteile („trennt sauber", „klar geregelt"), die der eigene Befund danach relativiert. Erst beschreiben, werten erst im Fazit/Kern.
+- Keine Sätze, die klug klingen, aber nichts sagen («Klarheit schafft Vertrauen»).
+- Keine vorhersehbaren Standardstrukturen, nur weil sie vertraut sind (Einleitung, drei Punkte, Fazit). Die Struktur folgt dem Inhalt.
 
 ## Anker-Beispiel (Originalton Dani)
 
