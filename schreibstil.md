@@ -57,6 +57,8 @@ Standard ist der Stil oben. Bekannte Differenzierungen:
 - Keine vorschnellen Qualitätsurteile („trennt sauber", „klar geregelt"), die der eigene Befund danach relativiert. Erst beschreiben, werten erst im Fazit/Kern.
 - Keine Sätze, die klug klingen, aber nichts sagen («Klarheit schafft Vertrauen»).
 - Keine vorhersehbaren Standardstrukturen, nur weil sie vertraut sind (Einleitung, drei Punkte, Fazit). Die Struktur folgt dem Inhalt.
+- Keine Kontrastfiguren («wird nicht X, sondern Y», «statt X … Y», «nicht nur …, sondern auch»). Sie werten eine Variante ab, die niemand vorgeschlagen hat, und klingen dadurch parteiisch. Den Sachverhalt direkt und neutral beschreiben: «Fachpersonen klären Widersprüche» statt «Widersprüche werden nicht wegformuliert, sondern von Fachpersonen geklärt».
+- Keine Superlative und keine unbelegten Absolutheiten («jede», «ganz», «vollständig», «zentral», «einzigartig»). Realistisch statt werbend: Umfang und Zahlen nennen, Reifegrad und Grenzen dazusagen (z.B. «Prototyp im Teamumfeld»). Gilt auch für Profil-, CV- und Bewerbungstexte.
 
 ## Anker-Beispiel (Originalton Dani)
 
