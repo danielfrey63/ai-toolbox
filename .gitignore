@@ -12,9 +12,9 @@ aiprofil/profiles/*.env
 cc-profil/profiles/*.env
 !cc-profil/profiles/*.env.example
 
-# oracle-skill — real connection config holds DB host/user/password; only the
+# oracle-sql – real connection config holds DB host/user/password; only the
 # *.tmpl templates are committed.
-.agents/skills/oracle-skill/config/oracle.env
+.agents/skills/oracle-sql/config/oracle.env
 
 # Python bytecode caches (py_compile / test runs on the skill scripts)
 __pycache__/

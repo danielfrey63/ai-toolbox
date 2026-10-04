@@ -4,68 +4,57 @@
     {
       "name": "component-audit",
       "type": "skill",
-      "path": ".agents/skills/component-audit",
-      "description": "Audit a codebase for component-orientation drift."
+      "path": ".agents/skills/component-audit"
     },
     {
       "name": "discover",
       "type": "skill",
-      "path": ".agents/skills/discover",
-      "description": "Discover interesting recent videos across AI and dev topics."
+      "path": ".agents/skills/discover"
     },
     {
       "name": "transcribe",
       "type": "skill",
-      "path": ".agents/skills/transcribe",
-      "description": "Transcribe a video or audio file — captions/Whisper, frames, diarization."
+      "path": ".agents/skills/transcribe"
     },
     {
       "name": "gdrive",
       "type": "skill",
-      "path": ".agents/skills/gdrive",
-      "description": "Read Google-native files (.gsheet/.gdoc/.gslides pointers) from a Drive sync folder via Google MCP tools."
+      "path": ".agents/skills/gdrive"
     },
     {
       "name": "fable-mode",
       "type": "skill",
-      "path": ".agents/skills/fable-mode",
-      "description": "Five-phase Fable-grade reasoning protocol (Scope, Evidence, Attack, Verify, Report)."
+      "path": ".agents/skills/fable-mode"
     },
     {
       "name": "idempotent-devops",
       "type": "skill",
-      "path": ".agents/skills/idempotent-devops",
-      "description": "Scaffold, audit or verify-loop idempotent DevOps scripts."
+      "path": ".agents/skills/idempotent-devops"
     },
     {
-      "name": "oracle-skill",
+      "name": "oracle-sql",
       "type": "skill",
-      "path": ".agents/skills/oracle-skill",
-      "description": "Set up + use an Oracle MCP server (SQLcl sql -mcp) for SQL data queries."
+      "path": ".agents/skills/oracle-sql"
     },
     {
       "name": "single-file-spa",
       "type": "skill",
-      "path": ".agents/skills/single-file-spa",
-      "description": "Offline single-file SPA archetype in three tiers (monolith, file-linked, sections+build)."
+      "path": ".agents/skills/single-file-spa"
     },
     {
       "name": "doc-consistency",
       "type": "skill",
-      "path": ".agents/skills/doc-consistency",
-      "description": "Re-read guard + consistency propagation across coupled document artifacts (MD/Confluence/Jira)."
+      "path": ".agents/skills/doc-consistency"
     },
     {
       "name": "remote-deploy",
       "type": "skill",
-      "path": ".agents/skills/remote-deploy",
-      "description": "Deploy to legacy servers over SSH with offline vendoring, patches, verification and rollback."
+      "path": ".agents/skills/remote-deploy"
     },
     {
       "name": "session-to-md",
       "type": "skill",
-      "path": ".agents/skills/session-to-md",
-      "description": "Export a Claude Code session transcript (JSONL) as clean Markdown conversation."
+      "path": ".agents/skills/session-to-md"
     },
     {
       "name": "llm-provider",

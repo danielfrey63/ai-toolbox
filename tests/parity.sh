@@ -24,7 +24,7 @@
 # repo itself is never touched.
 # =============================================================================
 
-APP_VERSION='0.4.8'
+APP_VERSION='0.5.9'
 
 set -u
 
@@ -91,8 +91,8 @@ make_sandbox() {  # variant(good|bad) -> sandbox dir on stdout
     if [ "$variant" = good ]; then
         cat > "$d/tools/catalog.json" <<'EOF'
 { "tools": [
-  { "name": "alpha", "type": "skill",  "path": "skills/alpha", "description": "fixture skill" },
-  { "name": "conf",  "type": "config", "path": "CONF.md",      "description": "fixture config" },
+  { "name": "alpha", "type": "skill",  "path": "skills/alpha" },
+  { "name": "conf", "type": "config", "path": "CONF.md",      "description": "fixture config" },
   { "name": "sets",  "type": "settings", "path": "SETS.json",  "description": "fixture settings" },
   { "name": "tool", "type": "bin",    "path": "tool.sh", "command": "tool", "description": "fixture bin" },
   { "name": "hooks", "type": "hook",   "path": "hookdir",      "description": "fixture hooks" }

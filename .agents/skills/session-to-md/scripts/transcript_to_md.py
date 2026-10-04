@@ -17,7 +17,7 @@ Without an input argument, the newest session of the current working
 directory's Claude Code project (~/.claude/projects/<cwd-slug>/) is used.
 
 With --name, every session whose Claude Code title contains SUBSTR
-(case-insensitive) is selected — the title is the one the resume picker
+(case-insensitive) is selected –the title is the one the resume picker
 shows: an explicit /title, else the auto-generated ai-title, else the
 latest summary. A single match is written like a normal transcript;
 several matches are concatenated into one combined Markdown file, newest last.
@@ -161,7 +161,7 @@ def convert(jsonl_path, user_name, assistant_name, with_timestamps,
     title = title_override or (titles[-1] if titles else jsonl_path.stem)
     names = {"user": user_name, "assistant": assistant_name}
 
-    lines = [f"## {title}" if as_section else f"# Konversations-Transcript — {title}", ""]
+    lines = [f"## {title}" if as_section else f"# Konversations-Transcript –{title}", ""]
     lines += ["| | |", "|---|---|",
               f"| **Quelle** | `{jsonl_path.name}` |",
               f"| **Session** | `{session_id or 'unbekannt'}` |"]
@@ -170,7 +170,7 @@ def convert(jsonl_path, user_name, assistant_name, with_timestamps,
     lines.append(f"| **Generiert** | {datetime.now().astimezone():%d.%m.%Y %H:%M} |")
     lines.append("")
     if not as_section:
-        lines += ["*Automatisch destilliert: nur User-/Assistent-Text — ohne Tool-Aufrufe,"
+        lines += ["*Automatisch destilliert: nur User-/Assistent-Text –ohne Tool-Aufrufe,"
                   " Tool-Resultate, Diffs und interne Denkschritte.*", ""]
     lines += ["---", ""]
 
@@ -178,7 +178,7 @@ def convert(jsonl_path, user_name, assistant_name, with_timestamps,
     for role, ts, texts in groups:
         stamp = ""
         if with_timestamps and ts:
-            stamp = f" — {ts:%d.%m.%Y %H:%M}" if ts.date() != prev_date else f" — {ts:%H:%M}"
+            stamp = f" –{ts:%d.%m.%Y %H:%M}" if ts.date() != prev_date else f" –{ts:%H:%M}"
             prev_date = ts.date()
         lines += [f"### {names[role]}{stamp}", "", "\n\n".join(texts), ""]
 
@@ -213,8 +213,8 @@ def require_project_dir():
 
 
 def read_session_title(jsonl_path):
-    """Return the session's effective title — the one Claude Code's resume picker
-    shows — or None.
+    """Return the session's effective title –the one Claude Code's resume picker
+    shows –or None.
 
     Claude Code records up to three title kinds; precedence mirrors the picker:
     an explicit /title (`custom-title`) wins, else the auto-generated `ai-title`,
@@ -277,7 +277,7 @@ def main():
     ap.add_argument("input", type=Path, nargs="?",
                     help="Claude Code session transcript (.jsonl); "
                          "default: newest session of the current project")
-    ap.add_argument("--name", help="select session(s) by Claude Code title — the "
+    ap.add_argument("--name", help="select session(s) by Claude Code title –the "
                     "title shown in the resume picker (custom /title, else ai-title, "
                     "else summary); case-insensitive substring, every match included")
     ap.add_argument("--list", nargs="?", const="", default=None, metavar="TEXT",
@@ -326,9 +326,9 @@ def main():
             print(f"  + {title}  ({path.name}): {stats['kept']} messages")
 
         if combined:
-            doc_title = args.title or f"{len(matches)} Sessions — '{args.name}'"
-            markdown = (f"# Konversations-Transcript — {doc_title}\n\n"
-                        "*Automatisch destilliert: nur User-/Assistent-Text — ohne "
+            doc_title = args.title or f"{len(matches)} Sessions –'{args.name}'"
+            markdown = (f"# Konversations-Transcript –{doc_title}\n\n"
+                        "*Automatisch destilliert: nur User-/Assistent-Text –ohne "
                         "Tool-Aufrufe, Tool-Resultate, Diffs und interne Denkschritte.*\n\n"
                         + "\n".join(blocks))
         else:

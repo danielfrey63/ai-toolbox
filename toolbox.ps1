@@ -32,7 +32,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.52.319'
+$APP_VERSION = '0.53.320'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -193,7 +193,9 @@ function Show-CatalogList {
     Write-Output ''
     Write-Output ('  {0,-20} {1,-7} {2}' -f 'NAME', 'TYPE', 'DESCRIPTION')
     foreach ($t in (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools) {
-        Write-Output ('  {0,-20} {1,-7} {2}' -f $t.name, $t.type, $t.description)
+        $d = $t.description
+        if (-not $d -and $t.type -in @('skill', 'plugin')) { $d = Get-SkillSummary (Join-Path $RepoRoot $t.path) }
+        Write-Output ('  {0,-20} {1,-7} {2}' -f $t.name, $t.type, $d)
     }
     Write-Output "`nSelect one with --what <name> or a group with --what <type>; default is all."
 }
@@ -215,6 +217,19 @@ function Get-Frontmatter([string]$file) {
     }
     if ($end -lt 0) { return @() }
     return $lines[1..($end - 1)]
+}
+
+# One-line summary of a skill: the first sentence of its SKILL.md frontmatter
+# description, capped at 110 chars. Skill/plugin catalog entries may omit their
+# own description – SKILL.md is the single source. Mirrors _skill_summary (sh).
+function Get-SkillSummary([string]$dir) {
+    $skillmd = Join-Path $dir 'SKILL.md'
+    if (-not (Test-Path -LiteralPath $skillmd -PathType Leaf)) { return '' }
+    $desc = (@(Get-Frontmatter $skillmd | Where-Object { $_ -match '^description:\s*' }) | Select-Object -First 1) -replace '^description:\s*', ''
+    $desc = $desc.Trim() -replace '^["'']', '' -replace '["'']$', ''
+    if ($desc -match '^(.+?\.)(\s|$)') { $desc = $Matches[1] }
+    if ($desc.Length -gt 110) { $desc = $desc.Substring(0, 109) + '…' }
+    return $desc
 }
 
 # A skill/plugin directory must carry a SKILL.md with non-empty name+description
@@ -271,7 +286,9 @@ function Invoke-Validate {
         # repo entries need no path (checkout location is resolved from the
         # name: sibling, else XDG data dir); mcp entries carry a server object
         # instead of a path.
-        if (-not $name -or -not $type -or (-not $path -and $type -notin @('repo', 'mcp', 'release')) -or -not $desc) {
+        # skill/plugin entries may omit description – it comes from SKILL.md.
+        if (-not $name -or -not $type -or (-not $path -and $type -notin @('repo', 'mcp', 'release')) -or
+            (-not $desc -and $type -notin @('skill', 'plugin'))) {
             [Console]::Error.WriteLine("  [!] $($name ?? '?')  missing required field(s) (name/type/path/description)")
             $fail++; continue
         }

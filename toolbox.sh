@@ -44,7 +44,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.55.345'
+APP_VERSION='0.56.346'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -243,8 +243,11 @@ print_catalog_list() {
     printf 'toolbox — available tools (%s)\n' "$CATALOG"
     printf 'Usage: toolbox <install|status|remove|list|reconcile|validate> [--target claude|codex|agents|kilo] [--scope global|project] [--project PATH] [--what all|<name>|<type>] [--tagstyle plain|namespaced|auto] [--all] [-h|--help]\n\n'
     printf '  %-20s %-7s %s\n' NAME TYPE DESCRIPTION
-    jq -r '.tools[] | [.name, .type, .description] | @tsv' "$CATALOG" \
-        | while IFS=$(printf '\t') read -r n t d; do
+    jq -r '.tools[] | [.name, .type, (.description // "-"), (.path // "")] | @tsv' "$CATALOG" | tr -d '\r' \
+        | while IFS=$(printf '\t') read -r n t d p; do
+            if [ "$d" = - ]; then
+                case "$t" in skill|plugin) d=$(_skill_summary "$REPO_ROOT/$p") ;; *) d='' ;; esac
+            fi
             printf '  %-20s %-7s %s\n' "$n" "$t" "$d"
         done
     printf '\nSelect one with --what <name> or a group with --what <type>; default is all.\n'
@@ -265,6 +268,17 @@ _frontmatter() {  # file -> block
         /^---[[:space:]]*$/ {exit}
         {print}
     ' "$1"
+}
+
+# One-line summary of a skill: the first sentence of its SKILL.md frontmatter
+# description, capped at 110 chars. Skill/plugin catalog entries may omit their
+# own description – SKILL.md is the single source. Mirrors Get-SkillSummary (ps1).
+_skill_summary() {  # dir -> summary on stdout
+    [ -f "$1/SKILL.md" ] || return 0
+    _frontmatter "$1/SKILL.md" | tr -d '\r' | sed -n 's/^description:[[:space:]]*//p' | head -1 \
+        | sed -e 's/[[:space:]]*$//' -e "s/^[\"']//" -e "s/[\"']\$//" \
+        | awk '{ if (match($0, /\.([[:space:]]|$)/)) $0 = substr($0, 1, RSTART); print }' \
+        | awk '{ if (length($0) > 110) $0 = substr($0, 1, 109) "…"; print }'
 }
 
 # A skill/plugin directory must carry a SKILL.md with non-empty name+description
@@ -345,7 +359,9 @@ run_validate() {
         # repo entries need no path (checkout location is resolved from the
         # name: sibling, else XDG data dir); mcp entries carry a server object
         # instead of a path.
-        if [ -z "$name" ] || [ -z "$type" ] || { [ "$type" != repo ] && [ "$type" != mcp ] && [ "$type" != release ] && [ -z "$path" ]; } || [ -z "$desc" ]; then
+        # skill/plugin entries may omit description – it comes from SKILL.md.
+        if [ -z "$name" ] || [ -z "$type" ] || { [ "$type" != repo ] && [ "$type" != mcp ] && [ "$type" != release ] && [ -z "$path" ]; } \
+            || { [ -z "$desc" ] && [ "$type" != skill ] && [ "$type" != plugin ]; }; then
             printf '  [!] %-18s missing required field(s) (name/type/path/description)\n' "${name:-?}" >&2
             fail=$((fail + 1)); continue
         fi
