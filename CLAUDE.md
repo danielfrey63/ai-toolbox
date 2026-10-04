@@ -70,13 +70,8 @@ Sobald ein Text **in Daniels Namen** entworfen wird (Chat, Mail, Teams) – in j
 - `git pull --rebase` ohne Investigation, wenn lokale Commits nicht im Remote sind – versteckt Konflikte hinter der Rebase-Mechanik.
 - `--force` oder `--force-with-lease` ohne explizite User-Freigabe.
 
-## Deaktivierte Claude-Code-Tools (Kontext-Trimming)
+## Deaktivierte Claude-Code-Tools
 
-In `~/.claude/settings.json` sind ungenutzte Built-in-Tools abgeschaltet (Analyse über alle Sessions, Stand 2026-07-19: 0 Aufrufe). Wenn eine Aufgabe eines dieser Tools braucht, NICHT stillschweigend einen Workaround bauen – den User darauf hinweisen, dass das Tool deaktiviert ist und wie er es reaktiviert (Eintrag entfernen, Session neu starten).
+Die globale Settings-Baseline steht versioniert in `claude-settings.json` (dieses Repo) und wird mit `toolbox install --what claude-settings` nach `~/.claude/settings.json` gemerged. Braucht eine Aufgabe ein dort abgeschaltetes Tool, NICHT stillschweigend einen Workaround bauen: den User darauf hinweisen und die Reaktivierung nennen (Eintrag in `claude-settings.json` entfernen, `toolbox remove` + `install`, Session neu starten).
 
-- **`permissions.deny`** (bare Name = Schema komplett aus dem Kontext): EnterPlanMode/ExitPlanMode (Plan Mode), DesignSync, NotebookEdit (Jupyter), PushNotification, RemoteTrigger, CronCreate/CronDelete/CronList (geplante Jobs), Monitor, EnterWorktree/ExitWorktree, ListMcpResourcesTool/ReadMcpResourceTool/ReadMcpResourceDirTool (MCP-Ressourcen), EndConversation.
-- **`disableWorkflows: true`** – Multi-Agent-Workflows/ultracode und `/deep-research` sind aus. Reaktivieren, wenn orchestrierte Fan-outs gewünscht sind.
-- **`disableArtifact: true`** – kein Publizieren von Artifacts auf claude.ai. Reaktivieren für teilbare HTML-Reports/Seiten.
-- **Bewusst AKTIV gelassen**: AskUserQuestion (häufig genutzt, von dieser CLAUDE.md verlangt), Task-Tools, Agent/Skill/ToolSearch, ScheduleWakeup (für `/loop`; der frühere session-keepwarm Stop-Hook ist seit 2026-08-18 ausgebaut, der `wakeup-guard`-PreToolUse-Hook blockt Rest-Ticks), SendUserFile, ReportFindings (für `/code-review`), Bundled Skills (`/loop`, `/update-config` in Nutzung), Remote Control (remoteControlAtStartup), claude.ai-Connectoren (gdrive-Skill braucht Google Drive; abschaltbar nur alle zusammen via `disableClaudeAiConnectors`).
-
-<!-- APP_VERSION: 0.18.28 -->
+<!-- APP_VERSION: 0.19.29 -->

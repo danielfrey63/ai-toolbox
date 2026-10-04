@@ -7,6 +7,7 @@
 #   plugin — claude plugin marketplace add + install (--target claude);
 #            for --target codex|agents the plugin falls back to a skill-link
 #   config — symlink a global config file (CLAUDE.md) into ~/.claude/
+#   settings — merge a JSON fragment into ~/.claude/settings.json (desired-state)
 #   bin    — make a CLI available system-wide (PATH symlink, or sourced shell
 #            function via catalog "source: true" — needed for env-setting tools)
 #   mcp    — merge an MCP server definition into ~/.claude.json (mcpServers);
@@ -43,7 +44,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-APP_VERSION='0.54.344'
+APP_VERSION='0.55.345'
 set -u
 
 # Resolve $0 through symlinks — when invoked via the ~/.local/bin/toolbox
@@ -165,6 +166,7 @@ _help_what() {
             or migrate all repos after a toolbox update.
     plugin  Real `claude plugin` install (target=claude) or skill-link.
     config  Global config file (e.g. CLAUDE.md) into ~/.claude/.
+    settings  JSON fragment merged into ~/.claude/settings.json (remove strips it).
     bin     Make a CLI available system-wide (exec or sourced shell function).
     installer  Tool with its own install script (install.ps1/install.sh),
                e.g. a scheduled task or a Claude Code hook registration.
@@ -348,7 +350,7 @@ run_validate() {
             fail=$((fail + 1)); continue
         fi
         case "$type" in
-            skill|hook|plugin|config|bin|repo|mcp|release|installer) ;;
+            skill|hook|plugin|config|settings|bin|repo|mcp|release|installer) ;;
             *) printf '  [!] %-18s unknown type: %s\n' "$name" "$type" >&2
                fail=$((fail + 1)); continue ;;
         esac
@@ -394,6 +396,13 @@ run_validate() {
                 ;;
             config)
                 [ -f "$src" ] || { printf '  [!] %-18s source missing: %s\n' "$name" "$src" >&2; fail=$((fail + 1)); continue; }
+                ;;
+            settings)
+                [ -f "$src" ] || { printf '  [!] %-18s source missing: %s\n' "$name" "$src" >&2; fail=$((fail + 1)); continue; }
+                if ! jq -e 'type == "object"' "$src" >/dev/null 2>&1; then
+                    printf '  [!] %-18s settings fragment is not a JSON object: %s\n' "$name" "$src" >&2
+                    fail=$((fail + 1)); continue
+                fi
                 ;;
             bin)
                 [ -f "$src" ] || { printf '  [!] %-18s source missing: %s\n' "$name" "$src" >&2; fail=$((fail + 1)); continue; }
@@ -850,6 +859,67 @@ handle_config() {
         return
     fi
     link_artifact "$name" "$src" "$HOME/.claude"
+}
+
+# --- settings handler ---------------------------------------------------------
+# Merges a JSON fragment (e.g. claude-settings.json) into the user's Claude Code
+# settings.json – desired-state: keys are set, arrays gain missing elements,
+# remove strips exactly the fragment's keys/elements again. The merge logic
+# lives in tools/settings-merge.jq, shared with the pwsh port. Global scope
+# only, ignores --target. Honours CLAUDE_CONFIG_DIR like Claude Code itself.
+SETTINGS_JQ="$REPO_ROOT/tools/settings-merge.jq"
+
+_settings_merge() {  # frag cfg mode → merged json / state on stdout
+    if [ -f "$2" ]; then
+        jq -n --slurpfile frag "$1" --slurpfile cur "$2" --arg mode "$3" -f "$SETTINGS_JQ"
+    else
+        jq -n --slurpfile frag "$1" --argjson cur '{}' --arg mode "$3" -f "$SETTINGS_JQ"
+    fi
+}
+
+handle_settings() {
+    local name=$1 path=$2 src cfg state tmp
+    src="$REPO_ROOT/$path"
+    cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
+    if [ "$SCOPE" != global ]; then
+        printf '  [.] %-18s settings are global-only — use --scope global\n' "$name"
+        return
+    fi
+    if [ ! -f "$src" ]; then
+        printf '  [!] %-18s source missing: %s\n' "$name" "$src" >&2
+        return
+    fi
+    state=$(_settings_merge "$src" "$cfg" state | tr -d '\r"') || {
+        printf '  [!] %-18s settings-merge.jq failed (mode state)\n' "$name" >&2
+        return 1
+    }
+    tmp="$cfg.tmp.$$"
+    case "$CMD" in
+        install)
+            if [ "$state" = ok ]; then
+                printf '  [=] %-18s already applied (%s)\n' "$name" "$cfg"
+            else
+                mkdir -p "$(dirname "$cfg")"
+                _settings_merge "$src" "$cfg" apply > "$tmp" && mv "$tmp" "$cfg"
+                printf '  [+] %-18s merged into %s\n' "$name" "$cfg"
+            fi
+            ;;
+        status)
+            case "$state" in
+                ok)      printf '  [ok] %-18s applied in %s\n' "$name" "$cfg"; STATE=ok ;;
+                partial) printf '  [! ] %-18s partly applied in %s — re-run install\n' "$name" "$cfg"; STATE=partial ;;
+                *)       printf '  [ ] %-18s not applied in %s\n' "$name" "$cfg" ;;
+            esac
+            ;;
+        remove)
+            if [ "$state" = none ]; then
+                printf '  [.] %-18s not applied — nothing to remove\n' "$name"
+            else
+                _settings_merge "$src" "$cfg" strip > "$tmp" && mv "$tmp" "$cfg"
+                printf '  [-] %-18s stripped from %s\n' "$name" "$cfg"
+            fi
+            ;;
+    esac
 }
 
 # --- installer handler --------------------------------------------------------
@@ -2055,7 +2125,7 @@ registry_add() {  # name type path scope target project
     # repo-wide, so the same repo can legitimately have multiple hook entries
     # (target="" = bare git-hook, target="claude" = git-hook + claude patch).
     case "$2" in
-        config|bin|mcp|release)  scope=global; target=''; project='' ;;
+        config|settings|bin|mcp|release)  scope=global; target=''; project='' ;;
         # repo checkouts are machine-global; only the skill-link target varies.
         # A bare (target="") repo entry describes just the checkout, which any
         # targeted entry covers too — the upsert below treats it as subsumed,
@@ -2099,7 +2169,7 @@ registry_remove() {  # name type scope target project
     [ -f "$REGISTRY" ] || return 0
     local scope=$3 target=$4 project=$5
     case "$2" in
-        config|bin|mcp|release)  scope=global; target=''; project='' ;;
+        config|settings|bin|mcp|release)  scope=global; target=''; project='' ;;
         repo)        scope=global; project='' ;;
     esac
     if [ -n "$project" ]; then
@@ -2188,7 +2258,7 @@ registry_sweep() {
                   then sub("^[[:space:]]+"; "") | sub("[[:space:]]+$"; "")
                   else . end;
         def normtype:
-            if .type == "config" or .type == "bin"
+            if .type == "config" or .type == "settings" or .type == "bin"
                 then .scope = "global" | .target = "" | .project = ""
             else . end;
         def normproj: if has("project") and (.project // "") != ""
@@ -2245,6 +2315,7 @@ registry_sweep() {
             skill)  handle_skill "$tool" "$path" ;;
             hook)   handle_hook "$tool" "$path" ;;
             config) handle_config "$tool" "$path" ;;
+            settings) handle_settings "$tool" "$path" ;;
             installer) handle_installer "$tool" "$path" ;;
             bin)
                 cmdname=$(jq -r --arg n "$tool" \
@@ -2516,7 +2587,7 @@ fi
 # bin — and repo, unless it declares a skill link, which is target-specific).
 if [ -z "$TARGET" ]; then
     needs_target=$(printf '%s\n' "$selected" \
-        | jq -r 'select((.type != "hook" and .type != "config" and .type != "bin" and .type != "repo" and .type != "mcp" and .type != "release" and .type != "installer")
+        | jq -r 'select((.type != "hook" and .type != "config" and .type != "settings" and .type != "bin" and .type != "repo" and .type != "mcp" and .type != "release" and .type != "installer")
                         or (.type == "repo" and (((.links // []) | map(select(.type == "skill")) | length) > 0))) | .name' | head -1)
     if [ -n "$needs_target" ]; then
         printf 'toolbox: --target is required (claude|codex|agents|kilo) — "%s" needs it\n' \
@@ -2544,6 +2615,7 @@ printf '%s\n' "$selected" | while IFS= read -r tool; do
         skill)  handle_skill "$name" "$path" ;;
         hook)   handle_hook "$name" "$path" ;;
         config) handle_config "$name" "$path" ;;
+        settings) handle_settings "$name" "$path" ;;
         installer) handle_installer "$name" "$path" ;;
         bin)
             cmdname=$(printf '%s' "$tool" | jq -r '.command // empty')

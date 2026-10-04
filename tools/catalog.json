@@ -258,6 +258,12 @@
       "description": "Global Claude Code instructions (CLAUDE.md -> ~/.claude/)."
     },
     {
+      "name": "claude-settings",
+      "type": "settings",
+      "path": "claude-settings.json",
+      "description": "Global Claude Code settings baseline (tool/feature switches) merged into ~/.claude/settings.json."
+    },
+    {
       "name": "cli",
       "type": "bin",
       "path": "toolbox.sh",

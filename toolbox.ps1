@@ -1,4 +1,4 @@
-﻿# toolbox.ps1 — install AI-Toolbox tools from the catalog.
+# toolbox.ps1 — install AI-Toolbox tools from the catalog.
 #
 # PowerShell port of toolbox.sh for Codex / Windows. See that file for
 # the full description. Reads tools/catalog.json and dispatches per tool TYPE:
@@ -6,6 +6,7 @@
 #   hook   — insert a managed version-bump block into a repo's pre/post-commit
 #   plugin — claude plugin marketplace add + install (--target claude); else skill-link
 #   config — symlink a global config file (CLAUDE.md) into ~/.claude/
+#   settings — merge a JSON fragment into ~/.claude/settings.json (desired-state)
 #   bin    — install a CLI as a function in the PowerShell $PROFILE — using
 #            `&` (exec) or `.` (sourced, catalog "source: true")
 #   mcp    — merge an MCP server definition into ~/.claude.json (mcpServers);
@@ -31,7 +32,7 @@
 # Every install is recorded in a per-machine registry (see "Registry" in
 # --help) so `status --all` / `remove --all` can sweep every install.
 
-$APP_VERSION = '0.51.318'
+$APP_VERSION = '0.52.319'
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -126,6 +127,7 @@ Examples:
     hook    Git hooks installed as a managed line in a repo's pre/post-commit.
     plugin  Real `claude plugin` install (target=claude) or skill-link.
     config  Global config file (e.g. CLAUDE.md) into ~/.claude/.
+    settings  JSON fragment merged into ~/.claude/settings.json (remove strips it).
     bin     Make a CLI available system-wide (exec or sourced shell function).
     installer  Tool with its own install script (install.ps1/install.sh),
                e.g. a scheduled task or a Claude Code hook registration.
@@ -273,7 +275,7 @@ function Invoke-Validate {
             [Console]::Error.WriteLine("  [!] $($name ?? '?')  missing required field(s) (name/type/path/description)")
             $fail++; continue
         }
-        if ($type -notin @('skill', 'hook', 'plugin', 'config', 'bin', 'repo', 'mcp', 'release', 'installer')) {
+        if ($type -notin @('skill', 'hook', 'plugin', 'config', 'settings', 'bin', 'repo', 'mcp', 'release', 'installer')) {
             [Console]::Error.WriteLine("  [!] $name  unknown type: $type")
             $fail++; continue
         }
@@ -325,6 +327,15 @@ function Invoke-Validate {
             'config' {
                 if (-not (Test-Path -LiteralPath $src -PathType Leaf)) {
                     [Console]::Error.WriteLine("  [!] $name  source missing: $src"); $fail++; $failed = $true
+                }
+            }
+            'settings' {
+                if (-not (Test-Path -LiteralPath $src -PathType Leaf)) {
+                    [Console]::Error.WriteLine("  [!] $name  source missing: $src"); $fail++; $failed = $true; break
+                }
+                jq -e 'type == "object"' $src *> $null
+                if ($LASTEXITCODE -ne 0) {
+                    [Console]::Error.WriteLine("  [!] $name  settings fragment is not a JSON object: $src"); $fail++; $failed = $true
                 }
             }
             'bin' {
@@ -717,6 +728,70 @@ function Handle-Config([string]$name, [string]$path) {
         [Console]::Error.WriteLine("  [!] $name  source missing: $src"); return
     }
     Link-Artifact $name $src (Join-Path $HOME '.claude')
+}
+
+# --- settings handler ---------------------------------------------------------
+# Merges a JSON fragment (e.g. claude-settings.json) into the user's Claude Code
+# settings.json – desired-state: keys are set, arrays gain missing elements,
+# remove strips exactly the fragment's keys/elements again. The merge logic
+# lives in tools/settings-merge.jq, shared with the sh port. Global scope only,
+# ignores --target. Honours CLAUDE_CONFIG_DIR like Claude Code itself.
+$script:SettingsJq = Join-Path $RepoRoot 'tools/settings-merge.jq'
+
+function Get-ClaudeSettingsPath {
+    $dir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $HOME '.claude' }
+    Join-Path $dir 'settings.json'
+}
+
+# Runs settings-merge.jq in the given mode; returns its output as one string.
+function Invoke-SettingsMerge([string]$frag, [string]$cfg, [string]$mode) {
+    [string[]]$cur = if (Test-Path -LiteralPath $cfg -PathType Leaf) { '--slurpfile', 'cur', $cfg } else { '--argjson', 'cur', '{}' }
+    $out = & jq -n --slurpfile frag $frag @cur --arg mode $mode -f $script:SettingsJq
+    if ($LASTEXITCODE -ne 0) { throw "settings-merge.jq failed (mode $mode)" }
+    return ($out -join "`n")
+}
+
+function Handle-Settings([string]$name, [string]$path) {
+    $src = Join-Path $RepoRoot $path
+    if ($Scope -ne 'global') {
+        Write-Output "  [.] $name  settings are global-only — use --scope global"
+        return
+    }
+    if (-not (Test-Path -LiteralPath $src -PathType Leaf)) {
+        [Console]::Error.WriteLine("  [!] $name  source missing: $src"); return
+    }
+    if (-not (Get-Command jq -ErrorAction SilentlyContinue)) {
+        [Console]::Error.WriteLine("  [!] $name  jq is required for settings entries — install it (e.g. scoop install jq)")
+        return
+    }
+    $cfg = Get-ClaudeSettingsPath
+    try {
+        $state = (Invoke-SettingsMerge $src $cfg 'state').Trim().Trim('"')
+        switch ($Cmd) {
+            'install' {
+                if ($state -eq 'ok') { Write-Output "  [=] $name  already applied ($cfg)"; break }
+                $new = Invoke-SettingsMerge $src $cfg 'apply'
+                New-Item -ItemType Directory -Force -Path (Split-Path -LiteralPath $cfg) | Out-Null
+                [IO.File]::WriteAllText($cfg, $new + "`n")
+                Write-Output "  [+] $name  merged into $cfg"
+            }
+            'status' {
+                switch ($state) {
+                    'ok'      { Write-Output "  [ok] $name  applied in $cfg"; $script:State = 'ok' }
+                    'partial' { Write-Output "  [! ] $name  partly applied in $cfg — re-run install"; $script:State = 'partial' }
+                    default   { Write-Output "  [ ] $name  not applied in $cfg" }
+                }
+            }
+            'remove' {
+                if ($state -eq 'none') { Write-Output "  [.] $name  not applied — nothing to remove"; break }
+                $new = Invoke-SettingsMerge $src $cfg 'strip'
+                [IO.File]::WriteAllText($cfg, $new + "`n")
+                Write-Output "  [-] $name  stripped from $cfg"
+            }
+        }
+    } catch {
+        [Console]::Error.WriteLine("  [!] $name  $($_.Exception.Message)")
+    }
 }
 
 # --- installer handler --------------------------------------------------------
@@ -1931,6 +2006,7 @@ function _Registry-Normalize([string]$type, [ref]$scope, [ref]$target, [ref]$pro
     # (target="" = bare git-hook, target="claude" = git-hook + claude patch).
     switch ($type) {
         'config' { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
+        'settings' { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
         'bin'    { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
         'mcp'    { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
         'release' { $scope.Value = 'global'; $target.Value = ''; $project.Value = '' }
@@ -2014,6 +2090,7 @@ function Registry-Sweep {
     foreach ($e in $raw) {
         switch ($e.type) {
             'config' { $e.scope = 'global'; $e.target = ''; $e.project = '' }
+            'settings' { $e.scope = 'global'; $e.target = ''; $e.project = '' }
             'bin'    { $e.scope = 'global'; $e.target = ''; $e.project = '' }
         }
         if ($e.PSObject.Properties.Match('project').Count -and $e.project) {
@@ -2087,6 +2164,7 @@ function Registry-Sweep {
             'skill'  { Handle-Skill  $e.tool $e.path }
             'hook'   { Handle-Hook   $e.tool $e.path }
             'config' { Handle-Config $e.tool $e.path }
+            'settings' { Handle-Settings $e.tool $e.path }
             'installer' { Handle-Installer $e.tool $e.path }
             'bin' {
                 $cat = (Get-Content -LiteralPath $Catalog -Raw | ConvertFrom-Json).tools |
@@ -2330,7 +2408,7 @@ if ($Cmd -eq 'install') {
 # bin — and repo, unless it declares a skill link, which is target-specific).
 if (-not $Target) {
     $needsTarget = $selected | Where-Object {
-        ($_.type -notin @('hook', 'config', 'bin', 'repo', 'mcp', 'release', 'installer')) -or
+        ($_.type -notin @('hook', 'config', 'settings', 'bin', 'repo', 'mcp', 'release', 'installer')) -or
         ($_.type -eq 'repo' -and @(@($_.links) | Where-Object { $_ -and $_.type -eq 'skill' }).Count -gt 0)
     } | Select-Object -First 1
     if ($needsTarget) {
@@ -2353,6 +2431,7 @@ foreach ($tool in $selected) {
         'skill'  { Handle-Skill $tool.name $tool.path }
         'hook'   { Handle-Hook $tool.name $tool.path }
         'config' { Handle-Config $tool.name $tool.path }
+        'settings' { Handle-Settings $tool.name $tool.path }
         'installer' { Handle-Installer $tool.name $tool.path }
         'bin'    { Handle-Bin $tool.name $tool.path $tool.command ([bool]$tool.source) }
         'plugin' { Handle-Plugin $tool.name $tool.path $tool.marketplace $tool.plugin }
@@ -2369,7 +2448,7 @@ foreach ($tool in $selected) {
     if ($Cmd -ne 'remove' -and $tool.requires) {
         [void](Test-Requires $tool.name $tool.requires)
     }
-    if ($tool.type -in @('skill', 'hook', 'config', 'bin', 'plugin', 'repo', 'mcp', 'release', 'installer')) {
+    if ($tool.type -in @('skill', 'hook', 'config', 'settings', 'bin', 'plugin', 'repo', 'mcp', 'release', 'installer')) {
         if ($Cmd -eq 'install') {
             Registry-Add $tool.name $tool.type $tool.path $Scope $targetEff $Project
         } elseif ($Cmd -eq 'remove') {

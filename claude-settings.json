@@ -1,0 +1,9 @@
+{
+  "disableArtifact": true,
+  "disableWorkflows": true,
+  "permissions": {
+    "deny": [
+      "SendFeedback"
+    ]
+  }
+}

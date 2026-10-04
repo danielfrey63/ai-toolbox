@@ -24,7 +24,7 @@
 # repo itself is never touched.
 # =============================================================================
 
-APP_VERSION='0.3.7'
+APP_VERSION='0.4.8'
 
 set -u
 
@@ -70,7 +70,7 @@ status_pairs() { norm | grep -oE '^\s*\[(ok|!|i)\] [A-Za-z0-9_-]+' | sed 's/^ */
 
 # Extract the catalog table's tool names from list output (lines with the
 # two-space indent + name + type word).
-list_names() { norm | awk '$2 ~ /^(skill|hook|plugin|config|bin)$/ {print $1}' | sort; }
+list_names() { norm | awk '$2 ~ /^(skill|hook|plugin|config|settings|bin)$/ {print $1}' | sort; }
 
 # --- fixtures ----------------------------------------------------------------
 
@@ -81,6 +81,7 @@ make_sandbox() {  # variant(good|bad) -> sandbox dir on stdout
     mkdir -p "$d/tools" "$d/skills/alpha" "$d/hookdir"
     printf -- '---\nname: alpha\ndescription: fixture skill\n---\n# alpha\n' > "$d/skills/alpha/SKILL.md"
     printf '# fixture config\n' > "$d/CONF.md"
+    printf '{"disableX": true, "permissions": {"deny": ["Foo"]}}\n' > "$d/SETS.json"
     printf '#!/bin/sh\necho hi\n' > "$d/tool.sh"
     printf 'Write-Output hi\n' > "$d/tool.ps1"
     chmod +x "$d/toolbox.sh" "$d/tool.sh" 2>/dev/null
@@ -92,7 +93,8 @@ make_sandbox() {  # variant(good|bad) -> sandbox dir on stdout
 { "tools": [
   { "name": "alpha", "type": "skill",  "path": "skills/alpha", "description": "fixture skill" },
   { "name": "conf",  "type": "config", "path": "CONF.md",      "description": "fixture config" },
-  { "name": "tool",  "type": "bin",    "path": "tool.sh", "command": "tool", "description": "fixture bin" },
+  { "name": "sets",  "type": "settings", "path": "SETS.json",  "description": "fixture settings" },
+  { "name": "tool", "type": "bin",    "path": "tool.sh", "command": "tool", "description": "fixture bin" },
   { "name": "hooks", "type": "hook",   "path": "hookdir",      "description": "fixture hooks" }
 ] }
 EOF
@@ -231,6 +233,51 @@ check_registry_heal() {
         || bad "registry-heal: healed registry differs across ports"
 }
 
+# --- settings merge round-trip ------------------------------------------------
+# install merges the fragment into a pre-existing settings.json without losing
+# foreign keys, a second install is a no-op, status reports ok, remove strips
+# exactly the fragment again. Each port gets its own CLAUDE_CONFIG_DIR; the
+# resulting files must match the expectation and each other.
+
+check_settings_roundtrip() {
+    local d port cfgdir rc out applied stripped
+    local want_applied='{"disableX":true,"model":"opus","permissions":{"allow":["Bash(ls)"],"deny":["Bar","Foo"]}}'
+    local want_stripped='{"model":"opus","permissions":{"allow":["Bash(ls)"],"deny":["Bar"]}}'
+    d=$(mktemp -d) || exit 1; CLEANUP="$CLEANUP $d"
+    cp "$ROOT/toolbox.sh" "$ROOT/toolbox.ps1" "$d/"
+    mkdir -p "$d/tools"
+    cp "$ROOT/tools/settings-merge.jq" "$d/tools/"
+    printf '{"disableX": true, "permissions": {"deny": ["Foo"]}}\n' > "$d/SETS.json"
+    printf '{ "tools": [ { "name": "sets", "type": "settings", "path": "SETS.json", "description": "fixture settings" } ] }\n' \
+        > "$d/tools/catalog.json"
+    for port in sh ps; do
+        [ "$port" = ps ] && [ -z "$PWSH" ] && continue
+        cfgdir="$d/claude-$port"; mkdir -p "$cfgdir" "$d/xdg-$port"
+        printf '{"model":"opus","permissions":{"allow":["Bash(ls)"],"deny":["Bar"]}}\n' > "$cfgdir/settings.json"
+        export CLAUDE_CONFIG_DIR="$cfgdir" XDG_CONFIG_HOME="$d/xdg-$port"
+        [ "$port" = ps ] && command -v cygpath >/dev/null 2>&1 && export CLAUDE_CONFIG_DIR=$(cygpath -w "$cfgdir")
+        "run_$port" "$d" install --what sets >/dev/null; rc=$?
+        applied=$(jq -Sc . "$cfgdir/settings.json" 2>/dev/null)
+        [ "$rc" -eq 0 ] && [ "$applied" = "$want_applied" ] \
+            && ok "settings: $port install merges without losing foreign keys" \
+            || bad "settings: $port install exit $rc, got ${applied:-<unreadable>}"
+        out=$("run_$port" "$d" install --what sets)
+        printf '%s\n' "$out" | grep -q '\[=\] sets' \
+            && ok "settings: $port second install is a no-op" \
+            || bad "settings: $port second install not idempotent"
+        out=$("run_$port" "$d" status --what sets)
+        printf '%s\n' "$out" | grep -q '\[ok\] sets' \
+            && ok "settings: $port status reports ok" \
+            || bad "settings: $port status not ok"
+        "run_$port" "$d" remove --what sets >/dev/null
+        stripped=$(jq -Sc . "$cfgdir/settings.json" 2>/dev/null)
+        [ "$stripped" = "$want_stripped" ] \
+            && ok "settings: $port remove strips exactly the fragment" \
+            || bad "settings: $port remove left ${stripped:-<unreadable>}"
+        unset CLAUDE_CONFIG_DIR XDG_CONFIG_HOME
+    done
+}
+
 echo "parity: building fixtures..."
 GOOD=$(make_sandbox good); CLEANUP="$CLEANUP $GOOD"
 BAD=$(make_sandbox bad);   CLEANUP="$CLEANUP $BAD"
@@ -246,6 +293,9 @@ check_case "list" "$GOOD" 0 list
 
 echo "parity: registry healing via status --all"
 check_registry_heal
+
+echo "parity: settings merge round-trip (install / install / status / remove)"
+check_settings_roundtrip
 
 # --- optional lint layer (informational, never fails the run) -----------------
 
