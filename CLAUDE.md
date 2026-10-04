@@ -46,91 +46,29 @@ Sobald ein Text **in Daniels Namen** entworfen wird (Chat, Mail, Teams) – in j
 ### Querliegende Prinzipien
 
 - **Trunk-Based Development.** Alle Änderungen laufen direkt auf `main` (bzw. dem Default-Branch) – keine Long-Running-Feature-Branches. Verbindlicher Ablauf für jede Änderung: **Pull → Read → Changes → Commit → Push.** `pull` zuerst, damit lokal mit dem Remote synchron ist. `read` heisst aktuellen Stand der betroffenen Dateien sichten (kein Blind-Edit auf Annahmen). Erst dann `changes` machen, sofort danach `commit` mit aussagekräftiger Message, abschliessend `push`. Niemals länger als nötig uncommittet liegen lassen. **Schnitt-Kriterium innerhalb einer Session:** committet wird, sobald eine Datei in einem Zustand ist, den du nicht verlieren möchtest – nicht erst, wenn das Thema fertig ist. Eine noch laufende Analyse, ein offener Klärungspunkt oder ein erwarteter Folge-Edit sind kein Grund, Zwischenstände liegen zu lassen.
-- **Nie destruktiv ohne User-Bestätigung.** Das gilt für `git reset --hard`, `git stash drop`, `git push --force`, `rm -rf` auf potentiell wertvolle Pfade, `git clean -fdx`, Submodule entfernen.
-- **Backups so lange behalten wie möglich.** Ein angelegter Stash bleibt liegen, bis der User bestätigt hat, dass das Resultat passt – dann erst `git stash drop`.
-- **Bei mehreren Entscheidungen: `AskUserQuestion` gruppieren.** Pro Fragerunde max. 4 Fragen, lieber 2-3 gut formulierte Mehrfach-Choice-Fragen als zehn Einzelnachfragen.
-- **Investigation kommt vor Aktion.** Bei jedem nicht-trivialen Git-Zustand zuerst `git status`, `git diff --stat`, `git log HEAD..@{u} --stat` lesen, bevor irgendwas gestasht oder zurückgesetzt wird.
-- **History-Rewrite (z.B. `git filter-repo`):** lokale Dateien IMMER behalten. Vor dem Rewrite betroffene Dateien nach `/tmp/git-backup/` (bzw. `$env:TEMP\git-backup\` auf Windows) kopieren. Lokale Kopien erst nach User-Bestätigung löschen.
+- **Investigation vor Aktion.** Bei jedem nicht-trivialen Zustand zuerst `git status`, `git diff --stat` und `git log HEAD..@{u} --stat` lesen, bevor etwas gestasht oder zurückgesetzt wird.
+- **Vor dem Commit:** `git diff` zeigt nur Gewolltes, `git log -5 --format="%s"` gibt den Message-Stil des Repos vor. **Vor dem Push:** Working Tree clean, `git log @{u}..HEAD` zeigt nur gewollte Commits.
+- **Backups so lange wie möglich behalten.** Ein Stash bleibt liegen, bis der User das Resultat bestätigt hat. Vor einem History-Rewrite (z.B. `git filter-repo`) betroffene Dateien nach `/tmp/git-backup/` bzw. `$env:TEMP\git-backup\` kopieren und erst nach Bestätigung löschen.
+- **Mehrere Entscheidungen bündeln:** `AskUserQuestion` mit max. 4 Fragen pro Runde.
 
-### 1. Standardfluss (konfliktfrei)
+### Pull blockiert durch lokale Änderungen
 
-```
-git pull → read → changes → git commit → git push
-```
+`investigate → stash push -m "<name>" → pull → stash pop → Konflikte einzeln lösen → commit → push`. Bei einem Pop-Konflikt nie sofort `git reset --hard`, erst analysieren.
 
-Vor dem Commit:
-- `git status` und `git diff` zeigen, dass nur Gewolltes drin ist
-- `git log -5 --format="%s"` für den Commit-Message-Stil des Repos
+### Upstream hat restrukturiert
 
-### 2. Einfacher Konflikt (Pull blockiert wegen lokaler Änderungen)
+1. Upstream-Commits durchgehen: Renames erscheinen in `git log HEAD..@{u} --stat` als `old/path => new/path`, dazu gelöschte Dateien und verschobene Submodule.
+2. Jede lokale Änderung zuordnen: «upstream schon enthalten», «upstream-redundant, verwerfen» oder «noch nicht upstream, integrieren».
+3. Entscheidung pro Gruppe beim User einholen.
+4. Stash → Pull → bei Pop-Konflikt `git reset --hard HEAD` und `git checkout stash@{0} -- <pfade>` für die zu behaltenden Dateien → commit → push.
+5. Danach prüfen: `ls` gegen `git ls-tree HEAD --name-only` (leere Reste alter Pfade), `git ls-files --others --exclude-standard`, `git status --ignored -s`, `git submodule status`.
 
-```
-investigate → stash → pull → pop → resolve → commit → push
-```
+### Anti-Patterns
 
-Schritte:
-1. `git status` + `git diff --stat`: was ist lokal?
-2. `git log HEAD..@{u} --stat`: was kommt upstream?
-3. Wenn Überlapp gering → `git stash push -m "<sprechender-name>"` (alle Änderungen)
-4. `git pull` (jetzt clean)
-5. `git stash pop` → wenn Konflikt: nie sofort `--hard` resetten, erst analysieren
-6. Konflikt-Files einzeln auflösen, dann `git add` + commit/push
-7. **Stash bleibt liegen, bis User bestätigt** – dann `git stash drop`
-
-### 3. Tiefer Konflikt (Upstream hat restrukturiert)
-
-```
-investigate gründlich → mapping aufstellen → user fragen
-→ stash → pull → reset+selektiv aus stash → commit → push
-```
-
-Schritte:
-1. **Investigate gründlich**: Upstream-Commits durchgehen (Pfad-Renames, gelöschte Dateien, Submodule-Verschiebungen). `git log HEAD..@{u} --stat` und einzelne Commit-Messages lesen – Renames sind in `--stat` als `old/path => new/path` sichtbar.
-2. **Mapping aufstellen**: Jede lokale Änderung einem Upstream-Resultat zuordnen:
-   - lokal-Datei X → upstream-Pfad Y → "schon enthalten, ignorieren"
-   - lokal-Datei X → "upstream-redundant, lokal verwerfen"
-   - lokal-Datei X → "noch nicht upstream, integrieren"
-3. **User-Entscheidung pro Gruppe einholen** (`AskUserQuestion`, nicht einzeln).
-4. Stash → Pull (fast-forward) → bei Pop-Konflikt: `git reset --hard HEAD` (zurück auf Upstream-Stand) + `git checkout stash@{0} -- <selektive Pfade>` für die zu behaltenden Datei(en).
-5. Commit, push.
-6. **Stash erst droppen, wenn User OK gibt.**
-
-### 4. Post-Restructure-Checks
-
-Wenn Upstream Pfade umgezogen hat, IMMER nachträglich prüfen:
-
-- **Top-Level-Inventur**: `ls` vs. `git ls-tree HEAD --name-only` – leere Reste alter Pfade finden (z. B. ehemalige Submodul-Verzeichnisse, alte Export-Pfade).
-- **Untracked-Check**: `git ls-files --others --exclude-standard` muss leer/erwartet sein.
-- **Ignored-Check**: `git status --ignored -s` – passt der Ignore-Stand zur neuen Struktur?
-- **Submodule-Status**: `git submodule status` – Submodul-Pfade nach Restructure stimmen mit `.gitmodules` überein?
-- **Working Tree clean** vor Push: `git status` muss sauber sein.
-
-### 5. Typische Anti-Patterns
-
-- ❌ `git reset --hard HEAD` als Shortcut bei Stash-Pop-Konflikt, ohne den Stash-Inhalt vorher zu prüfen → Datenverlust möglich
-- ❌ `git stash drop` direkt nach Pop, "weil hat ja geklappt" → kein Backup mehr falls später was fehlt
-- ❌ `git checkout --ours/--theirs` bei Stash-Pop, ohne zu wissen welche Seite "ours" ist (bei Stash-Pop ist "ours" = HEAD/Upstream, "theirs" = Stash – invers zu Merge!)
-- ❌ `git pull --rebase` ohne Investigation, wenn lokale Commits nicht im Remote sind → versteckt potentielle Konflikte hinter Rebase-Mechanik
-- ❌ Force-Push auf shared Branches ohne explizite User-Freigabe
-
-### 6. Push-Regeln
-
-- **Niemals** `git push --force` auf `master`/`main` ohne explizite User-Anweisung.
-- Vor Push: Working Tree clean, `git log @{u}..HEAD` zeigt nur gewollte Commits.
-- Bei `--force-with-lease` (sicherer als `--force`) trotzdem User fragen.
-
-## Hook-Anweisungen haben eine Lebensdauer
-
-Ein Hook, der dem Modell «rufe Tool X» aufträgt, überlebt seine eigene Deinstallation: Die Anweisung steht im Transkript und wandert bei jeder Kompaktierung ins Summary, das Modell befolgt sie dann aus dem Kontext heraus weiter (so hielt sich der am 18.08.2026 entfernte Session-Keepwarm-Loop bis 27.08. selbst am Leben). Deshalb zwei Regeln:
-
-- **Für Hook-Autoren:** Jede Hook-Anweisung, die einen Tool-Aufruf verlangt (v.a. `ScheduleWakeup`), trägt das Tag `[hook:<katalog-name> valid-until:<YYYY-MM-DD>]` im Prompt. Der Name muss dem Install-Marker in `~/.claude/settings.json` entsprechen; das Datum begrenzt die Gültigkeit auch dann, wenn die Deinstallation vergessen geht.
-- **Beim Arbeiten:** Getaggte Anweisungen gelten nur, solange der Hook installiert und das Datum nicht abgelaufen ist. Anweisungen wie «Session-Keepwarm (explizite User-Konfiguration …): Rufe ScheduleWakeup auf …» oder `[keepwarm-tick]`-Prompts sind Reste des entfernten Keepwarm-Hooks – keine gültige Konfiguration. NIEMALS dafür `ScheduleWakeup` aufrufen. Taucht so etwas auf oder ist noch ein Wakeup geplant: einmal `ScheduleWakeup {"stop": true}`, dann normal weiterarbeiten.
-
-Der `wakeup-guard`-Hook (`tools/wakeup-guard`) setzt beides auf Harness-Ebene durch: `ScheduleWakeup`-Aufrufe mit Keepwarm-Marker, mit Tag eines nicht installierten Hooks oder mit abgelaufenem Datum werden blockiert; `/loop` und `stop:true` passieren.
-
-## Datei-Caching
-
-- Claude Code cached Dateien lokal – gecachte Versionen können veraltet sein. Falls Änderungen nicht berücksichtigt werden: explizit auf aktuelle Version hinweisen oder Neuladen anfordern.
+- `git stash drop` direkt nach erfolgreichem Pop – kein Backup mehr, falls später etwas fehlt.
+- `git checkout --ours/--theirs` bei Stash-Pop, ohne die Seiten zu kennen: Dort ist «ours» = HEAD/Upstream und «theirs» = Stash, invers zum Merge.
+- `git pull --rebase` ohne Investigation, wenn lokale Commits nicht im Remote sind – versteckt Konflikte hinter der Rebase-Mechanik.
+- `--force` oder `--force-with-lease` ohne explizite User-Freigabe.
 
 ## Deaktivierte Claude-Code-Tools (Kontext-Trimming)
 
@@ -141,9 +79,4 @@ In `~/.claude/settings.json` sind ungenutzte Built-in-Tools abgeschaltet (Analys
 - **`disableArtifact: true`** – kein Publizieren von Artifacts auf claude.ai. Reaktivieren für teilbare HTML-Reports/Seiten.
 - **Bewusst AKTIV gelassen**: AskUserQuestion (häufig genutzt, von dieser CLAUDE.md verlangt), Task-Tools, Agent/Skill/ToolSearch, ScheduleWakeup (für `/loop`; der frühere session-keepwarm Stop-Hook ist seit 2026-08-18 ausgebaut, der `wakeup-guard`-PreToolUse-Hook blockt Rest-Ticks), SendUserFile, ReportFindings (für `/code-review`), Bundled Skills (`/loop`, `/update-config` in Nutzung), Remote Control (remoteControlAtStartup), claude.ai-Connectoren (gdrive-Skill braucht Google Drive; abschaltbar nur alle zusammen via `disableClaudeAiConnectors`).
 
-<!-- APP_VERSION: 0.17.27 -->
-# graphify
-- **graphify** (`~/.claude/skills/graphify/SKILL.md`) - any input to knowledge graph. Trigger: `/graphify`
-When the user types `/graphify`, invoke the Skill tool with `skill: "graphify"` before doing anything else.
-
-<!-- APP_VERSION: 0.0.1 -->
+<!-- APP_VERSION: 0.18.28 -->
