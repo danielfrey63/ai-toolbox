@@ -26,11 +26,9 @@ Sobald ein Text **in Daniels Namen** entworfen wird (Chat, Mail, Teams) – in j
 
 ### Windows-Devbox (PowerShell + WSL)
 
-- **PowerShell:** Kommando-Trennung mit `;`. Bedingte Verkettung mit `&&` / `||`. Beispiel: `$env:VAR="wert"; bash script.sh`.
-- **Bash unter WSL:** wie Linux oben.
-- **SSH-Setup je nach Shell:**
-  - **PowerShell:** Pageant (PuTTY Agent) + Plink – funktioniert direkt.
-  - **WSL/Bash:** Lokaler `ssh-agent` (Pageant funktioniert dort NICHT); SSH-Keys nach `~/.ssh/` kopieren.
+- **Shells:** PowerShell 7 für interaktive Arbeit. `.sh`-Skripte und Claude-Code-Hooks laufen in Git Bash (scoop). Linux-Tooling läuft in WSL (Ubuntu), das in der PowerShell über `bash` aufgerufen wird – ohne installierte Distribution schlägt `bash` dort fehl, dann Git Bash explizit aufrufen.
+- **Git-Remotes** über HTTPS mit Git Credential Manager. SSH je nach Shell: PowerShell mit Pageant + Plink, WSL mit lokalem `ssh-agent` (Pageant funktioniert dort NICHT, Keys nach `~/.ssh/` kopieren).
+- **Repos unter `D:\Meine Ablage` liegen in Google Drive.** Drive synchronisiert Arbeitsdateien vom anderen Rechner, ohne dass `git` davon weiss. Bei «behind + dirty» zuerst prüfen, ob das Arbeitsverzeichnis schon dem Upstream entspricht (`git diff --stat @{u}`), bevor irgendetwas gestasht wird.
 
 ## Arbeitsprinzipien
 
@@ -38,7 +36,7 @@ Sobald ein Text **in Daniels Namen** entworfen wird (Chat, Mail, Teams) – in j
 - **Bei Unsicherheit fragen.** Lieber eine kurze Rückfrage als eine falsche Annahme – besonders bei Scope, Pfaden, destruktiven Aktionen und Architektur-Entscheidungen.
 - **Keine Duplikation.** Vor neuem Code prüfen, ob Konstante/Helfer/Klasse/Pattern bereits existiert. Wenn die bestehende Lösung nicht exakt passt: leicht abstrahieren und wiederverwenden statt kopieren und anpassen.
 - **Desired-State / Idempotenz.** ALLE Skripte (Setup, Build, Deploy, Migration, Cleanup, …) müssen beliebig oft ausführbar sein, ohne Seiteneffekte oder Fehler zu produzieren. Mutationen erfolgen nur, wenn der Zielzustand vom Ist-Zustand abweicht – vor jedem Schritt prüfen statt blind ausführen. Re-Runs nach Abbruch oder Teilerfolg dürfen nie schaden.
-- **Code-Änderungen mit Write/Edit, nie per Bash-Heredoc.** Quellcode und Konfigdateien werden mit den Datei-Tools (Write, Edit) geschrieben oder gepatcht. Bash-Heredocs (`python - <<'EOF'`, `cat <<EOF`) sind nur für Wegwerf-Skripte ohne Escape-Sequenzen geeignet: Der Tool-Transport wandelt Sequenzen wie `\x00`, `\x11` oder `\n` in echte Bytes um, was in Python-Quelltext zu Null-Bytes, Steuerzeichen und zerrissenen String-Literalen führt (Diss-Erigeron-Export, 12.09.2026: drei Reparaturrunden, und dieser Absatz selbst wurde beim ersten Versuch per Heredoc genauso zerlegt).
+- **Code-Änderungen mit Write/Edit, nie per Bash-Heredoc.** Quellcode und Konfigdateien werden mit den Datei-Tools (Write, Edit) geschrieben oder gepatcht. Bash-Heredocs (`python - <<'EOF'`, `cat <<EOF`) sind nur für Wegwerf-Skripte ohne Escape-Sequenzen geeignet: Der Tool-Transport wandelt Sequenzen wie `\x00`, `\x11` oder `\n` in echte Bytes um, was in Python-Quelltext zu Null-Bytes, Steuerzeichen und zerrissenen String-Literalen führt.
 - **Verbesserungs-Loop nach jedem Run.** Nach jeder Ausführung eines Skills, MCP-Servers oder Skripts werden aus den gemachten Erfahrungen automatisch konkrete Verbesserungsvorschläge generiert – Reibung, Fehlerfälle, Edge-Cases, Effizienz-Gewinne, Bugs, missverständliche Defaults, fehlende Idempotenz, schlechte Help-Texte. Jeder Vorschlag mit Zielort (welches Skript/welche Skill-Definition/welcher Tool-Code), kurzer Begründung, und falls möglich konkretem Diff/Patch-Vorschlag. Ausgabe direkt im Anschluss an den Run, nicht erst auf Nachfrage.
 
 ## Git-Workflows
@@ -46,32 +44,14 @@ Sobald ein Text **in Daniels Namen** entworfen wird (Chat, Mail, Teams) – in j
 ### Querliegende Prinzipien
 
 - **Trunk-Based Development.** Alle Änderungen laufen direkt auf `main` (bzw. dem Default-Branch) – keine Long-Running-Feature-Branches. Verbindlicher Ablauf für jede Änderung: **Pull → Read → Changes → Commit → Push.** `pull` zuerst, damit lokal mit dem Remote synchron ist. `read` heisst aktuellen Stand der betroffenen Dateien sichten (kein Blind-Edit auf Annahmen). Erst dann `changes` machen, sofort danach `commit` mit aussagekräftiger Message, abschliessend `push`. Niemals länger als nötig uncommittet liegen lassen. **Schnitt-Kriterium innerhalb einer Session:** committet wird, sobald eine Datei in einem Zustand ist, den du nicht verlieren möchtest – nicht erst, wenn das Thema fertig ist. Eine noch laufende Analyse, ein offener Klärungspunkt oder ein erwarteter Folge-Edit sind kein Grund, Zwischenstände liegen zu lassen.
-- **Investigation vor Aktion.** Bei jedem nicht-trivialen Zustand zuerst `git status`, `git diff --stat` und `git log HEAD..@{u} --stat` lesen, bevor etwas gestasht oder zurückgesetzt wird.
-- **Vor dem Commit:** `git diff` zeigt nur Gewolltes, `git log -5 --format="%s"` gibt den Message-Stil des Repos vor. **Vor dem Push:** Working Tree clean, `git log @{u}..HEAD` zeigt nur gewollte Commits.
-- **Backups so lange wie möglich behalten.** Ein Stash bleibt liegen, bis der User das Resultat bestätigt hat. Vor einem History-Rewrite (z.B. `git filter-repo`) betroffene Dateien nach `/tmp/git-backup/` bzw. `$env:TEMP\git-backup\` kopieren und erst nach Bestätigung löschen.
-- **Mehrere Entscheidungen bündeln:** `AskUserQuestion` mit max. 4 Fragen pro Runde.
-
-### Pull blockiert durch lokale Änderungen
-
-`investigate → stash push -m "<name>" → pull → stash pop → Konflikte einzeln lösen → commit → push`. Bei einem Pop-Konflikt nie sofort `git reset --hard`, erst analysieren.
-
-### Upstream hat restrukturiert
-
-1. Upstream-Commits durchgehen: Renames erscheinen in `git log HEAD..@{u} --stat` als `old/path => new/path`, dazu gelöschte Dateien und verschobene Submodule.
-2. Jede lokale Änderung zuordnen: «upstream schon enthalten», «upstream-redundant, verwerfen» oder «noch nicht upstream, integrieren».
-3. Entscheidung pro Gruppe beim User einholen.
-4. Stash → Pull → bei Pop-Konflikt `git reset --hard HEAD` und `git checkout stash@{0} -- <pfade>` für die zu behaltenden Dateien → commit → push.
-5. Danach prüfen: `ls` gegen `git ls-tree HEAD --name-only` (leere Reste alter Pfade), `git ls-files --others --exclude-standard`, `git status --ignored -s`, `git submodule status`.
-
-### Anti-Patterns
-
-- `git stash drop` direkt nach erfolgreichem Pop – kein Backup mehr, falls später etwas fehlt.
-- `git checkout --ours/--theirs` bei Stash-Pop, ohne die Seiten zu kennen: Dort ist «ours» = HEAD/Upstream und «theirs» = Stash, invers zum Merge.
-- `git pull --rebase` ohne Investigation, wenn lokale Commits nicht im Remote sind – versteckt Konflikte hinter der Rebase-Mechanik.
-- `--force` oder `--force-with-lease` ohne explizite User-Freigabe.
+- **Investigation vor Aktion.** Bei jedem nicht-trivialen Zustand zuerst `git status`, `git diff --stat` und `git log HEAD..@{u} --stat` lesen, bevor etwas gestasht oder zurückgesetzt wird. Kein `git pull --rebase` über lokale, ungepushte Commits ohne diese Sichtung.
+- **Commit-Stil:** `git log -5 --format="%s"` gibt den Message-Stil des Repos vor.
+- **Backups so lange wie möglich behalten.** Ein Stash bleibt liegen, bis der User das Resultat bestätigt hat – auch nach einem erfolgreichen Pop. Vor einem History-Rewrite (z.B. `git filter-repo`) betroffene Dateien nach `/tmp/git-backup/` bzw. `$env:TEMP\git-backup\` kopieren und erst nach Bestätigung löschen.
+- **Upstream hat restrukturiert:** Jede lokale Änderung zuordnen («upstream schon enthalten», «upstream-redundant, verwerfen», «noch nicht upstream, integrieren») und die Entscheidung pro Gruppe gebündelt beim User einholen (`AskUserQuestion`, max. 4 Fragen pro Runde). Danach auf Reste alter Pfade prüfen (`ls` gegen `git ls-tree HEAD --name-only`, untracked, ignored, `git submodule status`).
+- **Kein `--force` / `--force-with-lease`** ohne explizite User-Freigabe.
 
 ## Deaktivierte Claude-Code-Tools
 
 Die globale Settings-Baseline steht versioniert in `claude-settings.json` (dieses Repo) und wird mit `toolbox install --what claude-settings` nach `~/.claude/settings.json` gemerged. Braucht eine Aufgabe ein dort abgeschaltetes Tool, NICHT stillschweigend einen Workaround bauen: den User darauf hinweisen und die Reaktivierung nennen (Eintrag in `claude-settings.json` entfernen, `toolbox remove` + `install`, Session neu starten).
 
-<!-- APP_VERSION: 0.19.29 -->
+<!-- APP_VERSION: 0.20.30 -->
