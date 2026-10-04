@@ -588,7 +588,7 @@ def _print_path_snippets() -> None:
 
     The skill itself uses `find_tool()` and doesn't need the binaries on
     PATH. But users (and other shell-driven tools) often want to invoke
-    `ffmpeg` / `ffprobe` / `yt-dlp` directly — e.g. for ad-hoc inspection.
+    `ffmpeg` / `ffprobe` / `yt-dlp` directly – e.g. for ad-hoc inspection.
     Print copy-pasteable snippets for the major shells. We deliberately
     do NOT auto-modify rc files: too invasive, too easy to get wrong.
     """
@@ -602,7 +602,7 @@ def _print_path_snippets() -> None:
     if IS_WINDOWS:
         bin_str = str(TRANSCRIBE_BIN_DIR)
         # Use generic %USERPROFILE% / $HOME so the snippet survives a copy
-        # to a different account name — and the literal path for the
+        # to a different account name – and the literal path for the
         # current session where the user can paste verbatim.
         sys.stderr.write(
             "  PowerShell (current session only):\n"
@@ -613,7 +613,7 @@ def _print_path_snippets() -> None:
             f"      'User')\n\n"
             "  cmd (persistent for current user, no admin):\n"
             f"    setx PATH \"{bin_str};%PATH%\"\n\n"
-            "  Git Bash / WSL (persistent — append to ~/.bashrc):\n"
+            "  Git Bash / WSL (persistent – append to ~/.bashrc):\n"
             "    export PATH=\"$HOME/.transcribe/bin:$PATH\"\n"
         )
     else:

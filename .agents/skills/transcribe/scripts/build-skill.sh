@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build-skill.sh — package this repo as a claude.ai-upload-ready .skill file.
+# build-skill.sh – package this repo as a claude.ai-upload-ready .skill file.
 # Usage: bash scripts/build-skill.sh  (run from repo root)
 #
 # Produces dist/transcribe.skill, a zip with a single top-level `transcribe/` directory

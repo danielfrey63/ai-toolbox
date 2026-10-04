@@ -2,15 +2,15 @@
 """Extract URLs from video description and transcript, group by category.
 
 Sources:
-- Video description (yt-dlp's `info_dict["description"]`) — explicit links the
+- Video description (yt-dlp's `info_dict["description"]`) – explicit links the
   uploader put under the video.
-- Transcript segments — URLs that appear in the spoken/captioned text.
+- Transcript segments – URLs that appear in the spoken/captioned text.
 
 Output: a dict {category: [items]} suitable for rendering as a markdown
 ``## Resources`` section. Items are de-duplicated by normalized URL (lowercased
 host, stripped tracking params, dropped fragment, normalized trailing slash).
 
-Categorization is heuristic and intentionally narrow — false positives in
+Categorization is heuristic and intentionally narrow – false positives in
 "project" hurt more than misses do, so when in doubt items go to "other".
 """
 from __future__ import annotations

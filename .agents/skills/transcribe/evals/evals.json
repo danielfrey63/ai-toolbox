@@ -1,0 +1,46 @@
+[
+  {
+    "skills": ["transcribe"],
+    "query": "Kannst du mir dieses YouTube-Video zusammenfassen? https://www.youtube.com/watch?v=dQw4w9WgXcQ – mich interessiert vor allem, was in den letzten 30 Sekunden auf dem Bildschirm passiert.",
+    "files": [],
+    "expected_behavior": [
+      "Triggers the transcribe skill from the German request without an explicit /transcribe command",
+      "Runs setup.py --check first and says nothing about setup when it exits 0; does not ask for a cloud API key",
+      "Runs run.py with the URL; relies on native captions in the video's own language when available instead of forcing Whisper",
+      "Reads all listed frame paths and the transcript file in parallel tool calls",
+      "Reads references/report-writing.md before writing the report and appends Übersicht, Summary and Analysis to the auto-saved <slug>.md under ./transcribe/",
+      "Answers the question about the last 30 seconds in addition to the report, citing timestamps, and suggests or performs a focused --start/--end run for that range if the full scan is too sparse",
+      "Chat reply contains only the Kernaussagen block, the answer to the question and file:// links to the companion files"
+    ]
+  },
+  {
+    "skills": ["transcribe"],
+    "query": "Transkribiere bitte die Meeting-Aufnahme D:/Meetings/State Secretariat for Migration 2.m4a. Das ist vertraulich, nichts darf in die Cloud. Teilnehmer waren Urs (Architekt), Andrea (Onboardee) und ich.",
+    "files": ["D:/Meetings/State Secretariat for Migration 2.m4a"],
+    "expected_behavior": [
+      "Recognizes an audio-only source and does not expect frames or illustrations",
+      "Keeps everything on-device: uses the default whisper-local and pyannote-local path, does not pin or suggest a cloud backend and does not ask for API keys",
+      "Renames the source to the YYYYMMDD-hhmm - <Thema> convention (start time from creation_time or mtime minus duration) before running run.py",
+      "Records the cast in transcribe-participants.txt next to the recording or uses it as evidence for the speaker mapping",
+      "Fills Name, Confidence and Evidence in <base>.speakers.md using address patterns and role/content evidence, marks medium-confidence names with (?), then runs speakers.py --apply",
+      "Writes <base>.transcript-kompakt.md and lists unresolved labels under ### Offene Sprecherzuordnung in the report"
+    ]
+  },
+  {
+    "skills": ["transcribe"],
+    "query": "Im Transkript von gestern (D:/Meetings/20260901-1400 - Weicheneditor Review.md) sitzt Simon bei 12:40 unter SPEAKER_00, obwohl das Andrea war, und ab 23:10 wiederholt sich 'Ja. Ja. Ja.' über eine halbe Minute. Kannst du das korrigieren?",
+    "files": [
+      "D:/Meetings/20260901-1400 - Weicheneditor Review.md",
+      "D:/Meetings/20260901-1400 - Weicheneditor Review.speakers.md",
+      "D:/Meetings/20260901-1400 - Weicheneditor Review.segments.json",
+      "D:/Meetings/20260901-1400 - Weicheneditor Review.mp4"
+    ],
+    "expected_behavior": [
+      "Fixes the single misattributed block via the Overrides table in <base>.speakers.md (Zeit 12:40, Name Andrea) instead of renaming the whole SPEAKER_00 label or hand-editing the transcript",
+      "Runs speakers.py --apply <base> (or a cached run.py re-run) so transcript and VTT pick up the correction",
+      "Treats the repetition loop as a decoder collapse: runs repair.py --dry-run on <base>.segments.json with --language de, then repairs from the source video",
+      "Re-runs run.py without --fresh afterwards so the cached segments are re-rendered in about a second instead of re-transcribing",
+      "Reports which passages were repaired and flags them as reviewed but not verified"
+    ]
+  }
+]

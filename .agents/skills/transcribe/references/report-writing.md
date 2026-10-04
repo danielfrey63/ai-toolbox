@@ -1,89 +1,98 @@
 # Report writing methodology (Übersicht + Summary + Analysis)
 
-Read this file BEFORE writing the report when the user asked no specific question. It defines the mandatory pre-stage (inventory + consistency check + date identification), the key-illustration extraction, the three report sections, and the exact markdown layout to append to `<base>.md`.
+Read this file BEFORE writing the report – also when the user asked a specific question, because the full report is always written. It defines the mandatory pre-stage (inventory + consistency check + date identification), the key-illustration extraction, the three report sections, and the exact markdown layout to append to `<base>.md`.
 
-Write everything in the **user's language** (German user → German headers and body; English user → English). The deutsche Begriffe below are anchors for the meaning of each section — translate them, don't transliterate.
+Write everything in the **user's language** (German user → German headers and body; English user → English). The deutsche Begriffe below are anchors for the meaning of each section – translate them, don't transliterate.
 
-The reader uses Summary as the standalone takeaway and Analysis as the deeper synthesis. **Don't duplicate** — Summary is comprehensive-but-flat (thematic bullets covering every named entity and concrete fact); Analysis is selective-and-judgmental (top claims, opinions, audit). A reader who only reads Summary should know everything that was said; a reader who reads both gets the editorial layer on top.
+The reader uses Summary as the standalone takeaway and Analysis as the deeper synthesis. **Don't duplicate** – Summary is comprehensive-but-flat (thematic bullets covering every named entity and concrete fact); Analysis is selective-and-judgmental (top claims, opinions, audit). A reader who only reads Summary should know everything that was said; a reader who reads both gets the editorial layer on top.
+
+## Contents
+
+- Pflicht-Vorstufe: Inventar + Konsistenz-Check (incl. Datum identifizieren)
+- Schlüssel-Illustrationen ausschneiden (incl. standalone re-run on an existing report)
+- Übersicht (Kernaussagen, Chapter-Struktur)
+- Summary / Zusammenfassung
+- Analysis (Inventar, Beurteilungen, Schlüsselaussagen, Details, Abdeckung, Resources, Offene Sprecherzuordnung)
+- Report layout (append to `<base>.md`)
 
 ## Pflicht-Vorstufe (before writing either section): Inventar + Konsistenz-Check
 
-Narrative writing reliably drops entities that the video mentioned only in passing — named consumer systems, integration partners, "X, Y, Z, ..."-style enumerations, release cadences with concrete numbers. To prevent that, build the inventory and resolve transcription inconsistencies **first**, then use the canonical names in both Summary and Analysis.
+Narrative writing reliably drops entities that the video mentioned only in passing – named consumer systems, integration partners, "X, Y, Z, ..."-style enumerations, release cadences with concrete numbers. To prevent that, build the inventory and resolve transcription inconsistencies **first**, then use the canonical names in both Summary and Analysis.
 
-**Inventar — enumerate, don't synthesize.** Mentally walk through frames + transcript and group every named entity you find:
+**Inventar – enumerate, don't synthesize.** Mentally walk through frames + transcript and group every named entity you find:
 
-- **Systeme / Tools / DBs** — applications, databases, platforms with their role and `[MM:SS]` of first mention
-- **Konsumenten / Abnehmer** — every system that consumes data from the main architecture, even if mentioned once
-- **Externe Schnittstellen** — bridges to third parties (SAP modules, regulator interfaces, partner tools)
-- **Personen & Rollen** — named people with their role (`Beat — neuer Streckeneditor`, `Andrea — Onboardee`)
-- **Personen & Stimmen** *(only if the transcript carries speaker labels — `[A]`, `[B]`, `[SPEAKER_00]`, ...)*: for each speaker label, map it to a real name by inspecting transcript context. **High-confidence criteria** (both must hold for a label to be substituted in the transcript later — see the speaker-name mapping step in SKILL.md):
+- **Systeme / Tools / DBs** – applications, databases, platforms with their role and `[MM:SS]` of first mention
+- **Konsumenten / Abnehmer** – every system that consumes data from the main architecture, even if mentioned once
+- **Externe Schnittstellen** – bridges to third parties (SAP modules, regulator interfaces, partner tools)
+- **Personen & Rollen** – named people with their role (`Beat – neuer Streckeneditor`, `Andrea – Onboardee`)
+- **Personen & Stimmen** *(only if the transcript carries speaker labels – `[A]`, `[B]`, `[SPEAKER_00]`, ...)*: for each speaker label, map it to a real name by inspecting transcript context. **High-confidence criteria** (both must hold for a label to be substituted in the transcript later – see the speaker-name mapping step in SKILL.md):
   - **Frame evidence**: an avatar / participant-list / on-screen name plate confirms the person, AND
   - **Address-pattern evidence**: at least one direct address (`"Andrea, hast du eine Frage?"`) where the previous or next speaker change goes to / comes from this label.
 
-  If only one of the two holds, the mapping is **medium-confidence**; if only weak / circumstantial evidence (a single off-hand name, no avatar), it's **low-confidence** — keep the bare letter in the transcript later. Mark medium / low explicitly with `(?)` in the entry so the post-analysis step can tell which labels to leave alone.
+  If only one of the two holds, the mapping is **medium-confidence**; if only weak / circumstantial evidence (a single off-hand name, no avatar), it's **low-confidence** – keep the bare letter in the transcript later. Mark medium / low explicitly with `(?)` in the entry so the post-analysis step can tell which labels to leave alone.
 
-  **The decision is made in `<base>.speakers.md`, not here.** The script pre-filled that file with talk time per label, the participants it could see (screen name plates, caption voices, `transcribe-participants.txt`), the address hits with the labels around them and any caption-voice alignment. Fill its Name / Confidence / Evidence columns first (see the speaker-mapping step in SKILL.md), then write this Inventar category as a one-line-per-label summary of it. The user corrects the file, not the report — a re-run renders the corrected names everywhere.
+  **The decision is made in `<base>.speakers.md`, not here.** The script pre-filled that file with talk time per label, the participants it could see (screen name plates, caption voices, `transcribe-participants.txt`), the address hits with the labels around them and any caption-voice alignment. Fill its Name / Confidence / Evidence columns first (see the speaker-mapping step in SKILL.md), then write this Inventar category as a one-line-per-label summary of it. The user corrects the file, not the report – a re-run renders the corrected names everywhere.
 
   **Every label that stays unresolved is an open question, not a dead end.** Carry it into the `### Offene Sprecherzuordnung` subsection at the end of Analysis (see below), where the reader can close it in one pass. Silently dropping an unattributed contribution loses exactly the input that questions, objections, and decisions tend to arrive in.
 
   **Canonical name format**:
   - Default: **first name only** (`Andrea`, `Urs`, `Maurice`).
-  - On collision (two speakers with the same first name): append the shortest unique surname prefix that disambiguates, with a single space — `Andrea B` vs `Andrea T`. If the first letters also collide, extend by one letter at a time until unique (`Andrea Br` vs `Andrea Bo`). Never include the full surname — first names are what people actually use in conversation; the surname prefix is just a disambiguator.
+  - On collision (two speakers with the same first name): append the shortest unique surname prefix that disambiguates, with a single space – `Andrea B` vs `Andrea T`. If the first letters also collide, extend by one letter at a time until unique (`Andrea Br` vs `Andrea Bo`). Never include the full surname – first names are what people actually use in conversation; the surname prefix is just a disambiguator.
 
-  Entry format: `[A] = Urs Daschinger — Architekt, Hauptpresenter (Frame cut_001 + Anrede "Urs" [12:34])`. Skip this category entirely if there are no speaker labels in the transcript.
-- **Fachbereiche / Listen-Aufzählungen** — every "X, Y, Z, ..." enumeration the speaker uses verbatim (these get dropped by narrative summaries; capture them as lists)
-- **Prozesse / Rhythmen** — release cadences, batch cycles, retention intervals with their numbers (`3 grosse Releases pro TFI-Zyklus + monatliche Modelländerungen`)
-- **Akronyme** — every three/four-letter code with its resolution if stated (`RGS — Railway GIS (vermutet, [06:00])`)
+  Entry format: `[A] = Urs Daschinger – Architekt, Hauptpresenter (Frame cut_001 + Anrede "Urs" [12:34])`. Skip this category entirely if there are no speaker labels in the transcript.
+- **Fachbereiche / Listen-Aufzählungen** – every "X, Y, Z, ..." enumeration the speaker uses verbatim (these get dropped by narrative summaries; capture them as lists)
+- **Prozesse / Rhythmen** – release cadences, batch cycles, retention intervals with their numbers (`3 grosse Releases pro TFI-Zyklus + monatliche Modelländerungen`)
+- **Akronyme** – every three/four-letter code with its resolution if stated (`RGS – Railway GIS (vermutet, [06:00])`)
 
 Bias toward over-inclusion. If you're unsure whether something deserves a slot, include it. **Vollständigkeit > Eleganz.** The inventory becomes a visible `### Inventar` subsection at the top of Analysis (see below).
 
-**Konsistenz-Check — neutralize Whisper misrecognitions before they propagate.** Whisper transcripts garble proper names, acronyms, dialect words, and domain terms. While building the inventory:
+**Konsistenz-Check – neutralize Whisper misrecognitions before they propagate.** Whisper transcripts garble proper names, acronyms, dialect words, and domain terms. While building the inventory:
 
-1. **Cluster suspected variants of the same entity.** If `TopoRail / Toporail / TopOrel / Hopporell / Dr. Porel / Top-A-Rail` all appear, they are the same tool. Pick the canonical form (frames win — see below), list the variants in parens: `TopoRail (Transkript-Varianten: Toporail, TopOrel, Hopporell, Dr. Porel, Top-A-Rail)`.
+1. **Cluster suspected variants of the same entity.** If `TopoRail / Toporail / TopOrel / Hopporell / Dr. Porel / Top-A-Rail` all appear, they are the same tool. Pick the canonical form (frames win – see below), list the variants in parens: `TopoRail (Transkript-Varianten: Toporail, TopOrel, Hopporell, Dr. Porel, Top-A-Rail)`.
 2. **Frames are ground truth.** Slide text, diagram labels, application UI, on-screen captions are correct; transcript is noisy. If the transcript says `DfAKIS-Datenbank` but the diagram label reads `DFAGIS`, the diagram wins. State this in the inventory entry.
 3. **Resolve implausible names via context.** Examples from real runs: `Lac Lemoyne` → Lac Léman (Swiss geography), `E-Sell` → Iselle (Italian Simplon terminus), `DfAKIS` → DFA-GIS, `im McWight` → likely product name visible on a frame. If context + frames point unambiguously at a known thing, correct it and keep the original in parens.
-4. **Mark genuine uncertainty with `(?)`.** If a name is plausible but you have no evidence — neither a frame match nor a strong contextual clue — write `Beronito (?)`. Never invent corrections.
+4. **Mark genuine uncertainty with `(?)`.** If a name is plausible but you have no evidence – neither a frame match nor a strong contextual clue – write `Beronito (?)`. Never invent corrections.
 5. **Don't over-correct.** Swiss town names, dialect expressions, and obscure internal acronyms may be transcribed correctly. Only "correct" what frames or context actually confirm.
-6. **Give repaired passages a second look.** If `protocol.md` lists `**Repaired passages:**`, those timestamps came from a decoder collapse and were re-transcribed from their own audio window. The rewrite removed the collapse, but it is *not* verified prose — it can carry its own misrecognitions, occasionally a new one where the original was merely repetitive. Read those spans with extra scepticism, and if a platform-side transcript exists (Teams VTT, YouTube captions), cross-check them there. `<base>.segments.json` keeps the before/after text under `repaired` if you need to see what changed.
+6. **Give repaired passages a second look.** If `protocol.md` lists `**Repaired passages:**`, those timestamps came from a decoder collapse and were re-transcribed from their own audio window. The rewrite removed the collapse, but it is *not* verified prose – it can carry its own misrecognitions, occasionally a new one where the original was merely repetitive. Read those spans with extra scepticism, and if a platform-side transcript exists (Teams VTT, YouTube captions), cross-check them there. `<base>.segments.json` keeps the before/after text under `repaired` if you need to see what changed.
 7. **Check for a platform transcript next to the source.** Meeting recordings often ship with one (`*.vtt`, `*.docx` export). It is usually *worse* prose than Whisper, but it carries two things Whisper cannot: **per-participant speaker labels** (Teams knows which microphone produced which audio, so it beats diarization on a mixed track) and an independent second opinion on garbled proper nouns. Where the two disagree on a name, that disagreement is itself the signal to mark `(?)`.
-8. **Work through `<base>.crosscheck.md` (written automatically when a platform VTT was preserved as `<base>.original.vtt`).** Each flagged window shows the Whisper text and the caption text side by side for a passage where the two sources diverge beyond the recording's own baseline. For every window: try to resolve the divergence from frames, context, and the glossary — often one side is obviously right (real example: Whisper's «welche Editen» vs. Teams' «eine Weichen … respektive strecken» resolves to *Weicheneditor/Streckeneditor*). Windows you cannot resolve are the **«unsichere Stellen»**: list them (timestamp + both readings) in the questions you put to the user for targeted re-listening — that list is the modern form of "use the existing transcript, spot-check the unclear passages". Feed every resolved misrecognition back into `transcribe-glossary.txt` next to the source.
+8. **Work through `<base>.crosscheck.md` (written automatically when a platform VTT was preserved as `<base>.original.vtt`).** Each flagged window shows the Whisper text and the caption text side by side for a passage where the two sources diverge beyond the recording's own baseline. For every window: try to resolve the divergence from frames, context, and the glossary – often one side is obviously right (real example: Whisper's «welche Editen» vs. Teams' «eine Weichen … respektive strecken» resolves to *Weicheneditor/Streckeneditor*). Windows you cannot resolve are the **«unsichere Stellen»**: list them (timestamp + both readings) in the questions you put to the user for targeted re-listening. Feed every resolved misrecognition back into `transcribe-glossary.txt` next to the source.
 
 The inventory's canonical forms are the **only spellings used in Übersicht, Summary, and Analysis**.
 
-**Datum identifizieren — priority order.** Many meeting / training / talk videos open with a title card carrying the date. The script also surfaces metadata-derived candidates in `protocol.md` under `**Date candidates**`. Pick *one* recording / meeting date by walking this priority list and stop at the first match:
+**Datum identifizieren – priority order.** Many meeting / training / talk videos open with a title card carrying the date. The script also surfaces metadata-derived candidates in `protocol.md` under `**Date candidates**`. Pick *one* recording / meeting date by walking this priority list and stop at the first match:
 
-1. **Title slide on the first 1–3 frames.** A frame showing "Meeting Title — 4. März 2024" / "DfA Architecture Overview, 2024-03-04" / a date stamp in a corner / a Teams meeting "Started at …" caption is the most credible source. Always check first.
+1. **Title slide on the first 1–3 frames.** A frame showing "Meeting Title – 4. März 2024" / "DfA Architecture Overview, 2024-03-04" / a date stamp in a corner / a Teams meeting "Started at …" caption is the most credible source. Always check first.
 2. **`**Date candidates**` block in protocol.md**, in the order the script emits them: filename / title regex → yt-dlp `upload_date` → ffprobe `creation_time` → file mtime. Two independent sources matching is a strong confirmation.
 3. **Date inside the transcript** (someone explicitly says "wir treffen uns heute am 4. März 2024 …").
 4. If nothing matches: mark `Datum: unbekannt`. Don't guess.
 
-**Anti-pattern — never use UI timestamps from inside the video** (version footers, "last-modified" stamps in an opened app, dummy default timestamps in dialog corners). Those are not the recording date and have burned us before (real example: a Gebäude-DB-footer at 52:29 of a meeting video showed `04.03.2024 14:55:53`, which turned out to be a default app timestamp coincidentally matching nothing). Only explicit title-card / system "now"-displays / meta candidates count.
+**Anti-pattern – never use UI timestamps from inside the video** (version footers, "last-modified" stamps in an opened app, dummy default timestamps in dialog corners). Those are not the recording date and have burned us before (real example: a Gebäude-DB-footer at 52:29 of a meeting video showed `04.03.2024 14:55:53`, which turned out to be a default app timestamp coincidentally matching nothing). Only explicit title-card / system "now"-displays / meta candidates count.
 
-Document the chosen date in the **Setting und Teilnehmer** Summary group with its source: `Meeting vom 2024-03-04 (Quelle: Titel-Slide [00:02])` or `Recording date: 2024-03-04 (yt-dlp upload_date — kein Titel-Slide gefunden)`.
+Document the chosen date in the **Setting und Teilnehmer** Summary group with its source: `Meeting vom 2024-03-04 (Quelle: Titel-Slide [00:02])` or `Recording date: 2024-03-04 (yt-dlp upload_date – kein Titel-Slide gefunden)`.
 
 ## Schlüssel-Illustrationen ausschneiden (only for video sources with a saved report)
 
-Some frames *are* the content — an architecture diagram, a chart with the key numbers, a data-flow slide. A reader of the report should see that illustration **inline**, cropped out of the surrounding talking-head / slide chrome, not have to scrub the video. `illustrate.py` does the deterministic work (native-res re-extraction, crop, margin-trim, dedup); you do the analytical part — *which* frame, *which* region, *what* caption.
+Some frames *are* the content – an architecture diagram, a chart with the key numbers, a data-flow slide. A reader of the report should see that illustration **inline**, cropped out of the surrounding talking-head / slide chrome, not have to scrub the video. `illustrate.py` does the deterministic work (native-res re-extraction, crop, margin-trim, dedup); you do the analytical part – *which* frame, *which* region, *what* caption.
 
-**Skip this step entirely when:** the source is audio-only (no frames), `--no-save-md` was used (no persistent dir to write into), or the video is pure talking-head with no diagrams/charts/slides worth extracting. Zero illustrations is a valid outcome — don't manufacture them.
+**Skip this step entirely when:** the source is audio-only (no frames), `--no-save-md` was used (no persistent dir to write into), or the video is pure talking-head with no diagrams/charts/slides worth extracting. Zero illustrations is a valid outcome – don't manufacture them.
 
-**The spec is the only way an illustration comes into being.** Never crop frames by hand with ffmpeg or Pillow, however quick it looks: a hand-made PNG has no spec, no manifest, no dedup, no SUSPECT check and no way to be regenerated — and it skips the QS list below, which is how a whole set of screen-share crops once shipped with the browser tab bar and the Windows taskbar still on them. If a crop needs something the script cannot do, extend the script (as `redact` was added for user lists) rather than stepping around it.
+**The spec is the only way an illustration comes into being.** Never crop frames by hand with ffmpeg or Pillow, however quick it looks: a hand-made PNG has no spec, no manifest, no dedup, no SUSPECT check and no way to be regenerated – and it skips the QS list below, which is how a whole set of screen-share crops once shipped with the browser tab bar and the Windows taskbar still on them. If a crop needs something the script cannot do, extend the script (as `redact` was added for user lists) rather than stepping around it.
 
-**Screen-share recordings: the content is the app window, never the screen.** A Teams/Zoom share of a browser or desktop app carries chrome that is not content and must stay outside the bbox: the browser's tab bar and address bar (top ~12–14 % of a 1080p frame), the OS taskbar (bottom ~5 %), the meeting client's participant strip or camera tiles (right or bottom ~13 %), window title bars and the meeting toolbar. Start the bbox at the app's content area and let the margin-trim take only uniform borders from there — it will not remove chrome for you. Confluence pages, SQL clients, Delphi masks and Omada dialogs all follow the same rule: page body, editor pane, dialog body.
+**Screen-share recordings: the content is the app window, never the screen.** A Teams/Zoom share of a browser or desktop app carries chrome that is not content and must stay outside the bbox: the browser's tab bar and address bar (top ~12–14 % of a 1080p frame), the OS taskbar (bottom ~5 %), the meeting client's participant strip or camera tiles (right or bottom ~13 %), window title bars and the meeting toolbar. Start the bbox at the app's content area and let the margin-trim take only uniform borders from there – it will not remove chrome for you. Confluence pages, SQL clients, Delphi masks and Omada dialogs all follow the same rule: page body, editor pane, dialog body.
 
 **Audio-only with user-supplied screenshots.** Meeting recordings are often audio-only, while the user drops screenshots of the shared screen (participant tiles, slides, Confluence pages, chat messages) into the same directory. They replace the missing frame evidence, so treat them like illustrations:
 
 1. **Read every image** in the directory and match it to the transcript window it belongs to (file mtime vs. recording start helps order them).
-2. **Rename to `<base> - <Inhalt>.png`** with `git mv` when tracked (e.g. `20260828-0900 - PM Diskussion - Kandidatenliste.png`). Generic names (`screenshot-01.png`, `image1.png`, `<date> - screenshot-NN.png`) are never kept — the name must say what the picture shows.
-3. **Embed each image once** where it carries the most weight (Setting und Teilnehmer for participant tiles, the matching Summary `### <Thema>` group otherwise), as `![<Alt>](<<file>>)` plus an italic `*Abb. — <caption>*` line.
+2. **Rename to `<base> - <Inhalt>.png`** with `git mv` when tracked (e.g. `20260828-0900 - PM Diskussion - Kandidatenliste.png`). Generic names (`screenshot-01.png`, `image1.png`, `<date> - screenshot-NN.png`) are never kept – the name must say what the picture shows.
+3. **Embed each image once** where it carries the most weight (Setting und Teilnehmer for participant tiles, the matching Summary `### <Thema>` group otherwise), as `![<Alt>](<<file>>)` plus an italic `*Abb. – <caption>*` line.
 4. **Reference by content, not by number**, in Inventar, Details, Abdeckung and Resources («Rollentabelle-Screenshot», not «Screenshot-03»).
 
 Otherwise, from the frames already read:
 
-1. **Select the decisive frames.** Pick the ones carrying an illustration that *materially aids understanding* — diagrams, architecture/data-flow slides, charts, tables, screenshots with substantive content. `[CUT]` frames are the prime candidates (slides land on scene cuts). Exclude talking-head, transitions, decorative title cards, and anything redundant. Be selective: typically **3–10** for a talk, often fewer.
-2. **Themen-Abdeckung — cross-check the selection against the transcript.** Visual triage alone systematically drops slides that *look* decorative but *are* the discussion (real miss: a photo pair with red/green classification dots looked "nur illustrativ", yet the speakers spent 3+ minutes on exactly that accessibility classification). So: **write down an explicit topic-window list first** — every major discussion topic (anything spanning ≳2 minutes or recurring) with its `[MM:SS – MM:SS]` transcript window. The Chapter-Struktur you build for the Übersicht (or the `## <Thema>` headings of an existing `transcript-kompakt.md` on a re-run) is this list — reuse it, don't re-derive it. Then check each window: at least one selected illustration falls inside it — or name the explicit reason why the topic needs none. For an uncovered window, scout it with `--extract-range <start> <end> --step 10` and pick the frame where the discussed visual is fully on screen. A visual the speakers talk *about* is content, never decoration.
+1. **Select the decisive frames.** Pick the ones carrying an illustration that *materially aids understanding* – diagrams, architecture/data-flow slides, charts, tables, screenshots with substantive content. `[CUT]` frames are the prime candidates (slides land on scene cuts). Exclude talking-head, transitions, decorative title cards, and anything redundant. Be selective: typically **3–10** for a talk, often fewer.
+2. **Themen-Abdeckung – cross-check the selection against the transcript.** Visual triage alone systematically drops slides that *look* decorative but *are* the discussion (real miss: a photo pair with red/green classification dots looked "nur illustrativ", yet the speakers spent 3+ minutes on exactly that accessibility classification). So: **write down an explicit topic-window list first** – every major discussion topic (anything spanning ≳2 minutes or recurring) with its `[MM:SS – MM:SS]` transcript window. The Chapter-Struktur you build for the Übersicht (or the `## <Thema>` headings of an existing `transcript-kompakt.md` on a re-run) is this list – reuse it, don't re-derive it. Then check each window: at least one selected illustration falls inside it – or name the explicit reason why the topic needs none. For an uncovered window, scout it with `--extract-range <start> <end> --step 10` and pick the frame where the discussed visual is fully on screen. A visual the speakers talk *about* is content, never decoration.
 3. **Verify each timestamp at native resolution before it enters the spec.** The `t=` in a frame filename is *not* always the timestamp of what you saw:
-   - `[CUT]` frames are extracted `--scene-settle-seconds` (default `1.0`) **after** the detected cut, while the filename keeps the cut point — so the image is typically ~0.5–2.5 s later than its name.
+   - `[CUT]` frames are extracted `--scene-settle-seconds` (default `1.0`) **after** the detected cut, while the filename keeps the cut point – so the image is typically ~0.5–2.5 s later than its name.
    - Reading 20+ frames in one batch makes it easy to mis-map an image to the wrong filename; that mis-mapping, not a seek bug, is the usual cause of "the crop shows something else".
 
    So before writing the spec, re-extract your candidates and look at them:
@@ -91,14 +100,14 @@ Otherwise, from the frames already read:
    python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" --video "<Video file from header>" \
      --extract 42 162 218 326 --out-dir "<scratch>/scout"
    ```
-   `Read` those PNGs and take the timestamp from the one that actually shows the content. For a region you are still hunting, sweep it with `--extract-range <start> <end> --step 6`. This costs seconds and removes an entire class of re-run loops — it is the regular path for every video with substantive screens, not a fallback.
-4. **For each, give a normalized bounding box** `[x, y, w, h]` in `0..1` of the illustration *region within the frame* (estimate it from the image — the script trims uniform margins afterwards, so a slightly generous box is fine; omit `bbox` to keep the whole frame). Add a short `caption` (use canonical names from the Inventar) and a `type` (`Architektur` / `Diagramm` / `Chart` / `Tabelle` / `Screenshot` / `Slide`).
+   `Read` those PNGs and take the timestamp from the one that actually shows the content. For a region you are still hunting, sweep it with `--extract-range <start> <end> --step 6`. This costs seconds and removes an entire class of re-run loops – it is the regular path for every video with substantive screens, not a fallback.
+4. **For each, give a normalized bounding box** `[x, y, w, h]` in `0..1` of the illustration *region within the frame* (estimate it from the image – the script trims uniform margins afterwards, so a slightly generous box is fine; omit `bbox` to keep the whole frame). Add a short `caption` (use canonical names from the Inventar) and a `type` (`Architektur` / `Diagramm` / `Chart` / `Tabelle` / `Screenshot` / `Slide`).
 5. **Write the spec** to `<base>.illustrations.spec.json` (the `Write` tool) as a JSON list:
    ```json
    [ { "id": 1, "timestamp": 734.0, "bbox": [0.08, 0.12, 0.84, 0.76],
        "caption": "Zielarchitektur DfA-GIS", "type": "Architektur" } ]
    ```
-   `timestamp` is in seconds (the absolute `t=` of the frame). `<base>` is the report base (the `.md` stem from the header's saved-files lines). An optional `"redact": [[x, y, w, h], …]` (same normalized frame coordinates as `bbox`) blacks out regions **before** the crop — user lists with real names, IDs, e-mail addresses in a permissions mask. Say in the caption that the list is redacted. This keeps personal data out of the repo without a hand-edited PNG.
+   `timestamp` is in seconds (the absolute `t=` of the frame). `<base>` is the report base (the `.md` stem from the header's saved-files lines). An optional `"redact": [[x, y, w, h], …]` (same normalized frame coordinates as `bbox`) blacks out regions **before** the crop – user lists with real names, IDs, e-mail addresses in a permissions mask. Say in the caption that the list is redacted. This keeps personal data out of the repo without a hand-edited PNG.
 6. **Run the cropper**, passing the `**Video file:**` path from the report header verbatim:
    ```bash
    python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" \
@@ -106,27 +115,27 @@ Otherwise, from the frames already read:
      --spec "<base>.illustrations.spec.json" \
      --out-dir "<base>.illustrations"
    ```
-   It prints the surviving crops and writes `<base>.illustrations/manifest.json`. **Read the manifest** — dedup may have dropped near-duplicate slides (they are listed under `dropped_duplicates` with the surviving id), so the manifest (not your spec) is the authoritative list of what to embed. If a drop was a false positive (two genuinely different but visually similar slides), add `"no_dedup": true` to that spec entry and re-run. The crops are PNGs at native resolution, idempotent on re-run.
-7. **Check for SUSPECT flags and iterate.** Entries whose crop came out tiny or near-uniform carry a `"suspect"` reason in the manifest (and a `[SUSPECT]` mark in the stdout list) — the bbox almost certainly missed its target region. Fix those bboxes in the spec and re-run (the spec is the desired state; re-runs are cheap and idempotent).
-8. **Visual QS on the final PNGs (mandatory).** `Read` every surviving crop and check it against this defect list — each class has burned a real run:
-   - **Caption mismatch** — the crop doesn't show what its caption claims (bbox hit a neighbouring region, or a sliver of chrome survived the trim). Nudge the bbox.
-   - **Transient overlay** — an error dialog, notification toast, or loading state covers the content. First check the transcript: if the speakers discuss the overlay itself, it *is* content (keep it, or add a second entry for the clean state). Otherwise the transcript usually marks the dismissal («mache ich die weg», "let me close that") — scout with `--extract` a few timestamps after that line and re-time the entry. Real miss: an app-crash dialog sat over a map crop for 5+ minutes of footage; the clean frame was 65 s later.
-   - **Desktop chrome** — Windows taskbar, window shadows, black letterbox bars, or the webcam strip inside the bbox. Tighten the bbox to the app window / slide area; the margin-trim only removes *uniform* borders, a taskbar survives it.
-   - **Scroll truncation** — an element (embedded screenshot, table) cut mid-body because the *page in the video* was scrolled, not because the bbox is wrong. Either find a timestamp where the presenter shows the element fully, or move the bbox edge to the next clean content boundary so nothing looks amputated.
-   - **Cursor / hover artifacts** — the presenter's text selection is usually *deliberate emphasis* (keep it), but a hover-popup or tooltip covering key text warrants a ±5–10 s timestamp nudge.
+   It prints the surviving crops and writes `<base>.illustrations/manifest.json`. **Read the manifest** – dedup may have dropped near-duplicate slides (they are listed under `dropped_duplicates` with the surviving id), so the manifest (not your spec) is the authoritative list of what to embed. If a drop was a false positive (two genuinely different but visually similar slides), add `"no_dedup": true` to that spec entry and re-run. The crops are PNGs at native resolution, idempotent on re-run.
+7. **Check for SUSPECT flags and iterate.** Entries whose crop came out tiny or near-uniform carry a `"suspect"` reason in the manifest (and a `[SUSPECT]` mark in the stdout list) – the bbox almost certainly missed its target region. Fix those bboxes in the spec and re-run (the spec is the desired state; re-runs are cheap and idempotent).
+8. **Visual QS on the final PNGs (mandatory).** `Read` every surviving crop and check it against this defect list – each class has burned a real run:
+   - **Caption mismatch** – the crop doesn't show what its caption claims (bbox hit a neighbouring region, or a sliver of chrome survived the trim). Nudge the bbox.
+   - **Transient overlay** – an error dialog, notification toast, or loading state covers the content. First check the transcript: if the speakers discuss the overlay itself, it *is* content (keep it, or add a second entry for the clean state). Otherwise the transcript usually marks the dismissal («mache ich die weg», "let me close that") – scout with `--extract` a few timestamps after that line and re-time the entry. Real miss: an app-crash dialog sat over a map crop for 5+ minutes of footage; the clean frame was 65 s later.
+   - **Desktop chrome** – Windows taskbar, window shadows, black letterbox bars, or the webcam strip inside the bbox. Tighten the bbox to the app window / slide area; the margin-trim only removes *uniform* borders, a taskbar survives it.
+   - **Scroll truncation** – an element (embedded screenshot, table) cut mid-body because the *page in the video* was scrolled, not because the bbox is wrong. Either find a timestamp where the presenter shows the element fully, or move the bbox edge to the next clean content boundary so nothing looks amputated.
+   - **Cursor / hover artifacts** – the presenter's text selection is usually *deliberate emphasis* (keep it), but a hover-popup or tooltip covering key text warrants a ±5–10 s timestamp nudge.
 
-   Fix the spec, re-run, re-`Read` — repeat until every crop passes. Re-runs are idempotent and cost seconds; a defective illustration in the report costs credibility.
+   Fix the spec, re-run, re-`Read` – repeat until every crop passes. Re-runs are idempotent and cost seconds; a defective illustration in the report costs credibility.
 
 ### Standalone re-run on an existing report (analysis frames gone)
 
-When the report already exists but has no illustrations (older run, or the step was skipped), don't hand-roll ffmpeg — `illustrate.py` has scouting modes:
+When the report already exists but has no illustrations (older run, or the step was skipped), don't hand-roll ffmpeg – `illustrate.py` has scouting modes:
 
 ```bash
-# 1. Contact sheets: 1 frame per 30s, tiled 6x5 — find the slide moments
+# 1. Contact sheets: 1 frame per 30s, tiled 6x5 – find the slide moments
 python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" --video "<video>" --sheet --out-dir "<scratch>/sheets"
 # prints the tile→timestamp formula; Read the sheets, note candidate times
 
-# 2. Native-res frames at the candidate times — estimate precise bboxes
+# 2. Native-res frames at the candidate times – estimate precise bboxes
 python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" --video "<video>" --extract 270 560 840 --out-dir "<scratch>/frames"
 
 # 3. Transcript says minutes 4:46-8:16 discuss topic X but no candidate found?
@@ -134,32 +143,32 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" --video "<video>" --extract 
 python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" --video "<video>" --extract-range 286 496 --step 10 --out-dir "<scratch>/topic-x"
 ```
 
-Then continue with the spec + crop steps above. (Do NOT use ffmpeg `drawtext` for timestamp overlays — fontconfig-less builds segfault on it; the printed mapping formula replaces it.)
+Then continue with the spec + crop steps above. (Do NOT use ffmpeg `drawtext` for timestamp overlays – fontconfig-less builds segfault on it; the printed mapping formula replaces it.)
 
 The embedding happens in SKILL.md Step 5; the work happens here because the Summary references the illustrations.
 
 ## Übersicht (top-level section, comes first)
 
-A two-block orientation header at the very top of the report. The reader hits this before anything else and walks away with two things: **what the video is arguing** (Kernaussagen) and **how it is built** (Chapter-Struktur). Everything else — the thematic catalog, the editorial layer, the inventory — comes after.
+A two-block orientation header at the very top of the report. The reader hits this before anything else and walks away with two things: **what the video is arguing** (Kernaussagen) and **how it is built** (Chapter-Struktur). Everything else – the thematic catalog, the editorial layer, the inventory – comes after.
 
 ### Kernaussagen / Core claims
 The central theses the speaker is arguing for. 3–6 bullets, each a standalone claim a viewer should walk away with. Skip intros and throat-clearing; capture what the video is actually trying to convince you of. These are **facts and positions** as stated by the video. Use canonical names from the Inventar.
 
 ### Chapter-Struktur / Structural outline
-A chronological skeleton — typically 5–8 numbered entries — showing how the video is built. Each entry: `[MM:SS – MM:SS]` plus a one-line topic label. Don't repeat the Kernaussagen content; the role of this block is *navigational* (where in the video is each topic discussed). Use the chapter boundaries the speaker actually establishes (slide transitions, "und jetzt kommen wir zu …", topic shifts), not arbitrary time-slices.
+A chronological skeleton – typically 5–8 numbered entries – showing how the video is built. Each entry: `[MM:SS – MM:SS]` plus a one-line topic label. Don't repeat the Kernaussagen content; the role of this block is *navigational* (where in the video is each topic discussed). Use the chapter boundaries the speaker actually establishes (slide transitions, "und jetzt kommen wir zu …", topic shifts), not arbitrary time-slices.
 
 ## Summary / Zusammenfassung (top-level section, comes second)
 
-A comprehensive thematic recap modeled after a meeting-protocol summary. The reader gets every concrete fact the video carried, organized by topic, in scannable bullet form. **No editorial commentary, no top-N selection — Summary is the catalog, not the curation.**
+A comprehensive thematic recap modeled after a meeting-protocol summary. The reader gets every concrete fact the video carried, organized by topic, in scannable bullet form. **No editorial commentary, no top-N selection – Summary is the catalog, not the curation.**
 
 Format:
 
 - Cluster the video's content into 5–10 thematic groups (`### <Thema>`). Topics are derived from what the video actually covers; don't force a fixed schema.
-- Under each `### <Thema>` heading: 3–8 short bullet points. One concrete fact per bullet — a named system with its role, a concrete number, an enumeration captured verbatim, a relationship between two entities, a decision with its rationale.
-- Use the canonical names from the Inventar. Use `[MM:SS]` timestamps sparingly — only where a specific moment matters (a quote, a decision point). The Summary's job is content coverage, not source-anchoring.
+- Under each `### <Thema>` heading: 3–8 short bullet points. One concrete fact per bullet – a named system with its role, a concrete number, an enumeration captured verbatim, a relationship between two entities, a decision with its rationale.
+- Use the canonical names from the Inventar. Use `[MM:SS]` timestamps sparingly – only where a specific moment matters (a quote, a decision point). The Summary's job is content coverage, not source-anchoring.
 - Every Inventar entry must appear in at least one Summary bullet OR in a later Analysis section. The Abdeckung audit (in Analysis) will check this.
 
-The Summary is the reader's main entry point — it must stand alone. A busy reader who reads only Summary should walk away knowing every named entity, every list-style enumeration, every concrete decision, every open question. The Analysis layer below adds editorial weight and audit; it does not replace the catalog.
+The Summary is the reader's main entry point – it must stand alone. A busy reader who reads only Summary should walk away knowing every named entity, every list-style enumeration, every concrete decision, every open question. The Analysis layer below adds editorial weight and audit; it does not replace the catalog.
 
 ## Analysis (top-level section, comes third)
 
@@ -167,20 +176,20 @@ Synthesized, judgmental layer on top of Übersicht + Summary. Seven subsections 
 
 ### Inventar (canonical names + Konsistenz-Check variants)
 
-Write out the inventory you built in the Pflicht-Vorstufe. Group by the seven categories listed there (Systeme, Konsumenten, Schnittstellen, Personen, Fachbereiche, Prozesse, Akronyme). For each entry: the canonical name, a one-line role, the first-mention `[MM:SS]`, and — only if the entity was misrecognized in the transcript — `(Transkript-Varianten: <variant1>, <variant2>, …)` in parens. Skip a category subheading entirely if it has no entries (don't write empty headings).
+Write out the inventory you built in the Pflicht-Vorstufe. Group by the seven categories listed there (Systeme, Konsumenten, Schnittstellen, Personen, Fachbereiche, Prozesse, Akronyme). For each entry: the canonical name, a one-line role, the first-mention `[MM:SS]`, and – only if the entity was misrecognized in the transcript – `(Transkript-Varianten: <variant1>, <variant2>, …)` in parens. Skip a category subheading entirely if it has no entries (don't write empty headings).
 
-Inventar is reference material, not narrative — keep it dry and listy. The reader uses it as a glossary while reading Übersicht, Summary, and the rest of Analysis.
+Inventar is reference material, not narrative – keep it dry and listy. The reader uses it as a glossary while reading Übersicht, Summary, and the rest of Analysis.
 
 ### Beurteilungen / Verdicts & recommendations
-Every value judgement, comparison, or recommendation the speaker delivers — "X is the cheapest capable model on the market", "not a drop-in replacement", "the gap is closing", "use Y for narrow tasks, not open-ended ones". Distinguish the speaker's own opinions from cited third-party reports (Reddit, papers, benchmarks). This is where the **opinions and weightings** live, as opposed to the facts in Kernaussagen.
+Every value judgement, comparison, or recommendation the speaker delivers – "X is the cheapest capable model on the market", "not a drop-in replacement", "the gap is closing", "use Y for narrow tasks, not open-ended ones". Distinguish the speaker's own opinions from cited third-party reports (Reddit, papers, benchmarks). This is where the **opinions and weightings** live, as opposed to the facts in Kernaussagen.
 
 ### Schlüsselaussagen / Key quotes
-3–5 of the most pointed lines from the transcript, quoted verbatim with `[MM:SS]` timestamps. These are the punchlines a viewer would screenshot — pick for memorability and density, not for length.
+3–5 of the most pointed lines from the transcript, quoted verbatim with `[MM:SS]` timestamps. These are the punchlines a viewer would screenshot – pick for memorability and density, not for length.
 
 ### Details
 Supporting evidence and visual context the other sections didn't carry. Two scopes:
-- **Visual language** — one or two lines if the video has a notable visual register (slides vs talking head, motion graphics, diagrams dominating the screen, webcam grid, etc.).
-- **Notable artifacts** — on-screen file names, version stamps, URL bars, dashboard captions that ground the analysis in evidence (e.g. `dfagis_prod.dfa.ch · v 20.0.2.1 · 04.03.2024 14:55:53` proves the meeting date).
+- **Visual language** – one or two lines if the video has a notable visual register (slides vs talking head, motion graphics, diagrams dominating the screen, webcam grid, etc.).
+- **Notable artifacts** – on-screen file names, version stamps, URL bars, dashboard captions that ground the analysis in evidence (e.g. `dfagis_prod.dfa.ch · v 20.0.2.1 · 04.03.2024 14:55:53` proves the meeting date).
 
 **Details are useful but secondary**; do not let this section outgrow the three above. Chapter walk-through belongs in **Übersicht → Chapter-Struktur** at the top of the report, not here.
 
@@ -189,34 +198,34 @@ Supporting evidence and visual context the other sections didn't carry. Two scop
 After Details, sweep the Inventar entry by entry against **the full report** (Übersicht + Summary + Beurteilungen + Schlüsselaussagen + Details). For each entry:
 
 - If it appears (under its canonical name) anywhere → nothing to do.
-- If it does **not** appear anywhere → one bullet here naming the entry and a short reason for the deliberate omission (`<Name> — nur Nebenerwähnung, kein eigenständiger Inhalt darüber hinaus`).
+- If it does **not** appear anywhere → one bullet here naming the entry and a short reason for the deliberate omission (`<Name> – nur Nebenerwähnung, kein eigenständiger Inhalt darüber hinaus`).
 
-If every Inventar entry is covered, write a single line: `Alle Inventar-Einträge sind in Übersicht, Summary oder Analysis berücksichtigt.` — and move on.
+If every Inventar entry is covered, write a single line: `Alle Inventar-Einträge sind in Übersicht, Summary oder Analysis berücksichtigt.` – and move on.
 
-This section is the audit mechanism, not the highlight. Keep it dry and short. Its job is to make accidental omissions visible — if you find yourself writing more than 5–8 lines of "weil ...", that's a signal that the Summary skipped too much and you should fold a few of those entries back into the right thematic Summary group instead.
+This section is the audit mechanism, not the highlight. Keep it dry and short. Its job is to make accidental omissions visible – if you find yourself writing more than 5–8 lines of "weil ...", that's a signal that the Summary skipped too much and you should fold a few of those entries back into the right thematic Summary group instead.
 
 ### Resources
-When relevant, surface the most useful entries from `## Resources` (Projects + Docs especially) — the concrete things a viewer can click on after watching. Skip this section if the resources are thin or off-topic.
+When relevant, surface the most useful entries from `## Resources` (Projects + Docs especially) – the concrete things a viewer can click on after watching. Skip this section if the resources are thin or off-topic.
 
-**Read the links off the screen, not just out of the audio.** Presenters rarely dictate a URL, but they show it: the browser address bar while walking through a Confluence page, a Jira key in a tab title or slide footer, a page ID in a wiki link, a share/UNC path in an explorer window, a database connection name in a SQL client. `run.py` has already done the deterministic part: **`<base>.links.md`** lists every such reference RapidOCR read off the cut / changed frames, with the `[MM:SS]` it was seen at. Start from that file — it is the verified source; rows marked `(?)` are below the confidence threshold, so open the named frame with `Read` and confirm or correct them before citing. Then add what the frame pass showed you that the OCR list lacks (a reference on a frame that was neither a cut nor a visual change), again with the `[MM:SS]` as evidence, so the reader can check the frame instead of trusting the OCR-by-eye. Rules:
+**Read the links off the screen, not just out of the audio.** Presenters rarely dictate a URL, but they show it: the browser address bar while walking through a Confluence page, a Jira key in a tab title or slide footer, a page ID in a wiki link, a share/UNC path in an explorer window, a database connection name in a SQL client. `run.py` has already done the deterministic part: **`<base>.links.md`** lists every such reference RapidOCR read off the cut / changed frames, with the `[MM:SS]` it was seen at. Start from that file – it is the verified source; rows marked `(?)` are below the confidence threshold, so open the named frame with `Read` and confirm or correct them before citing. Then add what the frame pass showed you that the OCR list lacks (a reference on a frame that was neither a cut nor a visual change), again with the `[MM:SS]` as evidence, so the reader can check the frame instead of trusting the OCR-by-eye. Rules:
 
-- **Verbatim from the frame**, hostname and path included (`confluence.sbb.ch/spaces/DFA/pages/3866788910/...`). Do not reconstruct a URL from a page title you only heard — list the title instead and mark it `(gehört, nicht gesehen)`.
+- **Verbatim from the frame**, hostname and path included (`confluence.sbb.ch/spaces/DFA/pages/3866788910/...`). Do not reconstruct a URL from a page title you only heard – list the title instead and mark it `(gehört, nicht gesehen)`.
 - **Strip session state.** Deep links whose only distinguishing part is a session or object GUID (`...dlg.aspx?id=<guid>`) are not reusable; keep the host and endpoint, drop the GUID, say why.
 - **Tickets and pages named only in speech** (`Story 1663`, `die Berechtigungsseite`) go in as spoken, tagged `nicht verifiziert` until someone resolves them against the tracker. Never guess a project key.
-- **Name resolution counts as content**: if a page ID and a page title were seen together, keep both — the ID survives renames, the title survives space moves.
+- **Name resolution counts as content**: if a page ID and a page title were seen together, keep both – the ID survives renames, the title survives space moves.
 
 ### Offene Sprecherzuordnung
-*(only if the transcript carries speaker labels and at least one label — or one cluster of a split speaker — stayed unresolved after the Personen & Stimmen pass)*
+*(only if the transcript carries speaker labels and at least one label – or one cluster of a split speaker – stayed unresolved after the Personen & Stimmen pass)*
 
-This is the reader's worklist: every contribution the report could not attribute, in one table, so the person who was in the room can close the gaps in a single pass and the transcript can be corrected afterwards. One row per contribution (not per label — a label may hold several distinct remarks, and a diarizer on a room microphone routinely splits one person into several labels):
+This is the reader's worklist: every contribution the report could not attribute, in one table, so the person who was in the room can close the gaps in a single pass and the transcript can be corrected afterwards. One row per contribution (not per label – a label may hold several distinct remarks, and a diarizer on a room microphone routinely splits one person into several labels):
 
 | Zeit | Wortmeldung | Label | Kandidaten |
 |---|---|---|---|
-| `[MM:SS]` | short verbatim quote — enough to recognise the moment, not the whole turn | `SPEAKER_NN` | who it could be, from the participant list |
+| `[MM:SS]` | short verbatim quote – enough to recognise the moment, not the whole turn | `SPEAKER_NN` | who it could be, from the participant list |
 
-Lead with one sentence naming the pool of possible speakers (participants minus the presenter, with any known constraint such as "remote until ~16:00"), then the table, then flag the rows that matter for the record — a question that triggered a decision, an objection, a commitment — so the reader closes those first. Do not fold this into Details or Abdeckung: those are about content coverage; this is about attribution.
+Lead with one sentence naming the pool of possible speakers (participants minus the presenter, with any known constraint such as "remote until ~16:00"), then the table, then flag the rows that matter for the record – a question that triggered a decision, an objection, a commitment – so the reader closes those first. Do not fold this into Details or Abdeckung: those are about content coverage; this is about attribution.
 
-**When the user answers** (typically by writing the names into the table): rename the subsection to `### Sprecherzuordnung`, say who attributed and when, and push the answers back to where they render — labels that turn out to be one person go into the Name column of `<base>.speakers.md`, single whole blocks into its Overrides table, and statements inside mixed blocks into the compact transcript. The report's Personen & Rollen and any Summary bullet that said "a participant asked" get the name too.
+**When the user answers** (typically by writing the names into the table): rename the subsection to `### Sprecherzuordnung`, say who attributed and when, and push the answers back to where they render – labels that turn out to be one person go into the Name column of `<base>.speakers.md`, single whole blocks into its Overrides table, and statements inside mixed blocks into the compact transcript. The report's Personen & Rollen and any Summary bullet that said "a participant asked" get the name too.
 
 ## Report layout (append to `<base>.md`)
 
@@ -243,12 +252,10 @@ Lead with one sentence naming the pool of possible speakers (participants minus 
 ## Analysis
 
 ### Inventar
-<grouped lists from the Inventar + Konsistenz-Check pass — canonical names,
-one-line roles, [MM:SS] of first mention, Transkript-Varianten in parens for
-any Whisper-misrecognized terms; skip empty category headings>
+<grouped lists from the Inventar + Konsistenz-Check pass – canonical names, one-line roles, [MM:SS] of first mention, Transkript-Varianten in parens for any Whisper-misrecognized terms; skip empty category headings>
 
 ### Beurteilungen
-<judgments, comparisons, recommendations — distinguish speaker's own vs. cited>
+<judgments, comparisons, recommendations – distinguish speaker's own vs. cited>
 
 ### Schlüsselaussagen
 <3–5 verbatim quotes with [MM:SS]>
@@ -257,16 +264,11 @@ any Whisper-misrecognized terms; skip empty category headings>
 <visual language one-liner + notable on-screen artifacts; no chapter walk-through>
 
 ### Abdeckung
-<coverage audit against Inventar — either deliberate-omission bullets or
-the "alle berücksichtigt"-line>
+<coverage audit against Inventar – either deliberate-omission bullets or the "alle berücksichtigt"-line>
 
 ### Resources
-<curated subset of the ## Resources extracted in protocol.md, plus every URL /
-page ID / ticket key / share path read off the frames, each with the [MM:SS]
-it was seen at; heard-only references tagged «nicht verifiziert»>
+<curated subset of the ## Resources extracted in protocol.md, plus every URL / page ID / ticket key / share path read off the frames, each with the [MM:SS] it was seen at; heard-only references tagged «nicht verifiziert»>
 
 ### Offene Sprecherzuordnung
-<only with unresolved speaker labels: pool of candidates in one sentence, then
-one table row per unattributed contribution — [MM:SS] | quote | label |
-candidates — and a pointer to the rows that carry a decision or commitment>
+<only with unresolved speaker labels: pool of candidates in one sentence, then one table row per unattributed contribution – [MM:SS] | quote | label | candidates – and a pointer to the rows that carry a decision or commitment>
 ```

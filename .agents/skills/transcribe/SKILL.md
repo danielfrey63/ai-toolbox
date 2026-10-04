@@ -1,6 +1,6 @@
 ---
 name: transcribe
-description: Transcribe a video or audio file (URL or local path; .m4a/.mp3 voice memos and meeting recordings skip the frame stages automatically). Downloads with yt-dlp, extracts gap-filled frames + scdet-detected cuts, auto-chunks long videos, and transcribes via captions or a LOCAL-FIRST cascade (on-device faster-whisper by default, cloud backends as fallback) with speaker diarization ON by default (on-device pyannote, Claude-driven speaker-to-name substitution). Produces a persistent report (`<base>.{md,protocol.md,transcript.md}` plus `transcript-kompakt.md` when diarized); the chat reply stays minimal — Kernaussagen only, plus clickable file:// links.
+description: "Transcribes and watches video or audio files (URL or local path): downloads with yt-dlp, extracts frames and scene cuts, transcribes via native captions or on-device Whisper with speaker diarization, and writes a persistent Markdown report (overview, summary, analysis, transcript, speaker mapping). Use when the user shares a video or audio URL or file (YouTube, Vimeo, meeting recording, voice memo, screen recording) and wants it transcribed, summarized, or asks what is said or shown in it. Trigger: «transkribiere», «Video zusammenfassen», «Meeting-Aufnahme auswerten», «was wird im Video gesagt»."
 argument-hint: "<video-url-or-path> [question]"
 allowed-tools: Bash, Read, Write, Edit, AskUserQuestion, SendUserFile
 homepage: https://github.com/danielfrey63/ai-toolbox
@@ -9,466 +9,165 @@ license: MIT
 user-invocable: true
 ---
 
-# /transcribe — Claude transcribes (and watches) a video or audio file
+# /transcribe – watch and transcribe a video or audio file
 
-You don't have a video input; this skill gives you one. A Python script downloads the video, extracts frames as JPEGs, gets a timestamped transcript (native captions first, then Whisper API as fallback), and prints frame paths. You then `Read` each frame path to see the images and combine them with the transcript to answer the user.
+Claude has no video input; this skill provides one. `scripts/run.py` downloads the media, extracts frames as JPEGs, produces a timestamped (and by default speaker-labeled) transcript and writes companion files. Claude then `Read`s the frames and the transcript, writes the report and answers the user.
 
-## Step 0 — Setup preflight (runs every `/transcribe` invocation, silent on success)
+**Python interpreter:** commands use `python3` (macOS/Linux). On Windows use `python`; `python3` there is the Microsoft Store stub.
 
-**Python interpreter:** every `python3 ...` command in this skill is for macOS/Linux. On **Windows**, substitute `python` — the `python3` command on Windows is the Microsoft Store stub and will not run the script.
+## When to use
 
-Before every `/transcribe` run, verify that dependencies and an on-device transcription path are in place:
+- A video URL (YouTube, Vimeo, X, TikTok, Twitch clip, most yt-dlp-supported sites) or a local video file (`.mp4`, `.mov`, `.mkv`, `.webm`) with a request to transcribe, summarize or answer questions about it.
+- A local **audio** file (`.m4a`, `.mp3`, `.wav`, voice memo, meeting recording). Frame stages are skipped automatically; transcription and diarization run fully on-device by default, so confidential recordings need no extra flags.
+- `/transcribe <url-or-path> [question]`.
+
+## Reference files
+
+Load only what the current situation needs:
+
+- `references/report-writing.md` – **mandatory before writing the report** (Step 4).
+- `references/setup.md` – preflight exit codes, installer, managed venv, cloud keys.
+- `references/options.md` – all `run.py` flags, frame budgets, focused mode, scene detection, glossary, output locations.
+- `references/repair.md` – decoder-collapse repair pass, `**Repaired passages:**`.
+- `references/pipeline.md` – transcript sources, cache resume, blocking, caption cross-check, version stamp, CPU/GPU, security, script list.
+
+## Step 0 – Setup preflight (silent on success)
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py" --check
 ```
 
-This is a <100ms lookup. On exit 0, the script emits **nothing** — proceed to Step 1 without comment. **Do NOT announce "setup is complete" to the user** — they don't need a status message on every turn. The only acceptable user-visible output from Step 0 is when remediation is required.
-
-On non-zero exit, follow the table. **Local-first: never ask the user for a cloud key** — the default transcription path is on-device whisper-local (managed venv, no key, nothing leaves the machine). Only mention cloud keys if the user explicitly asks for cloud.
+Exit 0: proceed without comment; do not announce "setup complete". Within a session, skip this step after the first exit 0.
 
 | Exit | Meaning | Action |
 |------|---------|--------|
-| `2` | Missing binaries (`ffmpeg` / `ffprobe` / `yt-dlp`) | Run installer |
-| `3` | No transcription path | Provision the local venv — **don't** ask for a key (see below) |
-| `4` | Both missing | Run installer (it auto-provisions the local venv on a keyless box) |
+| `2` | Missing `ffmpeg` / `ffprobe` / `yt-dlp` | Run `python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py"` |
+| `3` | No transcription path | Run `python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py" --venv` |
+| `4` | Both missing | Run the installer (it also provisions the venv) |
 
-**Advisory warnings on exit 0.** `--check` also reports things that don't block a run but predict failures: a missing deno, and a **yt-dlp older than 60 days**. yt-dlp version strings *are* release dates (`2026.07.04`), so age is computed offline — no network call. A stale build is the single most common cause of YouTube downloads dying with HTTP 403, missing formats or a PO-token demand. Remediation is `setup.py --install-binaries --force`; `--force` matters here, because a plain `--install-binaries` skips anything `find_tool()` already resolves, and the stale copy on PATH is exactly that. Pass the warning on to the user only if a download then actually fails.
+**Local first: never ask the user for a cloud key.** The default path is on-device whisper-local in a managed venv (no key, nothing leaves the machine). Mention cloud keys only if the user explicitly asks for cloud transcription or `--json` reports `venv_buildable: false`. Advisory warnings on exit 0 (stale yt-dlp, missing deno) matter only when a download fails; then see `references/setup.md`.
 
-**Provisioning the on-device venv (exit 3, or exit 4 after binaries land):** the default installer (`setup.py` with no args) auto-provisions the venv on a keyless box, so usually just run it. To provision explicitly, just:
+## Step 1 – Parse the input
 
-```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py" --venv
-```
+Separate the source (URL or path) from any question: `/transcribe https://youtu.be/abc what language is this in?` → source `https://youtu.be/abc`, question `what language is this in?`.
 
-**Self-heal on a moved base Python:** `--check` / `--json` don't just look for the venv directory — they verify the base interpreter recorded in the venv's `pyvenv.cfg` still exists. A venv keeps its own launcher even after the Python it was built against is upgraded or removed (a scoop/pyenv/Homebrew bump), so the old behaviour reported it `ready` and the run then died deep in the worker with a cryptic exit. Now such a venv is reported **not ready** (exit `3`), and `--venv` rebuilds it from scratch (idempotent) instead of pip-installing into a dead venv. A re-run after a Python update repairs itself.
+**Local recordings: harmonize the base name first.** Every report family follows `YYYYMMDD-hhmm - <Thema>` (e.g. `20260824-1405 - ACA-DFR - Meeting.m4a`). If the source file does not match (Teams default names, `YYYY-MM-DD-hh-mm-ss - …` prefixes), rename it before the run so all companions inherit the base. Start time from ffprobe `creation_time`, or file mtime minus duration, rounded to the minute.
 
-**No host-Python caveat:** the venv is built by `uv` (bootstrapped as a standalone binary into `~/.transcribe/bin/`, same as ffmpeg/yt-dlp), which fetches its own managed CPython 3.13. So the command above works **regardless of the host Python version** — even on a 3.14-only box where the torch wheels wouldn't otherwise resolve. There is no launcher dance and no `py -3.13` requirement anymore. The only platform where it can't provision is one `uv` ships no build for (`venv_buildable: false` in `--json`) — there, fall back to a cloud key.
-
-The installer is idempotent — safe to re-run:
-
-```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py"
-```
-
-On all three platforms, the default installer now does the right thing automatically:
-- **macOS** — auto-runs `brew install ffmpeg yt-dlp`.
-- **Linux / Windows** — routes to `cmd_install_binaries()` and downloads standalone binaries into `~/.transcribe/bin/` (yt-dlp and deno from GitHub Releases, ffmpeg from johnvansickle on Linux / Gyan.dev on Windows). No `apt install`, no `pip install`, no admin rights needed. A `find_tool()` helper in `setup.py` prefers `~/.transcribe/bin/` and falls back to anything on PATH — system-installed versions still win when present.
-
-**deno (recommended, auto-installed):** yt-dlp needs a JS runtime (deno is its default) for YouTube's EJS challenges — without one, extraction runs in a deprecated no-JS mode and may lose formats. Both the default installer and `--install-binaries` drop a standalone deno into `~/.transcribe/bin/` on every platform (incl. macOS — no brew needed), and `download.py` prepends that dir to the yt-dlp subprocess PATH. deno is recommended, not required: a missing deno prints a `--check` hint but keeps exit 0 (local-file transcription doesn't need it). If the hint appears, run the installer once and it self-silences.
-
-It scaffolds `~/.config/transcribe/.env` with commented placeholders at `0600` perms, auto-provisions the on-device whisper-local venv on a keyless box (so the first run leaves the machine transcription-ready with no second command), and writes `SETUP_COMPLETE=true` so the next session knows this user has already been through the wizard.
-
-**Direct standalone-binary invocation** (explicit, useful for `--force` re-download or skipping the env scaffolding):
-
-```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py" --install-binaries [--force]
-```
-
-Same as what the default installer routes to on Linux/Windows. Desired-state: anything `find_tool()` already resolves (standalone dir first, then PATH) is skipped — no re-download when a system-installed version exists. Add `--force` to download standalone copies regardless; since `find_tool()` prefers `~/.transcribe/bin/`, that's the escape hatch when a PATH version is broken or outdated.
-
-Arguments are order-free (`--force --install-binaries` works the same as `--install-binaries --force`), exactly one command is accepted per call, and an unrecognized argument is an error — never a silent fall-through to the interactive installer. `setup.py --help` lists the commands.
-
-**No cloud key? That's the normal, fully-supported case — do not ask for one.** Transcription runs on-device via whisper-local (the managed venv), which the installer provisions automatically. Cloud keys (`GROQ_API_KEY` / `OPENAI_API_KEY`) are an opt-in speed upgrade, not a requirement — only set one up if the user explicitly asks for cloud transcription, in which case write the matching line into `~/.config/transcribe/.env`. If the local venv genuinely can't be built (`venv_buildable: false` in `--json` — i.e. `uv` ships no binary for this platform), offer a cloud key as the fallback; only then is `--no-whisper` (frames-only for caption-less videos) the degraded path.
-
-**Structured mode (optional):** `python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py" --json` emits `{status, first_run, missing_binaries, ytdlp, recommended_missing, whisper_backend, has_api_key, diarize_configured, local_venv, venv_buildable, config_file, platform}` (`recommended_missing` lists optional binaries like deno that never affect `status`; `ytdlp` is `{path, version, release_date, age_days, stale}` — advisory too) where `status` is one of `ready | needs_install | needs_local_venv | needs_install_and_local_venv`. Branch on `venv_buildable` (does `uv` ship for this platform, i.e. can the on-device venv be built at all?) and `local_venv.ready` / `first_run` (already-provisioned vs. first-run). Provisioning is always just `setup.py --venv` — uv handles the Python, so no interpreter selection is needed.
-
-Within a single session, you can skip Step 0 on follow-up `/transcribe` calls — once `--check` returned 0, nothing about the environment changes between turns.
-
-## When to use
-
-- User pastes a video URL (YouTube, Vimeo, X, TikTok, Twitch clip, most yt-dlp-supported sites) and asks about it.
-- User points at a local video file (`.mp4`, `.mov`, `.mkv`, `.webm`, etc.) and asks about it.
-- User points at a local **audio** file (`.m4a`, `.mp3`, `.wav`, voice memos, meeting recordings) — the frame stages are skipped automatically; transcription, diarization, and the report pipeline run normally. The defaults are already fully on-device (whisper-local + pyannote-local), so confidential recordings need no extra flags.
-- User types `/transcribe <url-or-path> [question]`.
-
-## Recommended limits
-
-- **Frame budget scales with duration:**
-  - ≤30s → ~1-2 fps (up to 30 frames)
-  - 30s-1min → ~40 frames
-  - 1-3min → ~60 frames
-  - 3-10min → ~80 frames
-- **Long videos (>10 min) auto-chunk by default.** Without `--start`/`--end`, the script splits the video into `ceil(duration / 10min)` chunks of even size and runs each chunk through the focused-mode dense budget. A 60-min video becomes 6 chunks of 10 min × ~80 frames per chunk = ~480 regular frames total (plus scene-cut frames). This costs proportionally more image tokens than the old sparse single-pass behavior, but yields per-chunk coverage comparable to dedicated focused runs. Pass `--no-chunk` to revert to the sparse single-pass behavior, or `--start`/`--end` to zero in on one specific section instead.
-- **Hard caps remain: 2 fps and `--max-frames` per chunk.** `--max-frames N` (default 80) is now the *per-chunk* cap, not the global cap. A 60-min video at default settings extracts up to 80 × 6 = 480 regular frames; if you want to clamp the total, lower `--max-frames` or pass `--no-chunk`.
-
-## How to invoke
-
-**Step 1 — parse the user input.** Separate the video source (URL or path) from any question the user asked. Example: `/transcribe https://youtu.be/abc what language is this in?` → source = `https://youtu.be/abc`, question = `what language is this in?`.
-
-**Step 2 — run the transcribe script.** Pass the source verbatim. Do not shell-escape it yourself beyond normal quoting:
+## Step 2 – Run the script
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/scripts/run.py" "<source>"
 ```
 
-Optional flags:
-- `--start T` / `--end T` — focus on a section. Accepts `SS`, `MM:SS`, or `HH:MM:SS`. When either is set, fps auto-scales denser (see "Focusing on a section" below).
-- `--max-frames N` — cap on regular frames per chunk (default 80, hard max 100). In single-chunk modes (focused or `--no-chunk`) this is also the global cap.
-- `--no-chunk` — disable auto-chunking for long videos. Reverts to the old single-pass sparse behavior (100 frames spread thinly across the whole video).
-- `--diarize [BACKEND]` — speaker diarization. Output transcript lines become `[MM:SS] [<speaker>] text`. **ON by default** (auto mode): the first configured backend runs, **local first** — pyannote local (HF_TOKEN) → pyannote.ai → AssemblyAI; when none is configured, the run degrades silently to a plain transcript. If the chosen auto backend fails, the cascade falls through to the next configured one. `--no-diarize` turns diarization off; an explicit `--diarize <backend>` pins exactly that backend (no cascade, fails loudly). Backends:
-  - **`--diarize assemblyai`** — cloud, all-in-one. Replaces Whisper: one API call returns transcription + speaker labels. Uses `universal-3-pro` (fallback `universal-2`) and `language_detection: true` by default — handles multilingual content (DE-CH + EN + FR/IT references) without an explicit language hint. Needs `ASSEMBLYAI_API_KEY` in env or `.env`; optionally `ASSEMBLYAI_REGION=eu` for EU data residency. ~0.37 USD/h.
-  - **`--diarize pyannote-api`** — cloud pyannote.ai (diarization-only). Runs alongside Whisper; the script aligns speaker turns to Whisper segments by overlap. Needs `PYANNOTE_API_KEY`. Cheaper than AssemblyAI.
-  - **`--diarize pyannote-local`** — local pyannote.audio. Free, fully on-device (nothing leaves the machine — the right choice for confidential recordings). Zero manual setup: the heavy ML stack lives in a **managed venv** at `~/.config/transcribe/venv/`, provisioned idempotently on first use (or explicitly via `setup.py --venv`); the diarization itself runs as a worker subprocess (`pyannote_worker.py`) inside that venv, so the host Python is never touched. GPU is auto-detected (nvidia-smi → cu124 wheels; a 41-min recording diarizes in ~90 s on GPU vs ~36 min on CPU). Requirements that remain with the user: a Hugging Face token (`HF_TOKEN`) plus license acceptance for **both** gated repos: `pyannote/speaker-diarization-3.1` *and* `pyannote/segmentation-3.0`. Speaker count stays on auto by design — forcing `num_speakers` collapses onto the dominant voice on single-mic recordings (observed: 95% one speaker on a real 2-person meeting); surplus mini-clusters are merged/labeled afterwards by Claude from transcript context. Diarization aligns to the Whisper transcript.
-  - Identifying *which name* maps to `A`/`B`/`SPEAKER_00` is done later by Claude using address patterns in the transcript (see Step 4 Inventar → Personen & Stimmen). For **audio-only sources** (no frames as ground truth), role/content evidence substitutes for frame evidence: a label that consistently owns a known person's responsibilities ("I'll prepare the compliance slide") plus at least one address-pattern hit qualifies as high-confidence; document the reasoning in the transcript header. Surplus diarization clusters that map to no one stay as bare letters with a header note.
-- `--resolution W` — change frame width in px (default 512; bump to 1024 only if the user needs to read on-screen text)
-- `--version` — print the skill version and exit (the same value the report stamps, see "Version stamp" below)
-- `--cpu-budget SPEC` — cap the CPU the CPU-bound stages may use **together**: a share (`50%`), an absolute thread count (`6`), or `all` for no limit. Default 50% of the cores, overridable via `TRANSCRIBE_CPU_BUDGET` in the environment or `.env`. See "CPU budget" below.
-- `--fps F` — override auto-fps (clamped to 2 fps max)
-- `--out-dir DIR` — keep working files somewhere specific (default: an auto-generated tmp dir)
-- `--fresh` — ignore persisted `<base>.segments.json` / `.turns.json` and re-transcribe + re-diarize from scratch (default behaviour reuses them for idempotent re-runs)
-- `--background` — unattended run (the PMO transcription watcher uses it): below-normal process priority, and the run holds a per-recording lock `<base>.transcribe.lock`. When a manual `/transcribe` meets such a run on the same recording it does **not** compute twice: the script boosts the background process tree to normal priority, waits for it (`[transcribe] Lauf auf derselben Aufnahme aktiv … übernommen: warte auf Abschluss`) and then continues on the cached `<base>.segments.json` / `.turns.json`. Treat that message as progress, not as an error — just keep waiting for the script to finish. A second background run on a locked recording exits quietly; stale locks (dead pid, older than 12 h) are removed automatically.
-- `--whisper azure-diarize|groq|openai|whisper-local` — pin a specific transcription backend (no cascade, fails loudly). Default is a **local-first cascade**: whisper-local → azure-diarize → groq → openai — each backend that fails falls through to the next configured one. `whisper-local` = faster-whisper fully on-device in the managed venv (`~/.config/transcribe/venv/`, self-provisions on first use, GPU auto-detected) — no key, nothing leaves the machine.
-- `--no-whisper` — disable the Whisper fallback entirely (frames-only if no captions)
-- `--no-repair` — disable the post-transcription repair pass (default: enabled, see "Repair pass" below). The pass finds passages where the decoder collapsed — repetition loops, drift into another script — and re-transcribes just those audio windows with a fresh context.
-- `--language de` — language hint. Only the repair pass uses it: it decides which scripts count as foreign, and pins the language of the re-transcription. Worth passing whenever you know the language; without it the re-runs auto-detect, which on a *broken* window is exactly the thing that failed the first time.
-- **Domain glossary (no flag — file-based, auto-detected).** Whisper mishears rare domain vocabulary (product names, people, project jargon) as acoustically similar everyday words. Drop a `transcribe-glossary.txt` next to the source media file (one term per line, `#` comments) and/or maintain a global `~/.config/transcribe/glossary.txt`; both are merged and passed to whisper-local as faster-whisper `hotwords`, which biases *every* decoding window toward those terms (the repair pass uses them too). **Order matters and the list is capped**: hotwords share the decoder's 448-token prompt budget with the context carryover, so the glossary is truncated at 300 characters (~20–30 terms, roughly 115 tokens) from the bottom — put the most-misheard terms first, and prefer bare surnames over full names. The recording-local glossary is merged before the global one so it survives truncation. Going over the cap is not merely wasteful: an unbounded glossary leaves zero decoding room and faster-whisper aborts with `The maximum decoding length must be > 0` (a real 970 MB run died this way on 58 terms); the worker now clamps and, if it still trips, retries once without biasing rather than losing the run. When a recording folder is used repeatedly (meeting series), seed the glossary from the previous run's misrecognitions: every term the user had to correct belongs in it. Cloud backends currently ignore the glossary.
-- `--no-scene` — disable scdet-based cut detection (default: enabled with auto-tuned threshold, see "Scene cut detection" below)
-- `--scene-threshold F` — override the auto-detected scdet threshold (default: auto via knee-point on the score distribution; lower = more sensitive)
-- `--scene-min-gap S` — minimum seconds between consecutive cut frames (default `2.0`, de-clusters animation/B-roll bursts)
-- `--scene-max-frames N` — cap on additional cut frames (default `80`, applied separately from `--max-frames`)
-- `--no-ocr` — skip the on-screen reference pass (default: enabled, see "On-screen references (OCR)" below). `--ocr-max-frames N` caps the frames it reads (default `60`; cuts always win, regular candidates are thinned evenly), `--ocr-min-score F` sets the RapidOCR confidence under which a reference is marked `(?)` (default `0.85`).
-- `--scene-settle-seconds S` — seconds after a detected cut to wait before extracting (default `1.0`). Lets UI transitions / dialogs / launcher windows render before capture, so cut frames don't land on loading-state / black mid-transition pixels. Capped at `next_cut - 0.3s` so we never bleed into the following shot. Set to `0` to revert to the old just-before-cut behavior. Higher values (~2–4 s) help apps that take longer to render but risk bleeding into transient flashes.
-- `--save-md PATH` — save the report as **companion files**: PATH itself (the main file — a stub for Claude to append `## Summary` and `## Analysis`), plus `<base>.protocol.md` (metadata + frame list + resources + footer) and `<base>.transcript.md` (full transcript) as siblings, where `<base>` is PATH with `.md` (or legacy `.transcribe.md`) stripped. Also written next to them: `<base>.vtt` (WebVTT with speaker voice-tags, one cue per segment; a pre-existing foreign VTT — e.g. a Teams export — is preserved as `<base>.original.vtt` first, skill-generated ones are simply overwritten on re-runs) and, when a `<base>.original.vtt` exists, `<base>.crosscheck.md` (divergence review list — see "Cross-check against platform captions" below). Defaults:
-  - **Local-file sources** → `<video-stem>.md` next to the source (e.g. `videos/test.mp4` → `videos/test.{md,protocol.md,transcript.md}`).
-  - **Base-name convention for local recordings:** every report family follows `YYYYMMDD-hhmm - <Thema>` (e.g. `20260824-1405 - ACA-DFR - Meeting.m4a`). If the source file does not match (Teams default names like `State Secretariat for Migration 2.m4a`, or legacy prefixes like `YYYY-MM-DD-hh-mm-ss - …`), **rename the source file first**, then run the script, so all companions inherit the harmonized base. Derive the start time from ffprobe `creation_time`, or file mtime minus recording duration; round to the minute. Never leave a run's outputs on a non-conforming base.
-  - **URL sources** (YouTube, Vimeo, etc.) → `./transcribe/<YYYY-MM-DD>-<slug>/<slug>.md` in the current working directory, where `<slug>` is a sanitized form of the video title returned by yt-dlp (lowercase ASCII, non-alphanumeric → `-`, ~60 chars max). The per-video subfolder keeps multiple runs tidy and leaves room for retained video / frame snapshots. `.gitignore`-friendly via a single `transcribe/` entry.
-  - Pass `--no-save-md` to disable auto-save entirely (frames + transcript stay only in the temp work_dir until Step 6 cleanup).
-- `--no-save-md` — disable the local-file auto-save
+Pass the source verbatim with normal quoting. Defaults are right for most runs. Common flags (full list in `references/options.md`):
 
-### Focusing on a section (higher frame rate)
+- `--start T` / `--end T` – the user names a moment or section ("around 2:30", "the last 30 seconds"), or only one part of a long video matters. Denser frames, transcript filtered to the range.
+- `--language de` – pass whenever the language is known (used by the repair pass).
+- `--resolution 1024` – only when on-screen text must be read (about 4× image tokens).
+- `--no-scene` – talking heads without cuts; `--no-chunk` – one sparse pass instead of 10-min chunks.
+- `--no-diarize` / `--diarize <backend>` – diarization is on by default (local first: pyannote-local → pyannote-api → assemblyai; silently off when none is configured). An explicit backend pins it.
+- `--whisper <backend>` – pin one STT backend (default cascade: whisper-local → azure-diarize → groq → openai). `--no-whisper` – frames only when there are no captions.
+- `--fresh` – ignore the cached `<base>.segments.json` / `.turns.json` and recompute.
+- `--save-md PATH` / `--no-save-md` – override or disable the report location (default: next to local files; `./transcribe/<YYYY-MM-DD>-<slug>/` for URLs).
+- `--background` – unattended run with a per-recording lock. A manual run that meets such a lock prints `[transcribe] Lauf auf derselben Aufnahme aktiv … übernommen: warte auf Abschluss`; that is progress, keep waiting.
 
-When the user asks about a specific moment — "what happens at the 2 minute mark?", "zoom into 0:45 to 1:00", "the first 10 seconds" — pass `--start` and/or `--end`. The script switches to focused-mode budgets, which are denser than full-video budgets (still capped at 2 fps):
+**Transcript source decision (automatic):** native captions in the video's own language win for URLs; otherwise, and for local files, the on-device STT cascade runs. A cached transcript from a previous run outranks captions. The protocol header names the source. Details: `references/pipeline.md`.
 
-- ≤5s → 2 fps (up to 10 frames)
-- 5-15s → 2 fps (up to 30 frames)
-- 15-30s → ~2 fps (up to 60 frames)
-- 30-60s → ~1.3 fps (up to 80 frames)
-- 60-180s → ~0.6 fps (100 frames, capped)
+**Domain glossary:** for recordings with rare names or jargon, put a `transcribe-glossary.txt` next to the source (one term per line, most-misheard first, max about 300 characters). Feed every term the user corrects back into it. Details: `references/options.md`.
 
-Focused mode is the right call for:
-- Any moment/range the user names explicitly ("around 2:30", "the intro", "the last 30 seconds").
-- Any video longer than ~10 minutes where the user's question is about a specific part — running focused on the relevant section is far more useful than a sparse scan of the whole thing.
-- Re-runs after a full scan didn't have enough detail in some region.
+**Cast list:** a `transcribe-participants.txt` next to the recording (`Name - role` per line) is the cheapest way to give the speaker mapping its candidates.
 
-Transcript is auto-filtered to the same range. Frame timestamps are absolute (real video timeline, not offset-from-start).
+## Step 3 – Read frames and transcript
 
-### Scene cut detection (default on, auto-tuned threshold)
+In one message with parallel tool calls:
 
-In addition to the regular sampling, the script runs an `scdet` pass and extracts **one extra frame at every detected cut**. The regular sampler is **gap-filling**: it does not sample at uniform time intervals but distributes its budget into the gaps between cut timestamps, proportional to gap length. This avoids redundancy in cut-dense regions and guarantees coverage of long uncovered spans.
+- `Read` every frame path under `## Frames`. Entries carry `t=MM:SS` and are tagged `[REG]` (regular, gap-filled) or `[CUT]` (scene cut); read both. A `[CUT]` image is taken about 0.5–2.5 s after the timestamp in its filename.
+- `Read` the transcript file from the `**Transcript file:**` header line (it is not printed to stdout). Skip only if the header says `Transcript: none available`.
 
-How it works:
-1. **scdet Pass 1** — `ffmpeg -vf scdet=threshold=0` scores every frame's pixel-difference to the previous one. **All** scores are captured (no static threshold).
-2. **Auto-threshold** — knee-point detection on the sorted-descending score curve picks where the distribution transitions from "real cuts" to "noise floor". Each video gets its own threshold, calibrated to its own score distribution. A floor of `5.0` prevents misclassifying noise on static videos with no real cuts.
-3. **De-cluster** — within 2 s gaps, consecutive cuts collapse to one (avoids spamming animation sequences).
-4. **Gap-fill regular sampling** — the cut timestamps partition the video into gaps. Each gap gets regular frames proportional to its length. Gaps shorter than `(duration / target_count) / 2` are skipped (already covered by neighboring cuts). When `--no-scene` is set or no cuts exist, gap-fill collapses to uniform sampling.
-5. **Pass 2** — for each cut and each gap-fill timestamp, a single JPEG is extracted via fast-seek (`-ss t-0.05`) at the same `--resolution`.
+Long videos are auto-chunked (about 80 frames per 10-min chunk); read them all, but suggest `--start`/`--end` if the user only cares about one part. In a follow-up question on a video already watched this session, do not re-run the script; answer from context.
 
-The chosen auto-threshold is printed to stderr (`[transcribe] N cuts detected (auto-picked X.YZ)`) and shown in the report metadata as `scdet ≥ X.Y auto`. The regular-sampler line shows `(gap-filled, ~F fps avg)` so it's clear the spacing is non-uniform.
+## Step 4 – Write the report
 
-Why content-aware: scdet score distributions differ wildly between content types. A talking-head video has all scores near 0; an action montage may have hundreds above 30. A single static threshold like 15 misses everything in the first case and over-includes in the second. The knee-point method adapts to whatever distribution is actually in the video.
+Evidence streams:
 
-Why gap-filled rather than uniform: in cut-dense regions (e.g. an Eklat-cluster with 7 cuts in 78 s), uniform sampling would add 1–2 redundant regular frames where the cut frames already cover the moment in detail. Meanwhile a 3-minute monologue without cuts would get the same average density as the cluster. Gap-filling shifts the regular budget away from already-covered regions and into the long uncovered ones — same total budget, better coverage.
+- **Frames** – what is on screen. Frames are ground truth for names and labels; the transcript is noisy.
+- **Transcript** – what is said, with `[MM:SS]` and speaker labels when diarized.
+- **Resources** – `## Resources` in the protocol aggregates every `https://` URL from the description, the transcript and the screen, grouped by category with its origin.
+- **On-screen references** – `<base>.links.md` lists URLs, wiki page IDs, ticket keys, hosts and UNC paths read by OCR from cut and changed frames, each with `[MM:SS]`. Rows marked `(?)` are below the confidence threshold: `Read` the named frame and confirm or correct the row before citing it. Raw OCR text (also name plates for speaker evidence) is cached in `<base>.ocr.json`; `python3 "${CLAUDE_SKILL_DIR}/scripts/ocr.py" --render <base>.ocr.json` re-renders `links.md`.
+- **Repaired passages** – if the protocol lists `**Repaired passages:**`, those spans were re-transcribed after a decoder collapse; treat them as reviewed but not verified (`references/repair.md`).
+- **Cross-check** – if `<base>.crosscheck.md` exists, it lists windows where Whisper and the platform captions diverge; work through them in the Konsistenz-Check.
 
-Output — the report's frame list is **merged chronologically** and each entry is tagged:
-- `[REG]` — regular gap-filled frame (`frames/frame_NNNN_tNNNNNs.jpg`)
-- `[CUT]` — scene-cut frame (`cuts/cut_NNN_tNNNNNs.jpg`)
+**Always write the full report when companion files are persisted** (the default). A user question comes on top, never instead: write the report, then answer the question in chat with timestamps. Skip the report only with `--no-save-md`.
 
-Read both kinds the same way — they are JPEGs in the same format.
+**Before writing, `Read` `${CLAUDE_SKILL_DIR}/references/report-writing.md`.** It defines the mandatory pre-stage (Inventar, Konsistenz-Check, date identification), the key-illustration extraction via `illustrate.py`, the three sections `## Übersicht`, `## Summary`, `## Analysis` and the exact layout. Do not write the report from memory.
 
-**Filename vs. content for `[CUT]` frames:** the filename carries the *detected cut point*, but the image is extracted `--scene-settle-seconds` later (default `1.0`, clamped to `next_cut - 0.3s`), so the picture is typically 0.5–2.5 s after its own timestamp. `[REG]` filenames match their content. This matters when you lift a timestamp out of the frame list into an `illustrate.py` spec — verify it with `--extract` first (see `references/report-writing.md`).
+## Step 5 – Persist and reply
 
-When to disable with `--no-scene`:
-- Talking-head videos with no real cuts (the scdet pass takes ~30 s on a 30-min video for ~0 useful cuts anyway).
-- Token budget is tight and the regular sampling alone is sufficient.
-- Long video where you want a fast first pass before re-running focused.
+**Append the report to the main file.** The header lines `**Protocol file:**`, `**Transcript file:**` and `**Analysis target:**` name the companions. `<base>.md` contains a stub with cross-links; append (do not overwrite) the full three-section report in the layout from `report-writing.md`. For URL sources with `--no-save-md`, just answer in chat.
 
-When `--no-scene` is set, the regular sampler falls back to uniform spacing — same effective behaviour as the original upstream skill.
-
-When to override with `--scene-threshold F`:
-- Auto picked too few cuts and you know there are subtle transitions worth catching (force lower, e.g. `--scene-threshold 8`).
-- Auto picked too many on cut-heavy content and you only want hard cuts (force higher, e.g. `--scene-threshold 30`).
-- Debugging or reproducibility (locking the threshold across re-runs).
-
-Cost: scdet adds ~5–10 % to wall-clock time. Each cut frame costs the same as a regular frame in image tokens. Gap-filling itself is free (pure timestamp arithmetic).
-
-Examples:
-```bash
-# Last 10 seconds of a 1 minute video
-python3 "${CLAUDE_SKILL_DIR}/scripts/run.py" video.mp4 --start 50 --end 60
-
-# Zoom into 2:15 → 2:45 at 3 fps (90 frames)
-python3 "${CLAUDE_SKILL_DIR}/scripts/run.py" "$URL" --start 2:15 --end 2:45 --fps 3
-
-# From 1h12m to the end of the video
-python3 "${CLAUDE_SKILL_DIR}/scripts/run.py" "$URL" --start 1:12:00
-```
-
-**Step 3 — Read frames and transcript.** Two things to load into context, in parallel:
-- Every frame path the script listed under `## Frames` — the Read tool renders JPEGs directly as images. Frames are in chronological order with a `t=MM:SS` timestamp so you can align them to the transcript. When scene detection is enabled (default), entries are tagged `[REG]` (regular sampling) or `[CUT]` (scdet-detected cut) — read both kinds.
-- The transcript file (the `**Transcript file:**` path from the script's metadata header). The script does **not** dump the transcript to stdout — it writes it to `<base>.transcript.md` and you Read it from there. Skip this Read only if the metadata says `Transcript: none available`.
-
-Run all frame Reads and the transcript Read in a single message (parallel tool calls) so everything lands in context together.
-
-**Step 4 — answer the user.** You now have three streams of evidence:
-- **Frames** — what's on screen at each timestamp
-- **Transcript** — what's said at each timestamp. The report's header shows the source (`captions` = yt-dlp pulled native subs; `whisper (groq)` or `whisper (openai)` = transcribed by API).
-- **Resources** — a `## Resources` section at the end of the report aggregates every `https://` URL found in the **video description**, in the **transcript**, and **on screen** (see next bullet), deduped and grouped by category (Projects / Wiki & Tracker / Docs / Articles / Videos / Social / Other). Each entry shows where it was sourced from (`description`, `transcript@MM:SS` or `frame@MM:SS`).
-- **On-screen references (OCR)** — presenters show links far more often than they say them: the address bar while walking through a wiki page, a ticket key in a tab title, a connection name in a SQL client, a share path in an explorer window. `run.py` therefore re-extracts the scene-cut frames plus every visually changed regular frame at native resolution and reads them with RapidOCR (PaddleOCR models on ONNX Runtime, run in an isolated `uv run --with rapidocr-onnxruntime` env so the managed ML venv stays untouched; skipped with a hint when `uv` is missing). URLs, wiki page IDs (with the title lifted out of the path), ticket keys, hosts and UNC paths land in **`<base>.links.md`** with the `[MM:SS]` of the frame they were read from as evidence; tracking parameters and session GUIDs are stripped and said so. Rows under the confidence threshold carry `(?)` and the frame file name — **open those frames with `Read` and confirm or correct the row before citing it in the report**; that targeted look is the only place a vision model belongs in this stage. The raw OCR text is cached as `<base>.ocr.json` next to the recording (all lines, not only the references — name plates and participant lists are in there for speaker evidence), so a re-run re-renders `links.md` for free; `--fresh` recomputes, `python scripts/ocr.py --render <base>.ocr.json` re-renders standalone. Tesseract was tried first and only read a hand-cropped, upscaled URL line — it needs layout knowledge the script does not have.
-
-**Always write the full report — a user question comes ON TOP, never INSTEAD.** Whenever the run persists companion files (any `--save-md`, incl. the defaults), produce the complete three-section report and persist it per Steps 5–6, regardless of whether the user asked a specific question. If they did ask one, answer it in chat **after** the report is written, citing timestamps — the question changes what you emphasize in the chat answer, not what gets persisted. Skipping the report is only right when nothing is persisted at all (`--no-save-md`).
-
-Write the full three-section report (`## Übersicht`, `## Summary`, `## Analysis`). **Before writing it, Read `${CLAUDE_SKILL_DIR}/references/report-writing.md`** — it defines the mandatory pre-stage (Inventar + Konsistenz-Check + Datum identifizieren), the Schlüssel-Illustrationen extraction via `illustrate.py`, the spec of all three sections, and the exact markdown layout to append. Do not write the report from memory of this paragraph; the reference file is the authoritative methodology.
-
-**Step 5 — persist Übersicht + Summary + Analysis to the main file.** Check the report header for the three saved-files lines (`**Protocol file:**`, `**Transcript file:**`, `**Analysis target:**`). The script has already written the protocol (`<base>.protocol.md`) and transcript (`<base>.transcript.md`). The Analysis-target file (the main `<base>.md`) contains only a short stub with cross-links — **append the full three-section report to it** so the user ends up with one human-readable document alongside the two raw-data companions. Use the exact layout defined in `${CLAUDE_SKILL_DIR}/references/report-writing.md`, section «Report layout».
-
-Append (don't overwrite) — the stub header above stays intact. For URL sources without `--save-md`, skip this step entirely and just answer in chat.
-
-**Embed the key illustrations (if Step 4 produced any).** Illustrations exist only as output of `illustrate.py` driven by `<base>.illustrations.spec.json` — never as hand-cropped frames (no spec means no manifest, no dedup, no QS, no reproducibility; the spec's `bbox` is also what keeps browser chrome and the OS taskbar out, and its `redact` boxes what keeps user lists out). For each entry in `<base>.illustrations/manifest.json`, drop a Markdown image at the most relevant spot in the report — usually inside the Summary `### <Thema>` group whose topic the illustration depicts, or right under the Chapter-Struktur entry it belongs to. Use a **relative** path so the `.md` stays portable, and the manifest's caption + timestamp:
+**Embed key illustrations** if `<base>.illustrations/manifest.json` lists any. Illustrations exist only as output of `illustrate.py` from `<base>.illustrations.spec.json`, never as hand-cropped frames. Place each image once where it carries the most weight (usually its Summary `### <Thema>` group), with a relative path and the manifest's caption and timestamp:
 
 ```markdown
 ![Zielarchitektur DfA-GIS](<base>.illustrations/ill_01_t00734_zielarchitektur-dfa-gis.png)
-*Abb. — Zielarchitektur DfA-GIS [12:14]*
+*Abb. – Zielarchitektur DfA-GIS [12:14]*
 ```
 
-When the relative path contains spaces (typical for meeting recordings), wrap it in angle brackets — `![…](<my video.illustrations/ill_01….png>)` — otherwise CommonMark truncates the URL at the first space.
+Wrap paths containing spaces in angle brackets: `![…](<my video.illustrations/ill_01….png>)`.
 
-Place each image once, where it carries the most explanatory weight; don't scatter the same crop across sections. If the manifest is empty or absent, there's nothing to embed — move on.
+**Speaker mapping (diarized runs only).** The script pre-fills `<base>.speakers.md` once: one row per label with talk time, turn count and active window, the participants found (OCR name plates, `<v Name>` tags of a platform VTT, `transcribe-participants.txt`), address hits («Simon, …») with the labels speaking before and after, self-introductions and caption-voice overlap (pre-filled `high` at ≥ 60 %). Do the identification **in that file**:
 
-**After the append, surface ONLY the Kernaussagen + file links in chat.** The saved `<base>.md` is the full artifact (Übersicht + Summary + Analysis stay complete there); the chat message is deliberately minimal so the user can orient in seconds. Echo **only the `### Kernaussagen` block** (3–6 bullets) into your final chat message, then a short pointer block listing the companion files **as markdown links with `file://` URLs** so the user can click through (clickable in Claude Code and most modern terminals):
+- Fill **Name** (canonical first name; `Andrea B` / `Andrea T` on collision), **Confidence** and **Evidence** for every label the evidence carries.
+- Frame (or caption-voice) evidence AND address-pattern evidence = high. One of the two = medium, write the name with `(?)`. Neither = leave Name empty.
+- Audio-only sources: consistent role/content evidence (a label owns a known person's responsibilities) plus at least one address hit counts as high.
+- A shared room microphone files several people under one label: attribute single blocks via the **Overrides** table (`| Zeit | Name | Wortmeldung |`). Two labels given the same name merge.
 
-```
-<### Kernaussagen block — 3–6 bullets, nothing else>
-
-**Files**
-- Protocol: [`<base>.protocol.md`](file:///absolute/path/to/<base>.protocol.md) — metadata + frame list
-- Transcript: [`<base>.transcript.md`](file:///absolute/path/to/<base>.transcript.md) — full transcript
-- Kompakt: [`<base>.transcript-kompakt.md`](file:///absolute/path/to/<base>.transcript-kompakt.md) — condensed transcript (only when diarized)
-- Speakers: [`<base>.speakers.md`](file:///absolute/path/to/<base>.speakers.md) — label-to-name mapping, N open (only when diarized)
-- Links: [`<base>.links.md`](file:///absolute/path/to/<base>.links.md) — references read off the screen (video only)
-- Analysis: [`<base>.md`](file:///absolute/path/to/<base>.md) — Übersicht + Summary + full Analysis
-```
-
-Do **not** echo Chapter-Struktur, Summary, or any Analysis subsection into chat — they live complete and unchanged in `<base>.md`. If the user asked a specific question in the invocation, its answer comes in addition to the Kernaussagen block, not instead of it.
-
-Use the **absolute paths** from the `**Protocol file:**` / `**Transcript file:**` / `**Analysis target:**` lines in the report header (those are already absolute). Just prefix each with `file://` to form the URL.
-
-**Surface the illustrations as images in chat (if any).** A `file://` link to a PNG renders in a terminal but not in the Claude mobile/desktop app, where the user often reads. So when `<base>.illustrations/manifest.json` lists crops, send them with **`SendUserFile`** (status `normal`) right after the Files block — the app renders them inline. Pass all crop paths in one call with a short `caption` (e.g. `"Schlüssel-Illustrationen aus dem Video"`); the user then sees the diagrams without opening the file. Skip when there are no illustrations.
-
-**Speaker mapping lives in `<base>.speakers.md` (only when diarized).** The script pre-fills this file once, right after diarization: one row per label with talk time, turn count and active window, the participants it found (name plates read off the screen by the OCR stage, `<v Name>` tags of a platform VTT, and `transcribe-participants.txt` next to the recording — one `Name - role` per line, the cheapest way to hand it the cast), every address hit («Simon, …») with the labels speaking right before and after, self-introductions, and the caption voice each label overlaps most (pre-filled as `high` when the overlap is ≥ 60 %). **Do the speaker identification in that file, not in your head**: fill **Name** (canonical first name; `Andrea B` / `Andrea T` on collision), **Confidence** and **Evidence** for every label the evidence carries (frame evidence AND address-pattern evidence = high; one of the two = medium, write the name with `(?)`; neither = leave Name empty). Then substitute the names into the transcript deterministically:
+Then substitute the names deterministically:
 
 ```bash
-python3 "C:/Users/Daniel/.claude/skills/transcribe/scripts/speakers.py" --apply "<base>"
+python3 "${CLAUDE_SKILL_DIR}/scripts/speakers.py" --apply "<base>"
 ```
 
-That rewrites `[SPEAKER_00]` → `[Urs]` in `<base>.transcript.md` and `<v SPEAKER_00>` → `<v Urs>` in `<base>.vtt` for every named label; names marked `(?)` and empty rows are left as bare labels, so the reader sees which speakers are confidently identified and which remain provisional. The file's **Overrides** table (`| Zeit | Name | Wortmeldung |`) handles what a label-wide name cannot: a shared room microphone files several people under the presenter's label, and someone who was in the room can attribute a single transcript block by its `[MM:SS]` — that block and its VTT cues get the name, nothing else. A block that starts with the presenter and ends with someone's question cannot be split this way; keep those attributions in the compact transcript, where every statement is its own block. A later `run.py` re-run reads the same file and renders the names itself, so corrections the user makes there survive every re-render; two labels given the same name merge (a room microphone routinely splits one person). The file is never overwritten — delete it to have it pre-filled again.
+This rewrites `[SPEAKER_00]` → `[Urs]` in `<base>.transcript.md` and `<v SPEAKER_00>` → `<v Urs>` in `<base>.vtt` for every named label; `(?)` names and empty rows stay bare labels. Later `run.py` re-runs read the same file, so user corrections survive. The file is never overwritten; delete it to have it pre-filled again. The report's Inventar *Personen & Stimmen* summarizes this file, and labels left without a name become rows of `### Offene Sprecherzuordnung`. Non-diarized transcripts have no speakers file; skip this.
 
-The Inventar's *Personen & Stimmen* in `<base>.md` **summarises** that file (one line per named label with the evidence) — it is no longer where the decision is made — and the labels left without a name become the rows of `### Offene Sprecherzuordnung` (see `references/report-writing.md`).
-
-If the transcript came from VTT captions or pure Whisper (no `[A]/[B]/…` labels in the first place), no speakers file is written and this step is skipped.
-
-**Compact transcript (only when diarized).** After the speaker-name mapping, write a fourth companion `<base>.transcript-kompakt.md`: an editorially polished, condensed rendition of the diarized transcript. The raw transcript already merges consecutive same-speaker segments into turns — the compact file adds the human layer on top:
+**Compact transcript (diarized runs only).** Write `<base>.transcript-kompakt.md`, an editorially condensed rendition:
 
 - One block per substantive statement: `**[MM:SS] <Name>:** <polished text>`, timestamp = start of the turn.
-- Fix STT misrecognitions you can resolve from context (the Konsistenz-Check results), normalize dialect garbles into clean standard language, drop pure fillers and bare acknowledgements ("Ja.", "Genau.") by folding them into the surrounding flow.
-- Group the blocks under `## <Thema>` headings in chronological order, mirroring the conversation's phases.
-- Header: source, duration, participants, a note that the file is editorially condensed, and a pointer to `<base>.transcript.md` as the verbatim reference.
-- Attribute leftover unsure-cluster labels by context where the content makes the speaker obvious; otherwise keep the bare letter.
+- Fix misrecognitions resolved in the Konsistenz-Check, normalize dialect garbles into standard language, fold fillers and bare acknowledgements ("Ja.", "Genau.") into the flow.
+- Group blocks under `## <Thema>` headings in chronological order.
+- Header: source, duration, participants, a note that the file is condensed, and a pointer to `<base>.transcript.md` as the verbatim reference.
+- Attribute leftover unsure labels by context where the speaker is obvious; otherwise keep the bare label. Statements inside mixed blocks get their attribution here.
 
-Skip the compact file for non-diarized transcripts — without speakers it would just duplicate the transcript.
+**Chat reply: Kernaussagen and file links only.** Echo only the `### Kernaussagen` block (3–6 bullets), then the files as `file://` links built from the absolute header paths:
 
-**Step 6 — clean up.** The script prints a working directory at the end. If the user isn't going to ask follow-ups about this video, delete it with `rm -rf <dir>`. **If `--save-md` produced the companion files (`<base>.md` + `<base>.protocol.md` + `<base>.transcript.md` + `<base>.speakers.md` + `<base>.links.md` + `<base>.ocr.json`, plus `<base>.illustrations/` and `<base>.illustrations.spec.json` when illustrations were extracted), they live outside the work dir and are preserved** by the cleanup. The native OCR frames referenced from `links.md` are inside the work dir and go with it — resolve any `(?)` rows before deleting. If the user might follow up, leave the work dir in place too.
+```
+<### Kernaussagen block – 3–6 bullets, nothing else>
 
-### CPU budget
-
-The CPU-bound stages used to help themselves to the whole machine. ffmpeg defaults to `-threads 0` — one thread per core — and the frame stage ran up to 8 of those *in parallel*, so on a 16-core box that was 8 processes each asking for 16 threads. The visible effect is a stage that pins every core, followed by a near-idle stretch while the GPU stages (whisper, pyannote) run, followed by the next CPU stage: fans surging up and down several times per transcription.
-
-`scripts/cpu.py` is now the single place that answers "how much CPU may we use?", and the stages **divide one budget** instead of each taking it in full:
-
-| Stage | Processes | Gets |
-|---|---|---|
-| scdet cut detection | 1 ffmpeg | whole budget |
-| audio extraction | 1 ffmpeg | whole budget |
-| frame extraction | N ffmpegs | budget split across them |
-| whisper CPU fallback | in-venv | whole budget (via env) |
-| pyannote CPU path | in-venv | `torch.set_num_threads` (via env) |
-
-Resolution order: `--cpu-budget` > `TRANSCRIBE_CPU_BUDGET` (environment or `.env`) > 50% of the cores. "Cores" means *usable* cores: on Linux the count comes from `sched_getaffinity`, so a run restricted by `taskset`, a systemd slice or a container cpuset budgets against what it may actually use rather than what the machine has (verified: under `taskset -c 0-3` on a 16-core box the budget drops from 12 to 3). Windows and macOS fall back to `os.cpu_count()`. The resolved value is exported into the environment, so the venv workers inherit the same cap without a flag being threaded through. An unparseable value falls back to the default rather than failing the run.
-
-**Splitting is not the same as spreading it thin.** Measured on 16 cores, extracting 24 frames from 1080p with a budget of 12: 8 workers × 1 thread took **13.8 s**, 6 × 2 took **11.1 s**, 4 × 3 took 11.3 s, 3 × 4 took 11.5 s — against 9.7 s ungoverned. A single-threaded ffmpeg cannot overlap its own seek and decode, so handing the budget to as many workers as possible is the *worst* way to spend it. `frame_workers()` therefore derives the worker count as `budget // 2`, guaranteeing every worker two threads; the default budget costs roughly 15% wall-clock against no cap at all.
-
-Lower it with `--cpu-budget 50%` (or `25%`) when the machine runs hot or needs to stay responsive; `--cpu-budget all` restores the old unbounded behaviour. `--frame-workers` still overrides the worker count explicitly if you want to tune that axis by hand.
-
-### GPU load and heat (measured, counter-intuitive)
-
-On a laptop the CUDA stages dominate: whisper and pyannote run for minutes while the CPU stages are done in seconds. The obvious reaction — run the GPU in a lighter mode — **does not work**, and the numbers say why. RTX A4000 Laptop, 4.2 min of speech, `nvidia-smi` sampled twice a second:
-
-| Setting | Wall-clock | GPU util | Power | **Total energy** | Peak temp |
-|---|---|---|---|---|---|
-| `float16`, no pauses (default) | **86 s** | 51% | 61 W | **~5200 Ws** | 72 °C |
-| `int8_float16` | 125 s | 40% | 49 W | ~6100 Ws | 72 °C |
-| `float16`, `TRANSCRIBE_GPU_DUTY=0.6` | 137 s | 32% | 48 W | ~6600 Ws | 71 °C |
-
-Every throttle lowers *instantaneous* draw and raises *total* heat, because the run stretches out further than the draw drops. The peak temperature never moves: the laptop's cooling regulates to the same setpoint and simply runs the fan longer. **The way to make the machine run cooler is to finish sooner**, so both knobs default to the fastest setting. They exist for the case where a quieter fan for longer is what you actually want — that is a real preference, just not a thermal one:
-
-- `TRANSCRIBE_GPU_COMPUTE` — ctranslate2 compute type (default `float16`; a type the GPU rejects falls back to `float16` rather than failing the run).
-- `TRANSCRIBE_GPU_DUTY` — share of wall-clock spent decoding, `0.1`–`1.0` (default `1.0` = no pauses). Idles between segments; since decoding is a lazy generator, that idles the GPU itself.
-- `TRANSCRIBE_WHISPER_MODEL` — default `large-v3-turbo`. Measured against `large-v3` on a 253 s German recording (RTX A4000 Laptop): decode 6.9 s vs 24.3 s at the same ~62 W, and turbo was the one that *avoided* the repetition collapse large-v3 fell into on both test recordings. Set `large-v3` to go back; `medium` is smaller again but loses domain terms and Swiss German. **Never `distil-large-v3`** — English-only, and it silently translates German input instead of transcribing it (measured: 100% divergence, output in English).
-
-**What does cut heat is finishing sooner — which means the model, not the throttle.** Full pipeline, 253 s of real German speech, energy measured above the idle floor:
-
-| Run | Wall-clock | Whisper stage | Diarization stage | Total energy |
-|---|---|---|---|---|
-| `large-v3` | 48.2 s | 24.3 s / 1205 Ws | 7.1 s / 469 Ws | 1674 Ws |
-| `large-v3-turbo` (default) | **29.2 s** | **6.9 s / 296 Ws** | 7.5 s / 341 Ws | **637 Ws (−62%)** |
-
-Phase shares under `large-v3`: transcription **72%**, diarization **28%**, everything else (venv startup, ffmpeg, writing) draws idle power and contributes essentially nothing. The CPU never drives the heat — 23% average, 72% peak, and that peak lasts seven seconds.
-
-Diarization has the *highest instantaneous* draw of the whole run (80 W average during its GPU phase, against 64 W for whisper) but is short, so `--no-diarize` saves about a quarter of a run's energy — worth having on single-speaker recordings, but a smaller lever than the model choice above.
-
-> **Measurement caveat, recorded because it bit once.** An earlier version of this section claimed 90% of a run's heat came from transcription and that `--no-diarize` saved 24% of it. Both numbers came from a synthetic looping test fixture on which `large-v3` collapsed into a repetition loop, inflating its decode from ~12 s to 79.8 s. Benchmark heat and speed on *real* recordings only: a collapse silently multiplies the transcription stage, so a collapsed run measures the failure mode rather than the pipeline.
-
-### Transcript blocking (diarized runs)
-
-A diarized transcript is written as one block per speaker turn — `[MM:SS] [<Speaker>] <everything they said>` — rather than one line per decoder segment, which would be unreadable at three seconds a line. A block ends at a **speaker change**, at a **silence of 2 s**, or once it spans **45 s** (`MAX_TURN_GAP` / `MAX_TURN_SECONDS` in `transcribe.py`).
-
-The latter two limits are not cosmetic. Blocking on speaker identity alone collapses a **single-speaker** recording — a YouTube explainer, a voice memo, a dictation — into exactly one block carrying only the first timestamp, which destroys every timestamp the transcript had. Observed on a 7-minute video: 108 segments rendered as one `[00:00]` block; with the limits, 11 blocks at 45 s apart.
-
-The two rules fire on different material, which is why both exist. Measured over real recordings: a fluently spoken explainer has inter-segment gaps of at most 1.0 s (p95 0.62 s), so only the duration cap ever triggers there; a slow instructional recording has gaps up to 17 s (p75 6.9 s), where the gap rule lands on the natural paragraph breaks and the duration cap rarely fires. In a multi-speaker meeting both are rare and turns keep reading as turns; where one does fire it breaks up a long monologue, which helps navigation rather than hurting it.
-
-`python3 scripts/transcribe.py --selftest` covers the blocking rules, including that a speaker change still yields exactly one block per turn.
-
-### Version stamp
-
-Every report records which build of the skill produced it, so a transcript read months later says what made it — pipeline behaviour (repair pass, glossary handling, crosscheck) shifts between versions, and a report that predates a fix should be readable as such.
-
-The version is **resolved at runtime from `.claude-plugin/plugin.json`**, which the AI-Toolbox versioning hooks bump on every edit and commit to this skill. Do not add a hand-maintained `APP_VERSION` literal to the scripts: `bump-version.sh` resolves *any* file under `.agents/skills/<name>/` to the plugin manifest, so a script-level literal is never reached by the bumper and would rot from its first commit. `scripts/version.py` is the single accessor; it falls back to `unknown` when the manifest is absent (the claude.ai `.skill` bundle strips `.claude-plugin/`).
-
-It lands in three places:
-
-- **`<base>.protocol.md`** — a `- **Skill version:**` line in the metadata header, next to `- **Generated:**` (local timestamp with UTC offset).
-- **`<base>.segments.json`** — a `skill_version` key, so the transcript cache carries its own provenance.
-- **`<base>.vtt`** — appended to the generator NOTE (`NOTE generated by transcribe-skill 1.38.152`). Detection of skill-generated VTTs is a substring test against the bare marker, so older VTTs without a version still register as ours and platform exports are still preserved as `<base>.original.vtt`.
-
-**Cache drift is called out explicitly.** A re-run reuses `<base>.segments.json` (that is what makes re-runs cheap), so the transcript in today's report may have been decoded by an *older* build. When the cached `skill_version` differs from the running one, the run warns on stderr and the protocol line says so instead of claiming this version produced it:
-
-`- **Skill version:** transcribe 1.38.152, but the transcript was resumed from a cache written by 1.30.132 (re-run with `--fresh` to re-transcribe under this version)`
-
-If that appears and the transcript quality matters, re-run with `--fresh`.
-
-### Repair pass (default on)
-
-Whisper decodes in 30-second windows and feeds each window's output into the next as a prompt (`condition_on_previous_text`). That is what keeps sentences and terminology coherent across window boundaries — and it is also a failure amplifier: a window that produced garbage becomes the *context* for the next one, so the decoder can lock into a repetition loop (`Ja. Ja. Ja. Ja.`) or drift into another script and never recover.
-
-Real example from a 26-minute German meeting: a 20-second stretch came out as `um eben für Krips-C жить классisch durch diese Markenелision zu sein`. Re-running **the same model** over **only that audio window** produced clean German. The audio was never the problem; the accumulated context was.
-
-After transcription (and after a cache resume), `repair.py` therefore:
-
-1. **Scans the segments for collapse signatures** — foreign script in a Latin-script language, a token repeated ≥6× in a row, a sentence repeated ≥4×, the identical line in ≥3 consecutive segments, implausible text density (>32 chars/s over a segment of ≥6 s, or <0.7 chars/s over one; a *shorter* segment counts as flooded only at ≥50 chars/s or with ≥80 chars — timestamp jitter on the 1–2 s segments VAD cuts for a fast speaker otherwise pushes ordinary speech over 32 chars/s, which on a 37-minute finance video meant 48 false suspects and ~19 min of CPU re-transcription for nothing).
-2. **Merges neighbouring hits into windows** and pads them by 12 s so the decoder gets run-up. Padding matters a lot: the same broken passage re-transcribed with 4 s of lead-in still hallucinated, with 12 s it came out clean.
-3. **Cuts each window out of the audio and re-transcribes it** with a fresh context and `--no-carryover`.
-4. **Splices the result back in — but only through two gates.** The *score gate* rejects a result that still trips the detectors; the *content gate* rejects one whose deduplicated character count fell below 60 % of the original, which catches the failure mode of "fixing" a passage by silently dropping real speech. Deduplication works at **clause** level, not sentence level — a collapse often stutters inside one sentence, and counting those echoes as real text made a correct repair look like it had deleted half the speech. A rejected window keeps its original text.
-5. **Runs at most 2 internal passes**, because rewriting a window can expose a mild signature just past its edge. Spans already rewritten (this run or a previous one, tracked in `<base>.segments.json` under `repaired`) are never touched twice — without that, every re-run nudged the transcript a little further.
-
-The protocol lists every detected passage under `**Repaired passages:**` with its reason and whether the rewrite was applied. `<base>.segments.json` keeps the full before/after text for each one.
-
-**What this does NOT do:** it is not a truth oracle. It reliably removes catastrophic collapses and often recovers real content that was buried under a repetition loop, but a rewritten window can still contain its own misrecognitions — occasionally a *new* one where the original was merely repetitive. **Treat repaired passages as reviewed-but-not-verified**: during the Konsistenz-Check (Step 4), give the timestamps listed in `**Repaired passages:**` a second look, and cross-check them against any platform-side transcript (Teams VTT, YouTube captions) if one exists.
-
-Standalone use on an existing run, without redoing anything else:
-
-```bash
-# What would it touch? Changes nothing.
-python3 "${CLAUDE_SKILL_DIR}/scripts/repair.py" --segments "<base>.segments.json" --language de --dry-run
-
-# Repair in place, cutting audio straight from the source video
-python3 "${CLAUDE_SKILL_DIR}/scripts/repair.py" --segments "<base>.segments.json" \
-    --video "<video>" --language de
+**Files**
+- Protocol: [`<base>.protocol.md`](file:///absolute/path/to/<base>.protocol.md) – metadata + frame list
+- Transcript: [`<base>.transcript.md`](file:///absolute/path/to/<base>.transcript.md) – full transcript
+- Kompakt: [`<base>.transcript-kompakt.md`](file:///absolute/path/to/<base>.transcript-kompakt.md) – condensed transcript (only when diarized)
+- Speakers: [`<base>.speakers.md`](file:///absolute/path/to/<base>.speakers.md) – label-to-name mapping, N open (only when diarized)
+- Links: [`<base>.links.md`](file:///absolute/path/to/<base>.links.md) – references read off the screen (video only)
+- Analysis: [`<base>.md`](file:///absolute/path/to/<base>.md) – Übersicht + Summary + full Analysis
 ```
 
-Note the repaired `segments.json` is the *input* to rendering — after a standalone repair, re-run `run.py` (it resumes from the cache in ~1 s) to regenerate the transcript and protocol files.
+Do not echo Chapter-Struktur, Summary or Analysis into chat. A specific user question is answered in addition to the Kernaussagen block. If the manifest lists illustrations, send them with **`SendUserFile`** (status `normal`, all crop paths in one call, short caption such as `"Schlüssel-Illustrationen aus dem Video"`), because `file://` PNG links do not render in the desktop and mobile apps.
 
-**Detection has a regression suite.** `python3 scripts/repair.py --selftest` runs the cases distilled from measured collapses — no audio, no venv, under a second. Run it after touching a threshold or a detector.
+## Step 6 – Clean up
 
-> **Two blind spots found by measurement (2026-09-07), both now covered by the selftest.** A German recording collapsed in a way the detector never saw: whisper stopped advancing its timestamps and emitted full sentences into one-second segments, at 89–93 chars/s where the clean run of the same recording sat at 19. The density check missed it because the upper bound was gated behind a six-second minimum duration — the *lower* bound needs a long window to mean anything, the upper one does not, so they are now gated separately. With that fixed the passage was detected and correctly re-transcribed, and then **rejected by the content gate**, which is the second blind spot described above. A cross-transcript "same line repeated anywhere" rule was also tried and deliberately dropped: on genuinely repetitive audio it flagged every segment and demanded 282 s of rework against the 14 s the density rule needs for the same collapse. Degenerate *timing*, not repetition alone, is what tells a decoder loop from audio that really does repeat.
+The script prints a working directory. If no follow-ups are expected, delete it (`rm -rf <dir>`). Companion files (`<base>.md`, `.protocol.md`, `.transcript.md`, `.speakers.md`, `.links.md`, `.ocr.json`, `.segments.json`, `.turns.json`, `.vtt`, `.illustrations/`, `.illustrations.spec.json`) live outside the work dir and are preserved. The native OCR frames referenced from `links.md` are inside the work dir: resolve any `(?)` rows before deleting it. If the user might follow up, keep the work dir.
 
-### Cross-check against platform captions (default on)
+## Failure modes
 
-Meeting platforms often ship their own captions next to the recording (Teams exports a `.vtt`). Both that transcript and Whisper mishear — but rarely in the same way, so **divergence between the two is a cheap, reliable pointer to the passages worth re-listening to** (real case: Whisper's «welche Editen» vs. Teams' «eine Weichen … respektive strecken» — the divergence flagged exactly the sentence where both had garbled *Weicheneditor/Streckeneditor*).
-
-Whenever a platform VTT was preserved as `<base>.original.vtt` (see the WebVTT companion above), `run.py` automatically runs `crosscheck.py`: it slices the timeline into 45-second windows, normalizes both texts (casefold, ß→ss, hyphens joined, punctuation dropped), scores each window with a token-level SequenceMatcher ratio, and writes the divergent windows to **`<base>.crosscheck.md`** — each with the Whisper text and the caption text side by side. The threshold is **adaptive** (`min(0.55, mean − stdev)` over the recording's own ratios): a well-matching pair is judged against the absolute ceiling, while a broadly-diverging pair (poor room-mic captions) only flags the outliers below its own baseline instead of half the meeting. Windows where one source has substantial text and the other (near) none are flagged as `missing in captions/transcript`. The list is capped at the 25 worst windows.
-
-The tool never decides which side is right. During the Konsistenz-Check (Step 4), work through the flagged windows: resolve what frames/context/glossary settle, and put the rest in front of the user as the **«unsichere Stellen»** for targeted re-listening (see `references/report-writing.md`, Konsistenz-Check item 8). Standalone re-run:
-
-```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/crosscheck.py" --segments "<base>.segments.json" \
-    --vtt "<base>.original.vtt" -o "<base>.crosscheck.md"
-```
-
-## Transcription
-
-The script gets a timestamped transcript in one of two ways:
-
-1. **Native captions (free, preferred) — but only in the video's own language.** yt-dlp pulls manual or auto-generated subtitles from the source platform if available. Captions are fetched in a **second, download-free pass**, after the info JSON has revealed the video's `language`, and `--sub-langs` then names only that language (`de,de-orig,de-DE`). This is not a nicety: YouTube auto-translates any video that has one automatic caption track into ~200 languages, so the old hard-coded `en,en-US,en-GB,en-orig` did not fail on a German video — it silently returned a **machine translation**, and the pipeline produced an English transcript of German speech. When the language cannot be determined, no captions are fetched at all and the local Whisper path takes over: a transcript in the wrong language is worse than none. The extra pass costs one cheap request; a `--print %(language)s` probe runs only when the info JSON carries no language.
-2. **STT cascade, local first.** If no captions came back (or the source is a local file), the script extracts audio (`ffmpeg -vn -ac 1 -ar 16000 -b:a 64k`, ~0.5 MB/min) and tries the configured backends in order — each failure cascades to the next:
-   - **whisper-local** (DEFAULT) — faster-whisper **fully on-device** (large-v3-turbo on CUDA, medium/int8 CPU fallback) in the managed venv; always available, no key, self-provisions on first use. Nothing leaves the machine.
-   - **Azure** — `gpt-4o-transcribe-diarize` on a private tenant (transcription + speakers in one call). Needs `AZURE_TRANSCRIBE_DIARIZE_URL` + `_KEY`.
-   - **Groq** — `whisper-large-v3` cloud API. Cheaper/faster than OpenAI. Get a key at console.groq.com/keys.
-   - **OpenAI** — `whisper-1` cloud API. Get a key at platform.openai.com/api-keys.
-
-Keys live in `~/.config/transcribe/.env`. `--whisper <backend>` pins one backend and disables the cascade. Use `--no-whisper` to skip the fallback entirely.
-
-**Idempotent re-runs (resume):** when the output is persisted (the default for local files, or any `--save-md`), the STT result and diarization turns are written next to it as `<base>.segments.json` and `<base>.turns.json`. Reprocessing the same source reuses them — the expensive STT + diarization steps are skipped (a 41-min recording resumes in ~1 s) and the pipeline goes straight to alignment, rendering, and (Claude's) cleanup. This makes "re-clean an existing transcript" or "re-render after a tweak" free. **A cached transcript also outranks captions**, which it did not used to: whether a platform hands out caption tracks varies between runs (yt-dlp gets rate-limited on them), so letting captions win made the same command yield a different transcript on a re-run — discarding an already-computed Whisper result to do it. Observed: run one transcribed with whisper-local, run three silently replaced it with platform captions. Pass `--fresh` to ignore the persisted intermediates and re-transcribe + re-diarize from scratch. With `--no-save-md` the caches live only in the ephemeral work dir (so use `--out-dir DIR` if you want them to survive).
-
-### Long videos: auto-split with overlap
-
-Whisper's HTTP endpoint caps a single multipart upload at 25 MB. The script targets 20 MB per chunk (~40 minutes of 64 kbps mono mp3, leaving headroom for the multipart envelope) so it can handle arbitrarily long inputs:
-
-1. Audio is extracted once as a single mp3 (`ffmpeg -vn -ac 1 -ar 16000 -b:a 64k`).
-2. If the file fits under the 20 MB target, it's uploaded as one request — fast path, no behaviour change.
-3. Otherwise, the audio is split into `ceil(size / 20 MB)` even-sized chunks with **20 seconds of overlap** between adjacent chunks (`ffmpeg -ss -c copy`, no re-encoding). Each chunk goes to Whisper in turn.
-4. Returned segments are shifted onto the absolute video timeline by their chunk's start offset, then merged. At each seam, segments from the **second** chunk whose `start` falls before the overlap midpoint are dropped — the first chunk already covered that audio. A final pass collapses any consecutive duplicate texts that survive.
-
-You don't need to do anything to enable this — it kicks in automatically when audio exceeds the threshold. The progress line on stderr looks like `[transcribe] audio: 38400 kB exceeds Whisper upload limit — splitting into 2 chunks (20s overlap)…` followed by one line per chunk. Cost-wise: longer audio → more Whisper minutes billed, same per-minute rate. Frames are unaffected — ffmpeg seeks the source video directly regardless of length.
-
-## Failure modes and handling
-
-- **Setup preflight failed** → run `python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py"` (auto-installs ffmpeg/yt-dlp + uv, scaffolds the `.env`, and auto-provisions the on-device whisper-local venv on a keyless box). Transcription is local-first — **don't ask the user for a cloud key**; the venv is built by uv with its own managed Python, so the host Python version never matters. Only if `venv_buildable: false` (uv has no build for this platform) is a cloud key the fallback.
-- **No transcript available** → captions missing AND (no Whisper key OR Whisper API failed). Script prints a hint pointing to setup. Proceed frames-only and tell the user.
-- **Long video auto-chunked** → the metadata line will say `chunked mode, N chunks × ~Xs`. The Read frame list is much longer than for a short video (~80 frames per chunk). Read them all, but be aware the image-token cost scales. If the user only cares about a specific section, suggest a re-run with `--start`/`--end` for tighter focus on that range; if they want the whole thing but cheaper, `--no-chunk` reverts to the sparse single-pass behavior.
-- **Gated video streams (YouTube SABR / PO token)** → `download.py` escalates on its own before giving up: (1) the normal 720p video+audio pull, (2) on YouTube, the same through player clients that need no Proof-of-Origin token (`tv,web_embedded,android_vr` — `tv` falls back to itag 18, 360p H.264+AAC, which is plenty for 512px frames), (3) audio only. Rung 3 yields a full transcript and diarization with no frames; the header says `**Degraded run:** audio-only`. Each rung is only paid for when the previous one produced no media file — a normal video still costs exactly one yt-dlp call. Real DRM (Widevine, i.e. rented/purchased films) is not in scope and never will be.
-- **Download fails but captions landed** → after all rungs above, the run does *not* abort. Media streams and caption tracks are fetched separately, so a gated video (YouTube DRM / PO token) often loses the former and keeps the latter. The script degrades to **captions-only**: no frames, no Whisper pass, no diarization, transcript straight from the platform captions. The protocol header carries a `**Degraded run:**` line naming the cause, and the Frames section says so instead of listing paths. Analyze the transcript normally, and state plainly in the Summary that on-screen content isn't covered. If a stale yt-dlp caused it (see the preflight advisory), refreshing it and re-running is worth one attempt.
-- **Download fails with no captions either** → nothing to work with; the script exits with yt-dlp's classified reason (403, PO token, DRM, login, region lock). Tell the user plainly and do not keep retrying. If the reason points at 403/PO-token, suggest `setup.py --install-binaries --force` once.
-- **Whisper request fails** → the error is printed to stderr (likely: invalid key, rate limit, or a network blip mid-chunk). The 25 MB single-upload limit no longer applies — long audio is auto-chunked (see "Long videos: auto-split with overlap"). The report will say "none available" for transcript on failure. You can retry with `--whisper openai` if Groq failed (or vice versa).
+- **Preflight failed** → run the installer (Step 0). Do not ask for a cloud key; only `venv_buildable: false` makes a key the fallback.
+- **No transcript available** → no captions and every STT backend failed. The script prints a hint; proceed frames-only and tell the user.
+- **Gated YouTube streams (SABR / PO token)** → `download.py` escalates on its own: normal 720p pull, then player clients without PO token (`tv,web_embedded,android_vr`, often 360p, enough for 512 px frames), then audio only (`**Degraded run:** audio-only`, transcript and diarization without frames). DRM-protected content is out of scope.
+- **Download fails but captions landed** → the run degrades to **captions-only** (no frames, no STT, no diarization; `**Degraded run:**` line in the protocol). Analyze normally and state in the Summary that on-screen content is not covered. If the preflight reported a stale yt-dlp, refresh it once (`setup.py --install-binaries --force`) and re-run.
+- **Download fails without captions** → the script exits with yt-dlp's classified reason (403, PO token, DRM, login, region lock). Tell the user plainly; do not retry in a loop. For 403/PO token suggest the yt-dlp refresh once.
+- **Cloud STT request fails** → error on stderr (invalid key, rate limit, network). The cascade falls through; with a pinned backend, retry with another `--whisper` backend.
+- **Transcript shows loops or foreign script despite the repair pass** → see `references/repair.md` (standalone `repair.py`, `--language`).
+- **Protocol says the transcript was resumed from a cache written by another version** → re-run with `--fresh` if transcript quality matters.
 
 ## Token efficiency
 
-This skill burns tokens primarily on frames. Order of magnitude:
-- 80 frames at 512px wide is roughly 50-80k image tokens depending on aspect ratio.
-- The transcript is cheap (a few thousand tokens at most for a 10-minute video).
-- Bumping `--resolution` to 1024 roughly quadruples the image tokens per frame. Only do it when necessary.
-
-If you already watched a video this session and the user asks a follow-up, do **not** re-run the script — you already have the frames and transcript in context. Just answer from what you have.
-
-## Security & Permissions
-
-**What this skill does:**
-- Runs `yt-dlp` locally to download the video and pull native captions when the source supports them (public data; the request goes directly to whatever host the URL points at)
-- Runs `ffmpeg` / `ffprobe` locally to extract frames as JPEGs (regular interval sampling + scdet-detected scene cuts) and, when Whisper is needed, a mono 16 kHz audio clip
-- Sends the extracted audio clip (or, for long videos, one ~20 MB chunk at a time) to Groq's Whisper API (`api.groq.com/openai/v1/audio/transcriptions`) when `GROQ_API_KEY` is set (preferred — cheaper, faster)
-- Sends the extracted audio clip (or chunks) to OpenAI's audio transcription API (`api.openai.com/v1/audio/transcriptions`) when `OPENAI_API_KEY` is set and Groq is not, or when `--whisper openai` is forced
-- Writes the downloaded video, frames, audio, audio chunks (when splitting), and an intermediate transcript to a working directory under the system temp dir (or `--out-dir` if specified) so Claude can `Read` them
-- When `--save-md PATH` is used (or auto-defaulted for local-file sources), writes three companion files (the main `<base>.md` with a stub that Claude appends Summary + Analysis to, `<base>.protocol.md` with metadata + frames + resources, `<base>.transcript.md` with the transcript), all **outside the work dir** and preserved after cleanup
-- Reads / creates `~/.config/transcribe/.env` (mode `0600`) to store the Whisper API key(s) and a `SETUP_COMPLETE` marker. As a fallback, also reads `.env` in the current working directory
-- Downloads `deno` (standalone binary from GitHub Releases, into `~/.transcribe/bin/`) as yt-dlp's JS runtime for YouTube extraction, and prepends `~/.transcribe/bin/` to the yt-dlp subprocess PATH so it gets found
-- Downloads `uv` (standalone binary, into `~/.transcribe/bin/`) and uses it to create / repair a managed Python venv at `~/.config/transcribe/venv/` from its own fetched CPython (no dependency on the host Python version), with a pinned ML stack for the local backends (pyannote.audio, faster-whisper, torch — CUDA wheels when nvidia-smi is present), then runs `pyannote_worker.py` / `whisper_local_worker.py` inside it as subprocesses; the Python running run.py is never modified
-
-**What this skill does NOT do:**
-- Does not upload the video itself to any API — only the extracted audio goes out, and only when native captions are missing AND Whisper is not disabled with `--no-whisper`
-- Does not access any platform account (no login, no session cookies, no posting)
-- Does not share API keys between providers (Groq key only goes to `api.groq.com`, OpenAI key only goes to `api.openai.com`)
-- Does not log, cache, or write API keys to stdout, stderr, or output files
-- Does not persist anything outside the working directory and `~/.config/transcribe/.env` — clean up the working directory when you're done (Step 5)
-
-**Bundled scripts:** `scripts/run.py` (entry point), `scripts/download.py` (yt-dlp wrapper), `scripts/frames.py` (ffmpeg frame extraction + scdet cut detection), `scripts/transcribe.py` (caption selection + Whisper orchestration), `scripts/stt.py` (pluggable speech-to-text backends - Azure / Groq / OpenAI / whisper-local), `scripts/repair.py` (collapse detection + windowed re-transcription), `scripts/diarize.py` (diarization backends + alignment), `scripts/pyannote_worker.py` + `scripts/whisper_local_worker.py` (run inside the managed venv, never imported by the host), `scripts/resources.py` (URL extraction from description + transcript, grouped by category), `scripts/version.py` (skill version, read from the plugin manifest), `scripts/cpu.py` (shared CPU budget for the CPU-bound stages), `scripts/setup.py` (preflight + installer + uv bootstrap + venv provisioning)
-
-Review scripts before first use to verify behavior.
+Frames dominate the cost: 80 frames at 512 px are roughly 50–80k image tokens; the transcript of a 10-minute video is a few thousand. `--resolution 1024` roughly quadruples image tokens per frame. Prefer a focused `--start`/`--end` re-run over a denser full pass.

@@ -141,8 +141,8 @@ def participants_from_file(folder: Path | None) -> list[str]:
 
 def _name_tokens(name: str) -> list[str]:
     """Words of a name worth searching for in speech: capitalised, >= 3 chars,
-    role suffixes after « - » / « — » dropped."""
-    head = re.split(r"\s+[-–—]\s+|,", name, maxsplit=1)[0]
+    role suffixes after a spaced hyphen, en dash or em dash dropped."""
+    head = re.split(r"\s+[-\u2013\u2014]\s+|,", name, maxsplit=1)[0]
     return [t for t in re.findall(r"[A-ZÀ-Þ][\wÀ-ÿ'’-]{2,}", head)]
 
 

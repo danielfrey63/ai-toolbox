@@ -458,7 +458,7 @@ def main() -> int:
     save_md_path: Path | None = None
     protocol_path: Path | None = None
     transcript_path: Path | None = None
-    # Persistent intermediate caches next to the output — enable idempotent
+    # Persistent intermediate caches next to the output – enable idempotent
     # re-runs (skip STT + diarization when the source is reprocessed).
     seg_store: Path | None = None
     turns_store: Path | None = None

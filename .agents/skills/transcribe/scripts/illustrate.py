@@ -3,9 +3,9 @@
 
 This runs *after* Claude has watched the 512px analysis frames and decided
 which ones carry an essential diagram / chart / architecture slide. The
-deterministic work — re-extracting those moments at full resolution, cropping
+deterministic work – re-extracting those moments at full resolution, cropping
 to the region Claude marked, trimming the surrounding chrome, and dropping
-duplicate slides — lives here so the model only does the genuinely analytical
+duplicate slides – lives here so the model only does the genuinely analytical
 part (which frame, which region, what caption).
 
 Pipeline per spec entry:
@@ -127,7 +127,7 @@ def _make_sheets(ffmpeg: str, video: str, out_dir: Path,
                  interval: int, tile: str, width: int) -> int:
     """Tile the video into contact sheets; print the tile→timestamp mapping.
 
-    No drawtext timestamps — fontconfig-less ffmpeg builds segfault on the
+    No drawtext timestamps – fontconfig-less ffmpeg builds segfault on the
     drawtext filter, and the mapping is pure arithmetic anyway:
     t = interval * ((sheet-1)*cols*rows + row*cols + col), zero-based tiles.
     """
@@ -201,7 +201,7 @@ def _refine_worker(paths: list[str], tol: int = 14, pad: int = 6) -> dict[str, s
     suspects and mirrors each verdict as a "SUSPECT\\tpath\\treason" stdout line
     so the uv-subprocess path can report through its pipe.
     """
-    from PIL import Image, ImageChops, ImageFilter, ImageStat  # noqa: PLC0415 — only in worker
+    from PIL import Image, ImageChops, ImageFilter, ImageStat  # noqa: PLC0415 – only in worker
 
     def _suspect(im) -> "str | None":
         w, h = im.size
@@ -215,7 +215,7 @@ def _refine_worker(paths: list[str], tol: int = 14, pad: int = 6) -> dict[str, s
     for p in paths:
         try:
             im = Image.open(p).convert("RGB")
-        except Exception:  # noqa: BLE001 — a single bad file shouldn't abort the batch
+        except Exception:  # noqa: BLE001 – a single bad file shouldn't abort the batch
             continue
         w, h = im.size
         corners = [im.getpixel(c) for c in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1))]
@@ -277,7 +277,7 @@ def _refine(paths: list[Path]) -> tuple[str, dict[str, str]]:
 # --- Dedup (fine-grained dHash) -----------------------------------------------
 
 # Crops are often near-white text slides that a coarse 9x8 dHash (frames.py's
-# analysis-frame variant) cannot tell apart — two DIFFERENT Confluence pages
+# analysis-frame variant) cannot tell apart – two DIFFERENT Confluence pages
 # hash within a couple of bits and one gets silently eaten. Illustrations are
 # few, so we can afford a 17x16 sidecar → 256-bit hash, which separates text
 # layouts cleanly while a re-shown identical slide (cursor moved, few pixels)
@@ -323,7 +323,7 @@ def _dedup(ffmpeg: str, items: list[dict], threshold: int) -> tuple[list[dict], 
     scaled to the 256-bit hash internally. Entries with `no_dedup` are always
     kept. O(n²) against all kept hashes (illustration counts are tiny, and a
     slide can reappear far apart in time). Removes dropped PNGs from disk and
-    returns (kept, dropped) — dropped entries carry `_dup_of` (the kept id) so
+    returns (kept, dropped) – dropped entries carry `_dup_of` (the kept id) so
     the manifest can report them instead of losing them silently.
     """
     eff = threshold * (_HASH_BITS // 64)
@@ -442,7 +442,7 @@ def main() -> int:
 
     out_dir = Path(args.out_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    # Idempotency: the spec is the desired state — wipe prior crops first.
+    # Idempotency: the spec is the desired state – wipe prior crops first.
     for old in out_dir.glob("ill_*.png"):
         old.unlink()
 
