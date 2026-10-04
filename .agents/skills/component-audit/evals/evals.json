@@ -1,0 +1,37 @@
+[
+  {
+    "skills": ["component-audit"],
+    "query": "I just added a new settings panel to the editor UI. Please audit the components and make sure nothing bypasses our factories.",
+    "files": [".claude/component-inventory.md", "src/ui/settings-panel.js", "src/ui/factories.js", "src/styles.css"],
+    "expected_behavior": [
+      "Loads the inventory from .claude/component-inventory.md and echoes a one-line summary of target files and bypass-pattern count plus the resolved arguments (auditor=claude, rounds=1, breadth=medium)",
+      "Runs the audit in a read-only Explore agent with the filled audit prompt from references/audit-prompt.md, not in the main context",
+      "Classifies each finding into the five buckets (bypass, extend factory, factory candidate, legitimate exception, exception re-examined) and applies the refactors in the same turn",
+      "Updates the inventory for every extended or new factory and every accepted, narrowed or struck exception",
+      "Runs the inventory's recommended verification command and only commits a refactor-only commit when it is green"
+    ]
+  },
+  {
+    "skills": ["component-audit"],
+    "query": "Check our dashboard for duplicated UI construction. We don't have a component inventory yet.",
+    "files": ["dashboard/index.html", "dashboard/app.js", "dashboard/app.css"],
+    "expected_behavior": [
+      "Detects that neither an argument path, .claude/component-inventory.md nor COMPONENT_INVENTORY.md exists and offers to bootstrap an inventory",
+      "Surveys the target files and drafts the inventory following inventory-template.md (target files, factories, layout contracts, grep recipes, exceptions, verification command)",
+      "Checks with git check-ignore whether .claude/ is ignored and chooses COMPONENT_INVENTORY.md in the project root if it is",
+      "Shows the draft to the user for review and does not run the audit against the unreviewed inventory"
+    ]
+  },
+  {
+    "skills": ["component-audit"],
+    "query": "/component-audit auditor=codex rounds=3",
+    "files": ["COMPONENT_INVENTORY.md", "web/main.js", "web/components.js"],
+    "expected_behavior": [
+      "Reads references/codex-auditor.md, verifies codex --version and login, and echoes the active model from ~/.codex/config.toml with the resolved arguments before the first round",
+      "Writes the Codex preamble plus the filled audit prompt to a temp file and runs codex exec -s read-only with stdin from that file, wrapped in a git status --porcelain before/after guard and a 10-minute ceiling",
+      "Captures the thread_id from the thread.started event and resumes the same session with -c sandbox_mode=\"read-only\" and a short re-audit prompt in rounds 2..N",
+      "Updates the inventory and commits separately between rounds, logging accepted and rejected Codex findings in the commit body",
+      "Stops when a round reports zero substantial findings or after 3 rounds, and treats any auditor write or timeout as a failed round"
+    ]
+  }
+]

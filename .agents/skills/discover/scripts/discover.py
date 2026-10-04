@@ -3,7 +3,7 @@
 
 Runs `yt-dlp ytsearch:` queries with a `--dateafter` recency filter, dedupes by
 video ID, ranks by views-per-day, and prints a markdown table. The topic list
-lives in `topics.json` next to this script — edit it to taste.
+lives in `topics.json` next to this script – edit it to taste.
 
 Output rows are tagged with the originating topic so it's clear which queries
 surfaced what. The companion `/watch` skill can then summarize any URL on demand.
@@ -121,7 +121,7 @@ def main() -> int:
         description="Curate recent interesting videos across configured topics via yt-dlp search.",
     )
     ap.add_argument("--days", type=int, default=14,
-                    help="Recency window — only videos uploaded in the last N days (default 14)")
+                    help="Recency window – only videos uploaded in the last N days (default 14)")
     ap.add_argument("--per-query", type=int, default=15,
                     help="Search results to fetch per query before date filter (default 15)")
     ap.add_argument("--top", type=int, default=20,
@@ -208,7 +208,7 @@ def main() -> int:
         return 0
 
     print()
-    print(f"# Discover — top {len(ranked)} videos across {len(topics)} topics, last {args.days} days")
+    print(f"# Discover – top {len(ranked)} videos across {len(topics)} topics, last {args.days} days")
     print()
     print(f"_Ranked by views/day. Pipe any URL through `/watch <url>` for a content summary._")
     print()
