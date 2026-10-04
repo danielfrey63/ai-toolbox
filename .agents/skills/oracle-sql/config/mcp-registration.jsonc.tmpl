@@ -1,5 +1,5 @@
 // =============================================================================
-// oracle-skill — MCP server registration block (TEMPLATE / single source)
+// oracle-sql – MCP server registration block (TEMPLATE / single source)
 // =============================================================================
 // This is the canonical "oracle" entry for the `mcp` object of a Kilo Code
 // (~/.config/kilo/kilo.jsonc) or Claude Code MCP config. It is used three ways:
@@ -7,21 +7,23 @@
 //   * ORACLE_MCP_CLIENT=kilo   -> the setup script inserts the block (below,
 //                                 including its // markers) as the FIRST child
 //                                 of the existing `mcp` object, idempotently,
-//                                 and removes it again on cleanup. No jq — the
+//                                 and removes it again on cleanup. No jq – the
 //                                 surrounding comments and key order survive.
 //   * ORACLE_MCP_CLIENT=print  -> the block is printed for manual paste.
 //   * ORACLE_MCP_CLIENT=claude -> ignored; the script uses `claude mcp add`.
 //
-// The `//>>> oracle-skill:managed` / `//<<< oracle-skill:managed` markers are the
+// The `//>>> oracle-sql:managed` / `//<<< oracle-sql:managed` markers are the
 // idempotency anchor: install skips if present, cleanup deletes between them.
-// Do NOT remove or rename the markers by hand — run `setup.sh cleanup` instead.
+// Blocks with the legacy marker `oracle-skill:managed` are recognised too:
+// install replaces them, cleanup removes them.
+// Do NOT remove or rename the markers by hand – run `setup.sh cleanup` instead.
 //
 // The server exposes ALL of SQLcl's saved connections (e.g. "{{ORACLE_CONN_NAME}}");
-// no credentials appear here — they live in SQLcl's secure store.
+// no credentials appear here – they live in SQLcl's secure store.
 // =============================================================================
-//>>> oracle-skill:managed (oracle-skill skill) — remove via: setup.sh|ps1 cleanup >>>
+//>>> oracle-sql:managed (oracle-sql skill) – remove via: setup.sh|ps1 cleanup >>>
 "oracle": {
   "type": "local",
   "command": ["sql", "-mcp"]
 },
-//<<< oracle-skill:managed <<<
+//<<< oracle-sql:managed <<<

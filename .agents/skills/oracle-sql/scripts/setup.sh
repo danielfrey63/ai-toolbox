@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# oracle-skill setup — provision an Oracle MCP server (Oracle SQLcl `sql -mcp`)
+# oracle-sql setup – provision an Oracle MCP server (Oracle SQLcl `sql -mcp`)
 #                    for natural-language SQL data queries. Bash variant.
 # =============================================================================
 # Idempotent (desired-state): every change is check -> mutate-if-needed ->
@@ -11,7 +11,7 @@
 # What the MCP server is: Oracle SQLcl 25.x/26.x ships a built-in MCP server,
 # launched as `sql -mcp`. It exposes SQLcl's *named, saved connections* to an
 # MCP client (Claude Code, Kilo, ...) so the model can run SQL WITHOUT ever
-# seeing the database password — the credential lives in SQLcl's secure store.
+# seeing the database password – the credential lives in SQLcl's secure store.
 #
 # Config: ./config/oracle.env (copy from oracle.env.tmpl, gitignored).
 # =============================================================================
@@ -46,7 +46,13 @@ MCP_CLIENT="${ORACLE_MCP_CLIENT:-print}"
 # Kilo Code config. Path order: explicit override -> ~/.config/kilo/kilo.jsonc
 # -> ~/.config/kilo.jsonc (some installs flatten it). The marker token is the
 # idempotency anchor; it lives inside the template's // markers.
-KILO_MARKER='oracle-skill:managed'
+# KILO_LEGACY_MARKER is the token written by installs made under the skill's
+# former name (oracle-skill). It is still recognised: install replaces such a
+# block with the current one, cleanup removes it. KILO_ANY_MARKER_RE matches
+# both tokens (ERE, usable in grep -E and awk).
+KILO_MARKER='oracle-sql:managed'
+KILO_LEGACY_MARKER='oracle-skill:managed'
+KILO_ANY_MARKER_RE='(oracle-sql|oracle-skill):managed'
 resolve_kilo_config() {
     if [[ -n "${ORACLE_KILO_CONFIG:-}" ]]; then printf '%s\n' "$ORACLE_KILO_CONFIG"; return; fi
     local c
@@ -63,17 +69,23 @@ have_claude() { command -v claude >/dev/null 2>&1; }
 
 # The managed "oracle" block (marker lines inclusive) sliced from the template,
 # so the template stays the single source of truth. Markers are anchored to the
-# start of the line (^//>>>) so the template's descriptive header — which quotes
-# the marker text mid-line — is not mistaken for the block itself.
+# start of the line (^//>>>) so the template's descriptive header – which quotes
+# the marker text mid-line – is not mistaken for the block itself.
 kilo_managed_block() {
     awk '/^\/\/>>> '"$KILO_MARKER"'/{p=1} p{print} /^\/\/<<< '"$KILO_MARKER"'/{p=0}' \
         "${CONFIG_DIR}/mcp-registration.jsonc.tmpl"
 }
 
-# Marker present in the Kilo config?
+# Desired state: the current managed block is present and no legacy block is.
 kilo_registered() {
     local f; f="$(resolve_kilo_config)"
-    [[ -f "$f" ]] && grep -qF "$KILO_MARKER" "$f"
+    [[ -f "$f" ]] && grep -qF "$KILO_MARKER" "$f" && ! grep -qF "$KILO_LEGACY_MARKER" "$f"
+}
+
+# Any managed block (current or legacy) present? Drives cleanup.
+kilo_any_block() {
+    local f; f="$(resolve_kilo_config)"
+    [[ -f "$f" ]] && grep -qE "$KILO_ANY_MARKER_RE" "$f"
 }
 
 # Match the target file's final-newline state to the reference's, so a rewrite
@@ -86,38 +98,48 @@ kilo_match_eof() {
     fi
 }
 
+# Print <file> without any managed block (current or legacy, markers inclusive).
+kilo_strip_blocks() {
+    awk '
+        /^[[:space:]]*\/\/>>> '"$KILO_ANY_MARKER_RE"'/ {skip=1}
+        !skip { print }
+        /^[[:space:]]*\/\/<<< '"$KILO_ANY_MARKER_RE"'/ {skip=0}
+    ' "$1"
+}
+
 # Insert the managed block as the FIRST child of the `mcp` object (always with a
 # trailing comma -> existing entries are never touched; .jsonc tolerates the
-# trailing comma even if `mcp` was empty). No-op write if no `mcp` opener found.
+# trailing comma even if `mcp` was empty). Any existing managed block (current
+# or legacy) is removed first, so a legacy install is migrated in place.
+# No-op write if no `mcp` opener found.
 kilo_do_install() {
     local f; f="$(resolve_kilo_config)"
     [[ -f "$f" ]] || { warn "Kilo config not found: $f"; return 1; }
-    local blk tmp; blk="$(mktemp)"; tmp="$(mktemp)"
+    local blk stripped tmp; blk="$(mktemp)"; stripped="$(mktemp)"; tmp="$(mktemp)"
     kilo_managed_block > "$blk"
-    cp -- "$f" "${f}.bak"
+    kilo_strip_blocks "$f" > "$stripped"
     awk -v bf="$blk" '
         BEGIN { while ((getline line < bf) > 0) blk[n++]=line }
         { print }
         !done && /"mcp"[[:space:]]*:[[:space:]]*\{[[:space:]]*$/ {
             for (i=0;i<n;i++) print "    " blk[i]; done=1
         }
-    ' "$f" > "$tmp"
-    if ! grep -qF "$KILO_MARKER" "$tmp"; then rm -f "$tmp" "$blk"; return 1; fi
+    ' "$stripped" > "$tmp"
+    rm -f "$stripped" "$blk"
+    if ! grep -qF "$KILO_MARKER" "$tmp"; then rm -f "$tmp"; return 1; fi
+    cp -- "$f" "${f}.bak"
     kilo_match_eof "$f" "$tmp"
-    mv -- "$tmp" "$f"; rm -f "$blk"
+    mv -- "$tmp" "$f"
 }
 
-# Remove the managed block (markers inclusive). Restores the file byte-for-byte.
+# Remove every managed block (current and legacy, markers inclusive). Restores
+# the file byte-for-byte.
 kilo_do_cleanup() {
     local f; f="$(resolve_kilo_config)"
     [[ -f "$f" ]] || return 0
     local tmp; tmp="$(mktemp)"
     cp -- "$f" "${f}.bak"
-    awk '
-        /^[[:space:]]*\/\/>>> '"$KILO_MARKER"'/ {skip=1}
-        !skip { print }
-        /^[[:space:]]*\/\/<<< '"$KILO_MARKER"'/ {skip=0}
-    ' "$f" > "$tmp"
+    kilo_strip_blocks "$f" > "$tmp"
     kilo_match_eof "$f" "$tmp"
     mv -- "$tmp" "$f"
 }
@@ -140,7 +162,7 @@ claude_mcp_registered() {
 # --- sub-commands ------------------------------------------------------------
 cmd_help() {
     cat <<EOF
-oracle-skill setup ${SETUP_VERSION} — Oracle SQLcl MCP for SQL data queries.
+oracle-sql setup ${SETUP_VERSION} – Oracle SQLcl MCP for SQL data queries.
 
 Usage: bash $(basename "$0") <action>
 
@@ -159,25 +181,27 @@ Registration target (ORACLE_MCP_CLIENT in oracle.env):
   kilo    insert/remove the 'oracle' entry in Kilo's kilo.jsonc, idempotently,
           preserving comments (no jq). Path: ORACLE_KILO_CONFIG, else
           ~/.config/kilo/kilo.jsonc, else ~/.config/kilo.jsonc.
+          Blocks with the legacy marker '${KILO_LEGACY_MARKER}' are replaced
+          on install and removed on cleanup.
 
-Prerequisites (not auto-installed — Oracle license/download required):
+Prerequisites (not auto-installed – Oracle license/download required):
   - Oracle SQLcl 25.x/26.x on PATH ('sql')   https://www.oracle.com/database/sqldeveloper/technologies/sqlcl/
   - A JVM (unless using a SQLcl build with bundled GraalVM)
 EOF
 }
 
 cmd_verify() {
-    show_header "oracle-skill verify"
+    show_header "oracle-sql verify"
     local rc=0
 
     checking "Oracle SQLcl ('sql') on PATH"
-    if have_sqlcl; then ok "found: $(command -v sql)"; else warn "missing — install SQLcl 25.x/26.x"; rc=1; fi
+    if have_sqlcl; then ok "found: $(command -v sql)"; else warn "missing – install SQLcl 25.x/26.x"; rc=1; fi
 
     checking "JVM ('java') available"
-    if have_java; then ok "found"; else warn "missing — SQLcl needs Java unless GraalVM-bundled"; rc=1; fi
+    if have_java; then ok "found"; else warn "missing – SQLcl needs Java unless GraalVM-bundled"; rc=1; fi
 
     checking "config file"
-    if [[ -f "$CONFIG_FILE" ]]; then ok "present: ${CONFIG_FILE}"; else warn "absent — run 'install' to scaffold"; rc=1; fi
+    if [[ -f "$CONFIG_FILE" ]]; then ok "present: ${CONFIG_FILE}"; else warn "absent – run 'install' to scaffold"; rc=1; fi
 
     checking "saved SQLcl connection '${CONN_NAME}'"
     if conn_exists; then ok "present"; else warn "not saved yet"; rc=1; fi
@@ -185,11 +209,17 @@ cmd_verify() {
     case "$MCP_CLIENT" in
         kilo)
             checking "Kilo MCP registration 'oracle'"
-            if kilo_registered; then ok "registered in $(resolve_kilo_config)"; else warn "not registered — run 'install'"; rc=1; fi
+            if kilo_registered; then
+                ok "registered in $(resolve_kilo_config)"
+            elif kilo_any_block; then
+                warn "legacy '${KILO_LEGACY_MARKER}' block found – run 'install' to migrate"; rc=1
+            else
+                warn "not registered – run 'install'"; rc=1
+            fi
             ;;
         claude)
             checking "Claude Code MCP registration 'oracle'"
-            if claude_mcp_registered; then ok "registered"; else warn "not registered — run 'install'"; rc=1; fi
+            if claude_mcp_registered; then ok "registered"; else warn "not registered – run 'install'"; rc=1; fi
             ;;
         *)
             checking "Claude Code MCP registration 'oracle'"
@@ -197,12 +227,12 @@ cmd_verify() {
             ;;
     esac
 
-    [[ $rc -eq 0 ]] && ok "ready" || warn "not fully set up — see 'install'"
+    [[ $rc -eq 0 ]] && ok "ready" || warn "not fully set up – see 'install'"
     return $rc
 }
 
 cmd_install() {
-    show_header "oracle-skill install"
+    show_header "oracle-sql install"
 
     if ! have_sqlcl; then
         fail "Oracle SQLcl not on PATH. Install SQLcl 25.x/26.x first (see 'help'), then re-run."
@@ -222,16 +252,16 @@ cmd_install() {
 
     # desired-state: SQLcl named connection saved.
     # NOTE: saving needs a live password and writes to SQLcl's secure store.
-    # This is credential-bearing, so we do not run it blindly — guarded until
+    # This is credential-bearing, so we do not run it blindly – guarded until
     # the exact save syntax is verified against the target SQLcl build.
     if conn_exists; then
-        ok "SQLcl connection '${CONN_NAME}' already saved — nothing to do"
+        ok "SQLcl connection '${CONN_NAME}' already saved – nothing to do"
     else
         warn "connection '${CONN_NAME}' not saved. To save it (creds go to SQLcl's"
         warn "secure store, NOT to the model), run interactively, e.g.:"
         warn "    sql /nolog"
         warn "    SQL> connect -save ${CONN_NAME} -savepwd ${ORACLE_USER:-<user>}@<easyconnect-or-tns>"
-        warn "(MUTATION DEFERRED — see README 'Offene Verifikation' for the exact"
+        warn "(MUTATION DEFERRED – see README 'Deferred mutations' for the exact"
         warn " connect-save syntax per SQLcl version before automating this.)"
     fi
 
@@ -239,7 +269,7 @@ cmd_install() {
     case "$MCP_CLIENT" in
         claude)
             if ! have_claude; then
-                warn "ORACLE_MCP_CLIENT=claude but 'claude' not on PATH — skipping registration"
+                warn "ORACLE_MCP_CLIENT=claude but 'claude' not on PATH – skipping registration"
             else
                 desired_state "Claude Code MCP 'oracle'" \
                     "claude mcp list 2>/dev/null | grep -qiw oracle" \
@@ -253,14 +283,14 @@ cmd_install() {
                 warn "Create it or set ORACLE_KILO_CONFIG, then re-run. Manual snippet for the 'mcp' block:"
                 kilo_managed_block >&2
             elif desired_state "Kilo MCP 'oracle' in ${kf}" "kilo_registered" "kilo_do_install"; then
-                ok "inserted into ${kf} (backup: ${kf}.bak)"
+                ok "registered in ${kf} (backup of the previous version, if changed: ${kf}.bak)"
             else
                 warn "could not auto-insert (no 'mcp' opener line found). Paste this into the 'mcp' block by hand:"
                 kilo_managed_block >&2
             fi
             ;;
         *)
-            info "ORACLE_MCP_CLIENT=print — registration snippet (change nothing):"
+            info "ORACLE_MCP_CLIENT=print – registration snippet (change nothing):"
             sed "s/{{ORACLE_CONN_NAME}}/${CONN_NAME}/g" "${CONFIG_DIR}/mcp-registration.jsonc.tmpl" >&2
             ;;
     esac
@@ -269,7 +299,7 @@ cmd_install() {
 }
 
 cmd_cleanup() {
-    show_header "oracle-skill cleanup"
+    show_header "oracle-sql cleanup"
 
     if have_claude; then
         desired_absent "Claude Code MCP 'oracle'" \
@@ -277,22 +307,22 @@ cmd_cleanup() {
             "claude mcp remove oracle"
     fi
 
-    if kilo_registered; then
+    if kilo_any_block; then
         desired_absent "Kilo MCP 'oracle' in $(resolve_kilo_config)" \
-            "! kilo_registered" "kilo_do_cleanup"
+            "! kilo_any_block" "kilo_do_cleanup"
     else
-        ok "Kilo MCP 'oracle' not present — nothing to remove"
+        ok "Kilo MCP 'oracle' not present – nothing to remove"
     fi
 
     if conn_exists; then
         if confirm_destructive "drop saved SQLcl connection '${CONN_NAME}'?"; then
-            warn "connection drop deferred — on SQLcl 26.1 run it manually:"
+            warn "connection drop deferred – on SQLcl 26.1 run it manually:"
             warn "    sql /nolog"
             warn "    SQL> connmgr delete ${CONN_NAME}"
             warn "(the older 'conn -delete' no longer applies; see README.)"
         fi
     else
-        ok "no saved connection '${CONN_NAME}' — nothing to drop"
+        ok "no saved connection '${CONN_NAME}' – nothing to drop"
     fi
     ok "cleanup done (config file left in place; delete ${CONFIG_FILE} by hand if desired)"
 }

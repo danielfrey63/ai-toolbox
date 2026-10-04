@@ -1,6 +1,6 @@
 # {{MODULE}}
 
-Idempotent setup for **{{MODULE}}** — built on the `idempotent.sh` lib pattern (check → mutate-if-needed → re-verify).
+Idempotent setup for **{{MODULE}}** – built on the `idempotent.sh` lib pattern (check → mutate-if-needed → re-verify).
 
 ## Use
 
@@ -34,7 +34,7 @@ bash setup-{{MODULE}}.sh cleanup     # second run -- no [CHANGING] lines
 bash setup-{{MODULE}}.sh install
 ```
 
-Pass condition: every step exits 0, and the second `install` / second `cleanup` only print `[CHECKING] ... already correct` / `already absent` — never `[CHANGING]`.
+Pass condition: every step exits 0, and the second `install` / second `cleanup` only print `[CHECKING] ... already correct` / `already absent` – never `[CHANGING]`.
 
 ## Configuration
 
@@ -45,6 +45,6 @@ Declarative parameters live in `config.json`; secrets do not. For local secrets 
 | File | Purpose |
 |---|---|
 | `setup-{{MODULE}}.sh` | The setup script. Sub-commands: help/verify/install/cleanup/purge. |
-| `idempotent.sh` | The library — single-file, copy-paste-safe. Source it from the setup script. |
+| `idempotent.sh` | The library – single-file, copy-paste-safe. Source it from the setup script. |
 | `config.json` | Declarative parameters. Optional. |
 | `README.md` | This file. |

@@ -1,0 +1,39 @@
+[
+  {
+    "skills": ["idempotent-devops"],
+    "query": "Write me a setup script that installs nginx on our Ubuntu VM, creates a user 'webapp' and the directory /srv/webapp owned by it, and opens port 443 in ufw. The VM is reachable via ssh as admin@10.0.0.12 on port 2222.",
+    "files": [],
+    "expected_behavior": [
+      "Copies lib/idempotent.sh next to the new script (or into lib/) instead of symlinking or re-implementing the helpers",
+      "Renders the setup script from templates/setup-MODULE.sh.tmpl with help, verify, install and cleanup sub-commands (purge for the user and data directory)",
+      "Wraps every mutation (apt install nginx, useradd, install -d, ufw allow 443) in desired_state with a side-effect-free check; cleanup uses desired_absent",
+      "Uses run_cmd so the same script works locally and via SSH_TARGET=admin@10.0.0.12 SSH_PORT=2222",
+      "Runs bash -n and the help/verify smoke test and reports what verify printed, without running install against the VM unasked"
+    ]
+  },
+  {
+    "skills": ["idempotent-devops"],
+    "query": "Is this deploy script really idempotent? It keeps breaking when I run it a second time.",
+    "files": ["deploy.sh"],
+    "expected_behavior": [
+      "Reads the whole script before judging it",
+      "Flags blind mutators such as an append to /etc/hosts, mkdir without -p, ln -s without -f, useradd without an id guard, git clone into an existing directory",
+      "Notes missing sub-commands (no verify, no cleanup) and silent failures such as unexplained '|| true'",
+      "Groups findings by severity, starting with what breaks on re-run",
+      "Shows a concrete before/after diff per finding using desired_state / desired_absent",
+      "Asks before applying the fixes; after approval refactors in place and validates with bash -n and the verify loop"
+    ]
+  },
+  {
+    "skills": ["idempotent-devops"],
+    "query": "Kampagne durchziehen für scripts/setup-postgres.sh auf meiner lokalen Dev-Box. Purge gibt es auch.",
+    "files": ["scripts/setup-postgres.sh"],
+    "expected_behavior": [
+      "Runs the verify loop in the documented order: verify, install, verify, install, verify, cleanup, verify, cleanup, verify, install, verify",
+      "Because purge exists, adds the purge sequence (cleanup, purge with FORCE=1 if needed, verify, purge, install, verify) and confirms with the user before purging data",
+      "Treats any non-zero exit or any [CHANGING] line in the second install or second cleanup as a failure",
+      "On failure reports the failing step with the relevant output and log lines, fixes the root cause and restarts the loop from the first step",
+      "Ends with a clear pass/fail summary per step"
+    ]
+  }
+]
