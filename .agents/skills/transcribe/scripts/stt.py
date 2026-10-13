@@ -84,10 +84,6 @@ CHUNK_OVERLAP_SECONDS = 20.0
 AZURE_CHUNK_SECONDS_DEFAULT = 600.0
 AZURE_OVERLAP_SECONDS_DEFAULT = 20.0
 AZURE_TIMEOUT_DEFAULT = 900.0
-# Anthropic model (on the Azure AI Foundry passthrough) used to reconcile
-# chunk-local speaker labels into a handful of real speakers.
-AZURE_CLAUDE_MODEL = "claude-opus-4-7"
-
 
 def _get_config(name: str) -> str | None:
     """Look up a config value: `$NAME` first, then ~/.config/transcribe/.env, then
@@ -621,52 +617,20 @@ def _parse_diarized_json(data: dict) -> list[dict]:
 
 
 # ===========================================================================
-# Cross-chunk speaker reconciliation via claude-opus-4-7
+# Cross-chunk speaker reconciliation via the configured LLM (llm.py)
 #
 # Each chunk is diarized independently, so labels are chunk-local (C1-A,
 # C2-B, ...): the same real person appears under many labels, and the
-# diarizer even over-splits one person within a single chunk. claude reads
-# every label's text and collapses them to a handful of real speakers.
+# diarizer even over-splits one person within a single chunk. The text model
+# reads every label's text and collapses them to a handful of real speakers.
 # ===========================================================================
 
 def reconcile_available() -> tuple[bool, str]:
-    """(configured, reason). Speaker reconciliation needs AZURE_CLAUDE_URL +
-    AZURE_CLAUDE_KEY. `reason` names what is missing when not configured."""
-    url = _get_config("AZURE_CLAUDE_URL")
-    key = _get_config("AZURE_CLAUDE_KEY")
-    if url and key:
-        return True, ""
-    missing = [n for n, v in (("AZURE_CLAUDE_URL", url), ("AZURE_CLAUDE_KEY", key)) if not v]
-    return False, f"{' + '.join(missing)} not set"
-
-
-def _post_claude(url: str, key: str, prompt: str, max_tokens: int = 2048) -> tuple[int, str]:
-    """POST to the Anthropic Messages API (Azure AI Foundry passthrough).
-
-    Returns (status, body); status 0 = network failure. Both `x-api-key`
-    (Anthropic-native) and `api-key` (Azure-style) are sent - the server
-    honours whichever it expects and ignores the other.
-    """
-    payload = json.dumps({
-        "model": AZURE_CLAUDE_MODEL,
-        "max_tokens": max_tokens,
-        "messages": [{"role": "user", "content": prompt}],
-    }).encode("utf-8")
-    headers = {
-        "content-type": "application/json",
-        "anthropic-version": "2023-06-01",
-        "x-api-key": key,
-        "api-key": key,
-    }
-    request = Request(url, data=payload, headers=headers, method="POST")
-    context = ssl.create_default_context()
-    try:
-        with urlopen(request, timeout=300, context=context) as response:
-            return response.status, response.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as exc:
-        return exc.code, exc.read().decode("utf-8", errors="replace") if exc.fp else ""
-    except (urllib.error.URLError, TimeoutError, ssl.SSLError, OSError) as exc:
-        return 0, f"network failure: {type(exc).__name__}: {exc}"
+    """(configured, reason). Speaker reconciliation needs a configured LLM
+    provider (see llm.py: Azure chat deployment or the Anthropic passthrough).
+    `reason` names what is missing when not configured."""
+    import llm  # lazy: llm imports the config reader from this module
+    return llm.available()
 
 
 def _build_reconcile_prompt(turns: list[dict]) -> str:
@@ -701,23 +665,10 @@ def _build_reconcile_prompt(turns: list[dict]) -> str:
     )
 
 
-def _parse_claude_mapping(body: str) -> tuple[dict[str, str], dict[str, str]]:
-    """Extract (mapping, names) from a Claude Messages response body."""
-    data = json.loads(body)
-    text = "".join(
-        b.get("text", "") for b in data.get("content", [])
-        if isinstance(b, dict) and b.get("type") == "text"
-    )
-    match = re.search(r"\{.*\}", text, re.S)
-    if not match:
-        raise ValueError(f"no JSON object in Claude reply: {text[:200]}")
-    obj = json.loads(match.group(0))
-    return obj.get("mapping", {}) or {}, obj.get("names", {}) or {}
-
-
 def reconcile_speakers(segments: list[dict]) -> list[dict]:
     """Collapse chunk-local speaker labels (C1-A, C2-B, ...) into a handful
-    of real speakers via claude-opus-4-7, rewriting each segment's `speaker`.
+    of real speakers via the configured LLM (llm.py), rewriting each
+    segment's `speaker`.
 
     On ANY failure (no config, HTTP error, unparseable reply) the chunk-
     tagged labels are kept and a warning printed: a usable transcript with
@@ -728,24 +679,18 @@ def reconcile_speakers(segments: list[dict]) -> list[dict]:
     if not ok:
         print(f"[transcribe] speaker reconciliation skipped: {reason}", file=sys.stderr)
         return segments
-    url = _get_config("AZURE_CLAUDE_URL")
-    key = _get_config("AZURE_CLAUDE_KEY")
+    import llm  # lazy: llm imports the config reader from this module
 
-    print(f"[transcribe] reconciling speaker labels via {AZURE_CLAUDE_MODEL}...", file=sys.stderr)
-    status, body = _post_claude(url, key, _build_reconcile_prompt(merge_speaker_turns(segments)))
-    if status != 200:
-        print(
-            f"[transcribe] speaker reconciliation failed (claude HTTP {status}) - "
-            f"keeping chunk-tagged labels: {body[:200]}",
-            file=sys.stderr,
-        )
-        return segments
+    model = llm.load_config().model("text")
+    print(f"[transcribe] reconciling speaker labels via {model}...", file=sys.stderr)
     try:
-        mapping, names = _parse_claude_mapping(body)
-    except (json.JSONDecodeError, ValueError) as exc:
+        obj = llm.ask_json(_build_reconcile_prompt(merge_speaker_turns(segments)),
+                           role="text", max_tokens=2048, label="reconcile")
+        mapping = obj.get("mapping", {}) or {}
+        names = obj.get("names", {}) or {}
+    except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
         print(
-            f"[transcribe] could not parse reconciliation reply ({exc}) - "
-            "keeping chunk-tagged labels",
+            f"[transcribe] speaker reconciliation failed ({exc}) - keeping chunk-tagged labels",
             file=sys.stderr,
         )
         return segments
@@ -756,7 +701,7 @@ def reconcile_speakers(segments: list[dict]) -> list[dict]:
     n_global = len({(names.get(g) or g) for g in mapping.values()}) if mapping else 0
     print(
         f"[transcribe] reconciled {len(mapping)} chunk-tagged labels into "
-        f"{n_global} speaker(s) via {AZURE_CLAUDE_MODEL}",
+        f"{n_global} speaker(s) via {model}",
         file=sys.stderr,
     )
     return segments
