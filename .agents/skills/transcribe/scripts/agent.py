@@ -91,6 +91,9 @@ def main() -> int:
     ap.add_argument("--stop-at-speakers", action="store_true",
                     help="End after the speaker stage so a person can correct speakers.md")
     ap.add_argument("--no-frames", action="store_true", help="Skip every vision call")
+    ap.add_argument("--redact", action="store_true",
+                    help="Black out person-name lists in the illustration crops (default off; "
+                         "TRANSCRIBE_REDACT=1 in .env makes it the default)")
     args = ap.parse_args()
 
     p = Paths(resolve_base(args.base))
@@ -122,7 +125,7 @@ def main() -> int:
     if "kompakt" in only:
         step("kompakt", "kompakt.py", p.base, lang + force)
     if "illustrate" in only and has_video and not args.no_frames:
-        step("illustrate", "illustrate_agent.py", p.base, lang + force)
+        step("illustrate", "illustrate_agent.py", p.base, lang + force + (["--redact"] if args.redact else []))
     if "report" in only:
         step("report", "report.py", p.base, lang + force + (["--no-frames"] if args.no_frames else []))
     review = write_review(p)

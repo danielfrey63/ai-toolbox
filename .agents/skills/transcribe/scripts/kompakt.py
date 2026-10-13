@@ -109,8 +109,8 @@ def main() -> int:
         return 3
     blocks = read_transcript(p.transcript)
     if not blocks:
-        print(f"[kompakt] no transcript blocks in {p.transcript}", file=sys.stderr)
-        return 2
+        print("[kompakt] transcript is empty (silent or frames-only run) - nothing to condense", file=sys.stderr)
+        return 0
     if not any(b.label for b in blocks):
         print("[kompakt] transcript carries no speaker labels - compact transcript is for diarized runs",
               file=sys.stderr)

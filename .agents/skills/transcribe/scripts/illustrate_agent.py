@@ -89,7 +89,7 @@ def extract(video: Path, stamps: list[float], out: Path) -> dict[float, Path]:
 
 
 def boxes(frames: dict[float, Path], drafts: dict[float, str], language: str | None,
-          context: list[str]) -> dict[float, dict]:
+          context: list[str], redact: bool = False) -> dict[float, dict]:
     out: dict[float, dict] = {}
     items = sorted(frames.items())
     for i in range(0, len(items), 4):
@@ -99,6 +99,7 @@ def boxes(frames: dict[float, Path], drafts: dict[float, str], language: str | N
         obj = llm.ask_json(f"{language_rules(language)} Captions in that language.\n"
                            "Screen context (host read off the screen at that time):\n"
                            + ("\n".join(context) or "- none") +
+                           ("" if redact else f"\n{REDACT_OFF}") +
                            f"\nFrames in this order:\n{listing}", system=BBOX_SYSTEM,
                            images=[p for _, p in batch], role="vision", max_tokens=2000,
                            label=f"illustrate-bbox {i + 1}")
@@ -120,7 +121,22 @@ def render(video: Path, p: Paths) -> list[dict]:
     return m.get("illustrations", []) if isinstance(m, dict) else []
 
 
-def qs(spec: list[dict], manifest: list[dict], frames: dict[float, Path], p: Paths, language: str | None) -> int:
+REDACT_OFF = ("Redaction is OFF for this run: return no redact boxes and do not count visible person "
+              "names as a defect.")
+
+
+def redact_enabled(flag: bool | None) -> bool:
+    """--redact / --no-redact win; else TRANSCRIBE_REDACT (1/true/yes/on); default off.
+    Off by default because the agent stages run on an approved tenant model; switch it
+    on when the crops are published to a wider audience than the recording itself."""
+    if flag is not None:
+        return flag
+    from stt import _get_config
+    return (_get_config("TRANSCRIBE_REDACT") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def qs(spec: list[dict], manifest: list[dict], frames: dict[float, Path], p: Paths, language: str | None,
+       redact: bool = False) -> int:
     """Check every crop; patch spec entries in place. Returns number fixed."""
     by_id = {e["id"]: e for e in spec}
     fixed = 0
@@ -133,7 +149,8 @@ def qs(spec: list[dict], manifest: list[dict], frames: dict[float, Path], p: Pat
         hint = f" The renderer flagged it as suspect: {ill['suspect']}." if ill.get("suspect") else ""
         try:
             v = llm.ask_json(f"{language_rules(language)} Defect and caption in that language.\n"
-                             f"Caption: {e['caption']}.{hint}", system=QS_SYSTEM, images=[frame, crop],
+                             f"Caption: {e['caption']}.{hint}" + ("" if redact else f"\n{REDACT_OFF}"),
+                             system=QS_SYSTEM, images=[frame, crop],
                              role="vision", max_tokens=1200, label=f"illustrate-qs {e['id']}")
         except (RuntimeError, ValueError) as exc:
             print(f"[illustrate-agent] QS {e['id']} failed: {exc}", file=sys.stderr)
@@ -146,7 +163,7 @@ def qs(spec: list[dict], manifest: list[dict], frames: dict[float, Path], p: Pat
             print(f"[illustrate-agent] caption {e['id']}: {v.get('defect', '')}", file=sys.stderr)
         if isinstance(v.get("bbox"), list) and len(v["bbox"]) == 4:
             e["bbox"] = [round(float(x), 3) for x in v["bbox"]]
-            if v.get("redact"):
+            if redact and v.get("redact"):
                 e["redact"] = v["redact"]
             fixed += 1
             print(f"[illustrate-agent] fix {e['id']}: {v.get('defect', '')}", file=sys.stderr)
@@ -160,6 +177,9 @@ def main() -> int:
     ap.add_argument("--force", action="store_true", help="Replace an existing spec")
     ap.add_argument("--max", type=int, default=12, help="Maximum illustrations (default 12)")
     ap.add_argument("--rounds", type=int, default=2, help="Visual-check rounds (default 2)")
+    ap.add_argument("--redact", dest="redact", action="store_true", default=None,
+                    help="Black out lists of person names in the crops (default: TRANSCRIBE_REDACT, else off)")
+    ap.add_argument("--no-redact", dest="redact", action="store_false", help="Force redaction off")
     args = ap.parse_args()
 
     p = Paths(resolve_base(args.base))
@@ -188,6 +208,8 @@ def main() -> int:
     chapters = analysis.get("chapters", []) if isinstance(analysis, dict) else []
 
     context = screen_context(p.links)
+    redact = redact_enabled(args.redact)
+    print(f"[illustrate-agent] redaction {'on' if redact else 'off'}", file=sys.stderr)
     sel = select(frames_desc, chapters, args.max, args.language, context)
     picks = [x for x in sel.get("picks", []) if x.get("ts")][: args.max]
     if not picks:
@@ -199,7 +221,7 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="transcribe-ill-") as tmp:
         frames = extract(video, [x["_t"] for x in picks], Path(tmp))
-        bx = boxes(frames, {x["_t"]: x["caption"] for x in picks}, args.language, context)
+        bx = boxes(frames, {x["_t"]: x["caption"] for x in picks}, args.language, context, redact)
         spec = []
         for i, x in enumerate(picks, 1):
             b = bx.get(x["_t"])
@@ -208,7 +230,7 @@ def main() -> int:
             entry = {"id": i, "timestamp": round(x["_t"], 1), "bbox": [round(float(v), 3) for v in b["bbox"]],
                      "caption": (b.get("caption") or x["caption"]).strip(), "type": x.get("type", "Screenshot"),
                      "_t": x["_t"]}
-            if b.get("redact"):
+            if redact and b.get("redact"):
                 entry["redact"] = b["redact"]
             spec.append(entry)
 
@@ -218,7 +240,7 @@ def main() -> int:
         save()
         manifest = render(video, p)
         for rnd in range(1, args.rounds + 1):
-            n = qs(spec, manifest, frames, p, args.language)
+            n = qs(spec, manifest, frames, p, args.language, redact)
             print(f"[illustrate-agent] QS round {rnd}: {n} fixed", file=sys.stderr)
             if not n:
                 break
