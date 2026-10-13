@@ -101,6 +101,8 @@ When the user names a moment ("around 2:30", "the last 30 seconds", "from 0:45 t
 
 ## Install
 
+**Windows / VS Code Copilot / team rollout:** The [installation and operations guide](./references/windows-team-rollout.md) (German) covers cloning an approved version, linking it into a project, runtime setup, the chat deployment for `agent.py`, the acceptance test, data protection, updates and rollback. Adapt the SBB-specific operating rules to your own team.
+
 `/transcribe` lives in the [AI-Toolbox](https://github.com/danielfrey63/ai-toolbox) at `.agents/skills/transcribe/`. Clone the toolbox first:
 
 ```bash
