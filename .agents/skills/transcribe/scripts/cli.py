@@ -37,6 +37,21 @@ def parse(ap: argparse.ArgumentParser, argv: list[str] | None = None) -> argpars
     return ap.parse_args(argv)
 
 
+def help_guard(doc: str | None, usage: str, *, exit_codes: dict[int, str] | None = None,
+               argv: list[str] | None = None) -> None:
+    """For scripts that parse argv by hand (the venv workers): print usage and
+    docstring for -h, --help or no arguments, then exit 0."""
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] not in ("-h", "--help"):
+        return
+    print(f"usage: {usage}\n\n{(doc or '').strip()}")
+    if exit_codes:
+        print("\nexit codes:")
+        for code, text in sorted(exit_codes.items()):
+            print(f"  {code:<3} {text}")
+    raise SystemExit(0)
+
+
 def parse_known(ap: argparse.ArgumentParser, argv: list[str] | None = None) -> tuple[argparse.Namespace, list[str]]:
     argv = sys.argv[1:] if argv is None else argv
     _help_if_empty(ap, argv)

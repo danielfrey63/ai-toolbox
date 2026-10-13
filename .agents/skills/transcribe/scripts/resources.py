@@ -271,19 +271,20 @@ if __name__ == "__main__":
     import json
     import sys
 
-    if len(sys.argv) < 2:
-        print(
-            "usage: resources.py <info.json> [<vtt-or-transcript-json>]",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
+    import cli
 
-    info = json.loads(open(sys.argv[1]).read())
+    ap = cli.parser(__doc__, exit_codes={0: "done, Resources section on stdout", 2: "usage error"},
+                    examples=["python resources.py info.json transcript.vtt"])
+    ap.add_argument("info", help="yt-dlp info JSON (its description is scanned for links)")
+    ap.add_argument("transcript", nargs="?", help="VTT file or segments JSON to scan as well")
+    cli_args = cli.parse(ap)
+
+    info = json.loads(open(cli_args.info, encoding="utf-8").read())
     description = info.get("description", "") or ""
 
     segments: list[dict] = []
-    if len(sys.argv) >= 3:
-        path = sys.argv[2]
+    if cli_args.transcript:
+        path = cli_args.transcript
         if path.endswith(".json"):
             segments = json.loads(open(path).read())
         else:

@@ -447,8 +447,12 @@ def download(source: str, out_dir: Path) -> dict:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("usage: download.py <url-or-path> <out-dir>", file=sys.stderr)
-        raise SystemExit(2)
-    result = download(sys.argv[1], Path(sys.argv[2]))
+    import cli
+
+    ap = cli.parser(__doc__, exit_codes={0: "done, result as JSON on stdout", 1: "download error", 2: "usage error"},
+                    examples=['python download.py "https://youtu.be/..." ./work'])
+    ap.add_argument("source", help="URL (yt-dlp) or local file")
+    ap.add_argument("out_dir", help="Working directory for the download")
+    args = cli.parse(ap)
+    result = download(args.source, Path(args.out_dir))
     print(json.dumps(result, indent=2))

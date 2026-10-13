@@ -81,6 +81,11 @@ def _env_float(name: str, default: float, lo: float, hi: float) -> float:
 
 
 def main() -> int:
+    import cli
+
+    cli.help_guard(__doc__, "whisper_local_worker.py <audio> [<language>] [--hotwords TERMS] [--no-carryover]   "
+                   "(internal: runs inside the managed venv)",
+                   exit_codes={0: "segments as JSON on stdout", 1: "model or decoding error"})
     argv = list(sys.argv[1:])
     carryover = "--no-carryover" not in argv
     if not carryover:

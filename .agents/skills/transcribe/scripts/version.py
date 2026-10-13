@@ -39,4 +39,10 @@ APP_VERSION = _read_version()
 
 
 if __name__ == "__main__":
+    import sys
+
+    if sys.argv[1:] and sys.argv[1] in ("-h", "--help"):
+        print("usage: version.py\n\nPrints the skill version from .claude-plugin/plugin.json "
+              "(\"unknown\" without a manifest).\n\nA bare call prints the version.")
+        raise SystemExit(0)
     print(APP_VERSION)

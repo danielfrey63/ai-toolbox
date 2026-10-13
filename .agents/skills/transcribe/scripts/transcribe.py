@@ -350,9 +350,16 @@ def selftest() -> int:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) >= 2 and sys.argv[1] == "--selftest":
+    import cli
+
+    ap = cli.parser(__doc__, exit_codes={0: "done (selftest passed)", 1: "selftest failed", 2: "usage error"},
+                    examples=['python transcribe.py "<base>.original.vtt"   # print the parsed transcript',
+                              "python transcribe.py --selftest"])
+    ap.add_argument("vtt", nargs="?", help="WebVTT file to parse and print as transcript")
+    ap.add_argument("--selftest", action="store_true", help="Run the built-in parser tests")
+    args = cli.parse(ap)
+    if args.selftest:
         raise SystemExit(selftest())
-    if len(sys.argv) < 2:
-        print("usage: transcribe.py <vtt-path> | --selftest", file=sys.stderr)
-        raise SystemExit(2)
-    print(format_transcript(parse_vtt(sys.argv[1])))
+    if not args.vtt:
+        ap.error("a VTT file or --selftest is required")
+    print(format_transcript(parse_vtt(args.vtt)))

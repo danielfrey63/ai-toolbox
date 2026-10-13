@@ -17,7 +17,7 @@ Segment shape produced by all three:
     {"start": float, "end": float, "text": str, "speaker": str | None}
 
 The `speaker` field is a short label (`"A"`, `"B"`, `"SPEAKER_00"`, ...).
-Mapping speaker labels to real names is done later by Claude using
+Mapping speaker labels to real names is done later by the agent stage using
 transcript context (address patterns like "Andrea, ..." -> next speaker = A).
 
 Pure stdlib except for the optional `pyannote.audio` import in the local
@@ -484,15 +484,16 @@ def align_speakers(segments: list[dict], turns: list[dict]) -> list[dict]:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print(
-            "usage: diarize.py <backend> <audio.mp3>\n"
-            "  backend: assemblyai | pyannote-api | pyannote-local",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-    backend = sys.argv[1]
-    audio = Path(sys.argv[2]).expanduser().resolve()
+    import cli
+
+    ap = cli.parser(__doc__, exit_codes={0: "done, speaker turns as JSON on stdout", 1: "backend error",
+                                         2: "usage error"},
+                    examples=["python diarize.py pyannote-local audio.mp3 > turns.json"])
+    ap.add_argument("backend", choices=["assemblyai", "pyannote-api", "pyannote-local"], help="Diarization backend")
+    ap.add_argument("audio", help="Audio file (mp3/wav)")
+    args = cli.parse(ap)
+    backend = args.backend
+    audio = Path(args.audio).expanduser().resolve()
 
     if backend == "assemblyai":
         segs = diarize_assemblyai(audio)

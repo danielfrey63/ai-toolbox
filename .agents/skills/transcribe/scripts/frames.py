@@ -804,37 +804,27 @@ def gap_fill_timestamps(
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print(
-            "usage: frames.py <video-path> <out-dir> [--fps F] [--resolution W] "
-            "[--max-frames N] [--start T] [--end T]",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
+    import cli
 
-    video = sys.argv[1]
-    out = Path(sys.argv[2])
-    args = sys.argv[3:]
-
-    fps_override = None
-    resolution = 512
-    max_frames = 100
-    start_arg = None
-    end_arg = None
-    i = 0
-    while i < len(args):
-        if args[i] == "--fps":
-            fps_override = float(args[i + 1]); i += 2
-        elif args[i] == "--resolution":
-            resolution = int(args[i + 1]); i += 2
-        elif args[i] == "--max-frames":
-            max_frames = int(args[i + 1]); i += 2
-        elif args[i] == "--start":
-            start_arg = args[i + 1]; i += 2
-        elif args[i] == "--end":
-            end_arg = args[i + 1]; i += 2
-        else:
-            i += 1
+    ap = cli.parser(__doc__, exit_codes={0: "done, frame list as JSON on stdout", 1: "ffmpeg error",
+                                         2: "usage error"},
+                    examples=['python frames.py "<recording.mp4>" ./frames --max-frames 40',
+                              'python frames.py "<recording.mp4>" ./frames --start 1:00 --end 2:00'])
+    ap.add_argument("video", help="Video file")
+    ap.add_argument("out_dir", help="Directory for the extracted JPEGs")
+    ap.add_argument("--fps", type=float, default=None, help="Override the automatic frame rate")
+    ap.add_argument("--resolution", type=int, default=512, help="Frame width in pixels (default 512)")
+    ap.add_argument("--max-frames", type=int, default=100, help="Cap on frame count (default 100)")
+    ap.add_argument("--start", default=None, help="Range start (SS, MM:SS or HH:MM:SS)")
+    ap.add_argument("--end", default=None, help="Range end (SS, MM:SS or HH:MM:SS)")
+    cli_args = cli.parse(ap)
+    video = cli_args.video
+    out = Path(cli_args.out_dir)
+    fps_override = cli_args.fps
+    resolution = cli_args.resolution
+    max_frames = cli_args.max_frames
+    start_arg = cli_args.start
+    end_arg = cli_args.end
 
     meta = get_metadata(video)
     start_sec = parse_time(start_arg)

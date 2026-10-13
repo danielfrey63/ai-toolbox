@@ -12,7 +12,7 @@ The hardening below is battle-tested on Windows (2026-06):
 - in-memory waveform via soundfile, bypassing fragile torchaudio decoders
 - speaker count on auto: forcing num_speakers collapses onto the dominant
   voice on single-mic recordings; surplus clusters are merged later by
-  Claude from transcript context
+  the agent stage from transcript context
 """
 from __future__ import annotations
 
@@ -29,6 +29,10 @@ def log(msg: str) -> None:
 
 
 def main() -> int:
+    import cli
+
+    cli.help_guard(__doc__, "pyannote_worker.py <audio>   (internal: runs inside the managed venv)",
+                   exit_codes={0: "turns as JSON on stdout", 1: "HF_TOKEN missing or model error"})
     audio_path = Path(sys.argv[1])
     hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
     if not hf_token:

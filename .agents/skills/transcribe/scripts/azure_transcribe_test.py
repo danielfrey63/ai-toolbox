@@ -91,8 +91,12 @@ def _concat_by_speaker(turns: list[dict]) -> dict[str, str]:
 
 
 def main() -> int:
+    import cli
+
+    cli.help_guard(__doc__, "azure_transcribe_test.py <audio> [--backend NAME] ...",
+                   exit_codes={0: "done", 2: "usage error or audio file not found"})
     args = list(sys.argv[1:])
-    if not args or args[0].startswith("-"):
+    if args[0].startswith("-"):
         print(__doc__)
         return 2
 

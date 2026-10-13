@@ -1224,23 +1224,19 @@ def transcribe_video(
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print(
-            "usage: stt.py <video-or-audio> [<audio-out.mp3>] "
-            f"[--backend {'|'.join(BACKEND_FACTORIES)}]",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
+    import cli
 
-    source = sys.argv[1]
-    audio_out = (
-        Path(sys.argv[2])
-        if len(sys.argv) > 2 and not sys.argv[2].startswith("--")
-        else Path("audio.mp3")
-    )
-    backend_override = None
-    if "--backend" in sys.argv:
-        backend_override = sys.argv[sys.argv.index("--backend") + 1]
+    ap = cli.parser(__doc__, exit_codes={0: "done, transcript on stdout", 1: "transcription error",
+                                         2: "usage error"},
+                    examples=['python stt.py "<recording.mp4>" --backend whisper-local'])
+    ap.add_argument("source", help="Video or audio file")
+    ap.add_argument("audio_out", nargs="?", default="audio.mp3", help="Where the extracted audio goes (default audio.mp3)")
+    ap.add_argument("--backend", choices=list(BACKEND_FACTORIES), default=None,
+                    help="Force a backend (default: the configured cascade)")
+    cli_args = cli.parse(ap)
+    source = cli_args.source
+    audio_out = Path(cli_args.audio_out)
+    backend_override = cli_args.backend
 
     from transcribe import format_transcript
 
