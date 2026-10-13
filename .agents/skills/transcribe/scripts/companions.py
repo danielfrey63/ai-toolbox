@@ -74,9 +74,46 @@ class Paths:
     @property
     def manifest(self) -> Path: return self.illustrations / "manifest.json"
     @property
-    def glossary(self) -> Path: return self.base.parent / "transcribe-glossary.txt"
+    def glossary(self) -> Path: return input_file(self.base, "glossary") or input_candidates(self.base, "glossary")[-1]
     @property
-    def participants_file(self) -> Path: return self.base.parent / "transcribe-participants.txt"
+    def participants_file(self) -> Path:
+        return input_file(self.base, "participants") or input_candidates(self.base, "participants")[-1]
+
+
+# --- Optional inputs next to the recording -----------------------------------
+# Two names per kind, first match wins: `<base>.<kind>.txt` belongs to one
+# recording, `transcribe-<kind>.txt` serves every recording in the folder.
+
+INPUT_KINDS = {"participants": "names", "glossary": "terms"}
+
+
+def input_candidates(base: Path, kind: str) -> list[Path]:
+    return [base.with_name(f"{base.name}.{kind}.txt"), base.parent / f"transcribe-{kind}.txt"]
+
+
+def input_file(base: Path, kind: str) -> Path | None:
+    return next((c for c in input_candidates(base, kind) if c.is_file()), None)
+
+
+def read_input_lines(path: Path | None) -> list[str]:
+    """Entries of a participants or glossary file: one per line, `#` starts a comment."""
+    if not path or not path.is_file():
+        return []
+    lines = (l.split("#", 1)[0].strip() for l in path.read_text(encoding="utf-8", errors="replace").splitlines())
+    return [l for l in lines if l]
+
+
+def input_status(base: Path) -> list[str]:
+    """One line per kind for the start of a run: which file was found, or which names were tried."""
+    out = []
+    for kind, unit in INPUT_KINDS.items():
+        found = input_file(base, kind)
+        if found:
+            out.append(f"{kind}: {found.name} ({len(read_input_lines(found))} {unit})")
+        else:
+            tried = ", ".join(c.name for c in input_candidates(base, kind))
+            out.append(f"{kind}: none - looked for {tried}")
+    return out
 
 
 def ts_seconds(ts: str) -> float:
@@ -257,10 +294,7 @@ def screen_context(path: Path) -> list[str]:
 
 
 def read_glossary(path: Path) -> list[str]:
-    if not path.is_file():
-        return []
-    return [l.strip() for l in path.read_text(encoding="utf-8", errors="replace").splitlines()
-            if l.strip() and not l.startswith("#")]
+    return read_input_lines(path)
 
 
 def read_links_text(path: Path) -> str:

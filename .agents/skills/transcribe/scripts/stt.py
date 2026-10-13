@@ -1071,7 +1071,6 @@ def preflight(backend: STTBackend, audio_seconds: float) -> list[str]:
     return problems
 
 
-GLOSSARY_NAME = "transcribe-glossary.txt"
 # Hotwords share the decoder's 448-token prompt budget with the context
 # carryover (faster-whisper clamps each to 223 tokens), so an unbounded
 # glossary leaves no decoding room and the run dies with "The maximum
@@ -1083,21 +1082,26 @@ GLOSSARY_NAME = "transcribe-glossary.txt"
 HOTWORDS_CHAR_BUDGET = 300
 
 
-def load_hotwords(media_dir: Path | None = None) -> str | None:
+def load_hotwords(source: Path | None = None) -> str | None:
     """Collect domain glossary terms for hotword biasing.
 
-    Merges `<media_dir>/transcribe-glossary.txt` (per recording folder)
+    Merges the recording's glossary (`<base>.glossary.txt`, else
+    `transcribe-glossary.txt` in its folder; see companions.input_file)
     first, then `~/.config/transcribe/glossary.txt` (global) - the
     recording-specific terms matter more, so they survive when the budget
     truncates. One term per line, `#` starts a comment, blank lines
     ignored. Returns a comma-separated string (faster-whisper's hotwords
-    format) or None when no glossary exists.
+    format) or None when no glossary exists. `source` is the local
+    recording; None for URL sources, which have no folder of their own.
     """
+    from companions import input_file, resolve_base
     from setup import CONFIG_DIR
 
     candidates = []
-    if media_dir is not None:
-        candidates.append(Path(media_dir) / GLOSSARY_NAME)
+    if source is not None:
+        local = input_file(resolve_base(Path(source)), "glossary")
+        if local:
+            candidates.append(local)
     candidates.append(CONFIG_DIR / "glossary.txt")
 
     terms: list[str] = []

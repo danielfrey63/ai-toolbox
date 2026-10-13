@@ -202,7 +202,7 @@ Erst danach den Stand für andere freigeben. Sprechertrennung und OCR bei Bedarf
 
 1. Berechtigung, Klassifikation, Agent-Endpunkt und Ablageort prüfen.
 2. Aufnahme nach `YYYYMMDD-hhmm - Thema` benennen. Datum und Teilnehmer kontrollieren; Dateimetadaten sind nur Hinweise.
-3. Optional `transcribe-glossary.txt` und `transcribe-participants.txt` neben die Aufnahme legen: Fachbegriffe bzw. `Name - Rolle` je Zeile.
+3. Optional Glossar und Teilnehmerliste neben die Aufnahme legen: Fachbegriffe bzw. `Name - Rolle` je Zeile. Pro Aufnahme heissen sie `<Name>.glossary.txt` und `<Name>.participants.txt`, für alle Aufnahmen im Ordner `transcribe-glossary.txt` und `transcribe-participants.txt`. Die Datei pro Aufnahme hat Vorrang. `run.py` und `agent.py` melden zu Beginn, welche Datei sie gefunden haben.
 4. Entweder `pipeline.py` mit absolutem Aufnahmepfad, Sprache und `--local` aufrufen, oder `/transcribe` im Agenten mit Aufnahmepfad, Sprache und gewünschter Fragestellung. Für vertrauliche Aufnahmen lokale Backends ausdrücklich festlegen (`--local`).
 5. Bei mehreren Sprechern `pipeline.py … --stop-at-speakers` verwenden, die offenen Zuordnungen in `speakers.md` prüfen und korrigieren, dann denselben Befehl ohne `--stop-at-speakers` erneut aufrufen.
 6. Bericht und Transkript anhand `review.md` prüfen: Eigennamen, Zahlen, Sprecher, Bildausschnitte, Entscheidungen und Aufgaben nicht ungeprüft übernehmen. Unsicherheiten kennzeichnen.

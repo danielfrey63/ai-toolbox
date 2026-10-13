@@ -59,7 +59,7 @@ Defaults:
 
 ## Domain glossary
 
-No flag, file-based. Whisper mishears rare domain vocabulary (product names, people, project jargon) as similar everyday words. Put a `transcribe-glossary.txt` next to the source (one term per line, `#` comments) and/or maintain `~/.config/transcribe/glossary.txt`. Both are merged (recording-local first) and passed to whisper-local as faster-whisper `hotwords`; the repair pass uses them too. Cloud backends ignore the glossary.
+No flag, file-based. Whisper mishears rare domain vocabulary (product names, people, project jargon) as similar everyday words. Put a `<name>.glossary.txt` (this recording) or `transcribe-glossary.txt` (every recording in the folder) next to the source - the first one found wins, one term per line, `#` comments - and/or maintain `~/.config/transcribe/glossary.txt`. Both are merged (recording-local first) and passed to whisper-local as faster-whisper `hotwords`; the repair pass uses them too. Cloud backends ignore the glossary.
 
 - The glossary shares the decoder's 448-token prompt budget and is truncated at 300 characters (about 20–30 terms) from the bottom. Put the most-misheard terms first and prefer bare surnames over full names.
 - An overlong glossary leaves no decoding room (`The maximum decoding length must be > 0`); the worker clamps it and, if it still trips, retries once without biasing.

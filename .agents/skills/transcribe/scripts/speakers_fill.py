@@ -18,23 +18,29 @@ Rules (same as report-writing.md):
   neither                                             -> name left empty
 
 Idempotent: a speakers.md whose labels are all named is left alone unless
---force. The human edits the same file; a re-run never overwrites a
-non-empty Name cell without --force.
+--force, and so is one that nobody touched since the last fill (same file,
+transcript and participants list - the stamp carries their hash). The human
+edits the same file; a re-run never overwrites a non-empty Name cell
+without --force.
 """
 from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import hashlib
 import json
 import re
 import sys
 from pathlib import Path
 
 import llm
-from companions import Paths, language_rules, read_speakers, read_transcript, resolve_base
+from companions import (Paths, language_rules, read_input_lines, read_speakers, read_transcript, resolve_base,
+                        unique_people)
 from version import APP_VERSION
 
 OPEN_HEADING = "## Open attributions"
+STAMP_RE = re.compile(r"_Names proposed by speakers_fill\.py[^\n]*_")
+HASH_RE = re.compile(r"input ([0-9a-f]{12})")
 
 SYSTEM = """You map diarization labels of a meeting transcript to real people.
 
@@ -69,14 +75,24 @@ def _rows_to_text(rows: list[dict]) -> str:
     )
 
 
-def build_prompt(sp: dict, blocks, language: str | None) -> str:
+def input_hash(p: Paths) -> str:
+    """Hash over everything a person can change between two fills: speakers.md
+    without the stamp line, the transcript and the participants file."""
+    h = hashlib.sha256()
+    for path in (p.speakers, p.transcript, p.participants_file):
+        text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+        h.update(STAMP_RE.sub("", text).encode("utf-8") + b"\0")
+    return h.hexdigest()[:12]
+
+
+def build_prompt(sp: dict, participants: list[str], blocks, language: str | None) -> str:
     evidence = sp["text"].split("## Evidence", 1)[1] if "## Evidence" in sp["text"] else ""
     transcript = "\n".join(b.line() for b in blocks)
     return (
         f"{language_rules(language)} Evidence and quotes in that language, labels and names verbatim.\n\n"
         f"## Labels (from diarization)\n{_rows_to_text(sp['labels'])}\n\n"
-        f"## Participants (name plates, caption voices, transcribe-participants.txt)\n"
-        + ("\n".join(f"- {p}" for p in sp["participants"]) or "- none listed") +
+        f"## Participants (name plates, caption voices, participants file)\n"
+        + ("\n".join(f"- {n}" for n in participants) or "- none listed") +
         f"\n\n## Evidence the script found\n{evidence.strip()}\n\n"
         f"## Transcript\n{transcript}\n"
     )
@@ -142,9 +158,18 @@ def write_back(path: Path, result: dict, model: str, force: bool) -> tuple[int, 
     if "_Names proposed by speakers_fill.py" not in new_text:
         new_text = new_text.replace("\n## Labels\n", f"\n{stamp}\n\n## Labels\n", 1)
     else:
-        new_text = re.sub(r"_Names proposed by speakers_fill\.py[^\n]*_", stamp, new_text, count=1)
+        new_text = STAMP_RE.sub(lambda _: stamp, new_text, count=1)
     path.write_text(new_text + ("" if new_text.endswith("\n") else "\n"), encoding="utf-8")
     return named, len(result.get("open") or [])
+
+
+def stamp_hash(p: Paths) -> None:
+    """Record the input hash in the stamp write_back just wrote, computed on
+    the files as they are now (after --apply rewrote transcript and vtt)."""
+    h = input_hash(p)
+    text = p.speakers.read_text(encoding="utf-8")
+    text = STAMP_RE.sub(lambda m: m.group(0).replace("; the human", f", input {h}; the human", 1), text, count=1)
+    p.speakers.write_text(text, encoding="utf-8")
 
 
 def main() -> int:
@@ -173,6 +198,12 @@ def main() -> int:
         print(f"[speakers-fill] all {len(sp['labels'])} labels named and open list present - skip (use --force)",
               file=sys.stderr)
         return 0
+    stamp = STAMP_RE.search(sp["text"])
+    last = HASH_RE.search(stamp.group(0)) if stamp else None
+    if last and last.group(1) == input_hash(p) and not args.force:
+        print(f"[speakers-fill] speakers.md, transcript and participants unchanged since the last fill - skip "
+              f"(edit speakers.md or use --force)", file=sys.stderr)
+        return 0
     blocks = read_transcript(p.transcript)
     if not blocks:
         print(f"[speakers-fill] no transcript blocks in {p.transcript}", file=sys.stderr)
@@ -181,7 +212,9 @@ def main() -> int:
     model = llm.load_config().model("text")
     print(f"[speakers-fill] asking {model} about {len(sp['labels'])} label(s), {len(blocks)} blocks...",
           file=sys.stderr)
-    result = llm.ask_json(build_prompt(sp, blocks, args.language), system=SYSTEM, role="text",
+    # A participants file added after run.py pre-filled speakers.md counts too.
+    participants = unique_people(sp["participants"] + read_input_lines(p.participants_file))
+    result = llm.ask_json(build_prompt(sp, participants, blocks, args.language), system=SYSTEM, role="text",
                           max_tokens=4000, label="speakers-fill")
     if args.dry_run:
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -195,6 +228,7 @@ def main() -> int:
         overrides = speakers_mod.parse_overrides(p.speakers)
         touched = speakers_mod.apply_to_files(p.base, mapping, overrides)
         print(f"[speakers-fill] applied {len(mapping)} name(s) to {len(touched)} file(s)", file=sys.stderr)
+    stamp_hash(p)
     return 0
 
 

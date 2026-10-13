@@ -36,7 +36,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-PARTICIPANTS_FILE = "transcribe-participants.txt"
+from companions import input_file, read_input_lines, resolve_base  # noqa: E402
+
+PARTICIPANTS_HINT = "`<name>.participants.txt` or `transcribe-participants.txt`"
 LABEL_RE = re.compile(r"^(SPEAKER_\d+|[A-Z])$")
 # Teams tile / dialog name plates as RapidOCR reads them:
 #   «Berger Thomas (IT-I-CEN4)», «Simab Asmatullah (IT-I-CE...», «Berger,Thomas[00223016]»
@@ -125,18 +127,13 @@ def voices_from_vtt(path: Path | None) -> list[dict]:
     return out
 
 
-def participants_from_file(folder: Path | None) -> list[str]:
-    if not folder:
-        return []
-    p = folder / PARTICIPANTS_FILE
-    if not p.is_file():
-        return []
-    names = []
-    for raw in p.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = raw.split("#", 1)[0].strip()
-        if line:
-            names.append(line)
-    return names
+def participants_file(source: Path | None) -> Path | None:
+    """`<base>.participants.txt`, else `transcribe-participants.txt` next to the recording."""
+    return input_file(resolve_base(source), "participants") if source else None
+
+
+def participants_from_file(source: Path | None) -> list[str]:
+    return read_input_lines(participants_file(source))
 
 
 def _name_tokens(name: str) -> list[str]:
@@ -199,11 +196,13 @@ def voice_alignment(segments: list[dict], voices: list[dict]) -> dict[str, dict]
 # --- Rendering --------------------------------------------------------------
 
 def prefill(title: str, segments: list[dict], ocr: dict | None, vtt_path: Path | None,
-            folder: Path | None, version: str = "unknown") -> str:
+            source: Path | None, version: str = "unknown") -> str:
+    """`source` is the local recording (or its base); None for URL sources."""
     stats = label_stats(segments)
     plates = participants_from_ocr(ocr)
     voices = voices_from_vtt(vtt_path)
-    listed = participants_from_file(folder)
+    listed_file = participants_file(source)
+    listed = read_input_lines(listed_file)
     voice_names = sorted({v["name"] for v in voices})
     names = list(dict.fromkeys([p["name"] for p in plates] + voice_names + listed))
     hits = address_hits(segments, names)
@@ -259,10 +258,10 @@ def prefill(title: str, segments: list[dict], ocr: dict | None, vtt_path: Path |
         for v in voice_names:
             lines.append(f"| {v} | caption voice tag |")
         for n in listed:
-            lines.append(f"| {n} | {PARTICIPANTS_FILE} |")
+            lines.append(f"| {n} | {listed_file.name} |")
     else:
         lines.append(
-            f"_None found on screen or in captions. List them in `{PARTICIPANTS_FILE}` next to the "
+            f"_None found on screen or in captions. List them in {PARTICIPANTS_HINT} next to the "
             f"recording (one per line, `Name - role` allowed) and delete this file to pre-fill again._"
         )
     lines += ["", "## Evidence", "", "### Self-introductions", ""]
@@ -439,7 +438,7 @@ def main() -> int:
         ocr_p = base.with_name(base.name + ".ocr.json")
         ocr = json.loads(ocr_p.read_text(encoding="utf-8")) if ocr_p.is_file() else None
         print(prefill(base.name, align_speakers(segs, turns), ocr,
-                      base.with_name(base.name + ".original.vtt"), base.parent))
+                      base.with_name(base.name + ".original.vtt"), base))
         return 0
     if args.apply:
         base = Path(args.apply)

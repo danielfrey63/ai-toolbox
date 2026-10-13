@@ -23,10 +23,10 @@ Steps 3–5 (reading frames, naming speakers, compact transcript, illustrations,
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/scripts/llm.py"                       # configured? which deployments?
-python3 "${CLAUDE_SKILL_DIR}/scripts/pipeline.py" "<local file>" --language de [--local]
+python3 "${CLAUDE_SKILL_DIR}/scripts/pipeline.py" "<source>" --language de [--local]
 ```
 
-`pipeline.py` chains `setup.py --check`, `run.py` and `agent.py`; for a URL source call `run.py "<source>"` and then `agent.py "<base>"` yourself. `agent.py` runs `speakers_fill.py`, `kompakt.py`, `illustrate_agent.py` and `report.py` against the model set in `~/.config/transcribe/.env` (`AZURE_LLM_ENDPOINT`, `AZURE_LLM_KEY`, `AZURE_LLM_MODEL`; see `.env.example`). It writes the same companion files as the interactive path plus `<base>.review.md`, the list of human gates (speaker attributions, illustrations, report review). Every stage is idempotent; `--force` redoes, `--only` picks stages, `--stop-at-speakers` ends at the speaker gate. The report's `Datenfluss` line names the model and what it received.
+`pipeline.py` chains `setup.py --check`, `run.py` and `agent.py` for a local file or a URL (a URL is downloaded again on every call; re-run on the downloaded file or the printed `<base>`). `agent.py` runs `speakers_fill.py`, `kompakt.py`, `illustrate_agent.py` and `report.py` against the model set in `~/.config/transcribe/.env` (`AZURE_LLM_ENDPOINT`, `AZURE_LLM_KEY`, `AZURE_LLM_MODEL`; see `.env.example`). It writes the same companion files as the interactive path plus `<base>.review.md`, the list of human gates (speaker attributions, illustrations, report review). Every stage is idempotent; `--force` redoes, `--only` picks stages, `--stop-at-speakers` ends at the speaker gate. The report's `Datenfluss` line names the model and what it received.
 
 **Choose headless when** an agent other than Claude runs the skill (Copilot, Codex), the run is unattended, or data must stay on an approved tenant deployment. **Choose interactive when** no model is configured or the user wants to steer the report. When `llm.py` reports a configured provider and the user did not ask for the interactive path, prefer `pipeline.py` (or `agent.py` after an existing `run.py` pass), then answer from the files it wrote (Step 5 reply format).
 
@@ -88,9 +88,9 @@ Pass the source verbatim with normal quoting. Defaults are right for most runs. 
 
 **Transcript source decision (automatic):** native captions in the video's own language win for URLs; otherwise, and for local files, the on-device STT cascade runs. A cached transcript from a previous run outranks captions. The protocol header names the source. Details: `references/pipeline.md`.
 
-**Domain glossary:** for recordings with rare names or jargon, put a `transcribe-glossary.txt` next to the source (one term per line, most-misheard first, max about 300 characters). Feed every term the user corrects back into it. Details: `references/options.md`.
+**Domain glossary:** for recordings with rare names or jargon, put a `<name>.glossary.txt` (this recording) or `transcribe-glossary.txt` (every recording in the folder) next to the source; the first one found wins (one term per line, most-misheard first, max about 300 characters). Feed every term the user corrects back into it. Details: `references/options.md`.
 
-**Cast list:** a `transcribe-participants.txt` next to the recording (`Name - role` per line) is the cheapest way to give the speaker mapping its candidates.
+**Cast list:** a `<name>.participants.txt` or `transcribe-participants.txt` next to the recording (`Name - role` per line, first one found wins; run.py and agent.py report at the start which file they found) is the cheapest way to give the speaker mapping its candidates.
 
 ## Step 3 – Read frames and transcript
 
@@ -129,7 +129,7 @@ Evidence streams:
 
 Wrap paths containing spaces in angle brackets: `![…](<my video.illustrations/ill_01….png>)`.
 
-**Speaker mapping (diarized runs only).** The script pre-fills `<base>.speakers.md` once: one row per label with talk time, turn count and active window, the participants found (OCR name plates, `<v Name>` tags of a platform VTT, `transcribe-participants.txt`), address hits («Simon, …») with the labels speaking before and after, self-introductions and caption-voice overlap (pre-filled `high` at ≥ 60 %). Do the identification **in that file**:
+**Speaker mapping (diarized runs only).** The script pre-fills `<base>.speakers.md` once: one row per label with talk time, turn count and active window, the participants found (OCR name plates, `<v Name>` tags of a platform VTT, the participants file), address hits («Simon, …») with the labels speaking before and after, self-introductions and caption-voice overlap (pre-filled `high` at ≥ 60 %). Do the identification **in that file**:
 
 - Fill **Name** (canonical first name; `Andrea B` / `Andrea T` on collision), **Confidence** and **Evidence** for every label the evidence carries.
 - Frame (or caption-voice) evidence AND address-pattern evidence = high. One of the two = medium, write the name with `(?)`. Neither = leave Name empty.

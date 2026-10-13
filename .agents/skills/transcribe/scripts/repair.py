@@ -588,7 +588,7 @@ def main() -> int:
     hotwords = args.hotwords
     if hotwords is None and source is not None:
         from stt import load_hotwords
-        hotwords = load_hotwords(source.resolve().parent)
+        hotwords = load_hotwords(source.resolve())
 
     fixed, report = repair_segments(segments, source, language=args.language,
                                     dry_run=args.dry_run, hotwords=hotwords)

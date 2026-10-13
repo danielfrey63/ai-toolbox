@@ -33,7 +33,7 @@ import sys
 from pathlib import Path
 
 import llm
-from companions import Paths, read_protocol, read_speakers, resolve_base
+from companions import Paths, input_status, read_protocol, read_speakers, resolve_base
 from version import APP_VERSION
 
 HERE = Path(__file__).resolve().parent
@@ -113,6 +113,8 @@ def main() -> int:
     force = ["--force"] if args.force else []
     has_video = bool(read_protocol(p.protocol).get("frames"))
     print(f"[agent] {p.base.name} | {llm.load_config().describe()}", file=sys.stderr)
+    for line in input_status(p.base):
+        print(f"[agent] {line}", file=sys.stderr)
 
     if "frames" in only and has_video and not args.no_frames:
         import report

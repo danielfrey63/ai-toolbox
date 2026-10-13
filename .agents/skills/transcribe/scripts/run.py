@@ -223,7 +223,7 @@ from transcribe import (  # noqa: E402
 )
 from stt import extract_audio, load_hotwords, select_backend, select_backends, transcribe_video  # noqa: E402
 from version import APP_VERSION  # noqa: E402
-from companions import REPORT_STUB_NOTE  # noqa: E402
+from companions import REPORT_STUB_NOTE, input_status, resolve_base  # noqa: E402
 import cpu  # noqa: E402
 
 
@@ -541,6 +541,11 @@ def main() -> int:
     print(f"[transcribe] transcript: {stt_status} | {diarize_active}", file=sys.stderr)
     if args.diarize:
         print(f"[transcribe] {diarize_status}", file=sys.stderr)
+    # Optional inputs next to a local recording, reported before the long stages start.
+    local_source = Path(args.source).resolve() if not is_url(args.source) else None
+    if local_source:
+        for line in input_status(resolve_base(local_source)):
+            print(f"[transcribe] {line}", file=sys.stderr)
 
     print(
         "[transcribe] downloading via yt-dlp..." if is_url(args.source) else "[transcribe] using local file...",
@@ -561,12 +566,10 @@ def main() -> int:
     # captions-only - but it still belongs in the report header.
     gated_audio = bool(download_error) and dl.get("media_kind") == "audio"
 
-    # Domain glossary for hotword biasing: global config glossary plus a
-    # transcribe-glossary.txt next to a local source file (URL sources have
+    # Domain glossary for hotword biasing: global config glossary plus the
+    # recording's glossary next to a local source file (URL sources have
     # no stable folder, so only the global one applies there).
-    hotwords = load_hotwords(
-        Path(args.source).resolve().parent if not is_url(args.source) else None
-    )
+    hotwords = load_hotwords(local_source)
 
     # URL-source default: ./transcribe/<YYYY-MM-DD>-<slug>/<slug>.md. Per-video
     # subfolder + date prefix keeps multiple runs sortable; folder leaves room
@@ -1146,7 +1149,7 @@ def main() -> int:
                             (dl.get("info") or {}).get("title") or Path(args.source).name,
                             transcript_segments, ocr_result,
                             speakers_file.with_name(f"{speakers_file.name[:-len('.speakers.md')]}.original.vtt"),
-                            Path(args.source).resolve().parent if not is_url(args.source) else None,
+                            local_source,
                             APP_VERSION,
                         ) + "\n",
                         encoding="utf-8",
