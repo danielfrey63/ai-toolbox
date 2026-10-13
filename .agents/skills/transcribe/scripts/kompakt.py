@@ -18,6 +18,7 @@ import datetime as _dt
 import sys
 from pathlib import Path
 
+import cli
 import llm
 from companions import (Block, Paths, fmt_ts, language_rules, read_glossary, read_json, read_protocol,
                         read_speakers, read_transcript, references_from_links, resolve_base,
@@ -93,11 +94,13 @@ def render(p: Paths, title: str, chapters: list[dict], statements: dict[int, lis
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = cli.parser(__doc__, exit_codes={0: "done, skipped or nothing to condense",
+                                             3: "chat deployment not configured"},
+                    examples=['python kompakt.py "<base or recording>" --language de'])
     ap.add_argument("base", help="<base> stem or any companion file of the recording")
     ap.add_argument("--language", default=None, help="Language of the output, e.g. de")
     ap.add_argument("--force", action="store_true", help="Rewrite an existing compact transcript")
-    args = ap.parse_args()
+    args = cli.parse(ap)
 
     p = Paths(resolve_base(args.base))
     if p.kompakt.is_file() and not args.force:

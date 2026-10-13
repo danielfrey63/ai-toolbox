@@ -367,8 +367,12 @@ def _probe(image: Path | None) -> int:
 
 
 def main() -> int:
-    import argparse
-    ap = argparse.ArgumentParser(description="LLM client for /transcribe - probe the configured deployments.")
+    import cli
+    # Bare call = status of the configured deployments (its own meaning, not the help).
+    ap = cli.parser(__doc__, exit_codes={0: "status shown or probe done", 2: "--probe without a configured "
+                                         "deployment"},
+                    examples=["python llm.py              # show the configured deployments",
+                              "python llm.py --probe --image some.png"])
     ap.add_argument("--probe", action="store_true", help="Call every configured role once (text, optionally image)")
     ap.add_argument("--image", type=Path, default=None, help="Image file for the vision probe")
     args = ap.parse_args()

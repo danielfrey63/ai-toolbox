@@ -169,7 +169,7 @@ The whole pipeline runs without Claude or any other chat agent. `run.py` does th
 
 3. Read the results next to the recording: `<base>.md` (report with a `Datenfluss` line naming the model and what it received), `<base>.transcript-kompakt.md`, `<base>.speakers.md`, `<base>.illustrations/`, and `<base>.review.md` – the list of points a person checks before anything is published.
 
-`pipeline.py` and `agent.py` options: `--stop-at-speakers` ends after the speaker stage so `speakers.md` can be corrected first (the next call continues), `--only speakers,kompakt,illustrate,report` runs a subset (`agent.py` only), `--force` redoes finished stages, `--redact` blacks out person-name lists in the crops (off by default; `TRANSCRIBE_REDACT=1` makes it the default), `--no-frames` skips every image call. Each stage is idempotent and can also be called on its own (`speakers_fill.py`, `kompakt.py`, `illustrate_agent.py`, `report.py`).
+`pipeline.py` and `agent.py` options: `--stop-at-speakers` ends after the speaker stage so `speakers.md` can be corrected first (the next call continues), `--only speakers,kompakt,illustrate,report` runs a subset (`agent.py` only), `--force` redoes finished stages, `--redact` blacks out person-name lists in the crops (off by default; `TRANSCRIBE_REDACT=1` makes it the default; on a finished run it only adds the redaction boxes and re-renders the crops, selection and captions stay), `--no-redact` removes it again, `--no-frames` skips every image call. Each stage is idempotent and can also be called on its own (`speakers_fill.py`, `kompakt.py`, `illustrate_agent.py`, `report.py`). Every script prints its full help with options, examples and exit codes for `-h`, `--help` or a call without arguments; only `setup.py` (installer) and `llm.py` (configuration status) give the bare call its own meaning.
 
 For a quick first test take a few minutes of a recording: `pipeline.py "<recording.mp4>" --start 0 --end 5:00`. A full 40-minute meeting takes about ten minutes for the agent stages.
 
@@ -275,6 +275,7 @@ Other knobs (passed to `scripts/run.py`):
 │   ├── setup.py             # preflight + installer + .env scaffolding + managed-venv provisioning
 │   ├── llm.py               # chat client for the agent stages (Azure OpenAI / Anthropic passthrough), --probe
 │   ├── pipeline.py          # one command: setup check → run.py → agent.py
+│   ├── cli.py               # shared help convention: -h, --help or no arguments print the full help
 │   ├── agent.py             # headless orchestrator: speakers → kompakt → illustrations → report → review.md
 │   ├── speakers_fill.py     # fills speakers.md, lists contributions filed under another label
 │   ├── kompakt.py           # compact transcript, chapters first, then per-chapter condensing

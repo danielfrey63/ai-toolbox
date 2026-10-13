@@ -9,7 +9,7 @@ both texts, scores each window with a token-level SequenceMatcher ratio,
 and reports the windows below threshold as a review list.
 
 The tool never decides which source is right - it only flags divergence.
-The review list (<base>.crosscheck.md) is meant for Claude's validation
+The review list (<base>.crosscheck.md) is meant for the agent's validation
 pass: resolve each flagged window from context/frames/glossary, and put
 the rest in front of the user as the "unsichere Stellen" to re-listen to.
 
@@ -25,6 +25,8 @@ import re
 import sys
 from difflib import SequenceMatcher
 from pathlib import Path
+
+import cli
 
 # Absolute ceiling for "divergent". The effective threshold is adaptive:
 # min(this, mean - stdev) over the recording's own window ratios. A pair
@@ -195,14 +197,14 @@ def main() -> int:
         except (AttributeError, ValueError):
             pass
 
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = cli.parser(__doc__, exit_codes={0: "done", 2: "usage error"},
+                    examples=['python crosscheck.py --segments "<base>.segments.json" --vtt "<base>.original.vtt"'])
     ap.add_argument("--segments", required=True, help="<base>.segments.json")
     ap.add_argument("--vtt", required=True, help="platform captions (e.g. <base>.original.vtt)")
     ap.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
     ap.add_argument("--window", type=float, default=DEFAULT_WINDOW)
     ap.add_argument("-o", "--out", help="write the review file here (default: stdout)")
-    args = ap.parse_args()
+    args = cli.parse(ap)
 
     payload = json.loads(Path(args.segments).read_text(encoding="utf-8"))
     segments = payload["segments"] if isinstance(payload, dict) else payload

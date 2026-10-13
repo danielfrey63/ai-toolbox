@@ -33,6 +33,7 @@ import re
 import sys
 from pathlib import Path
 
+import cli
 import llm
 from companions import (Paths, language_rules, read_input_lines, read_speakers, read_transcript, resolve_base,
                         unique_people)
@@ -173,13 +174,15 @@ def stamp_hash(p: Paths) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = cli.parser(__doc__, exit_codes={0: "done or nothing to do", 2: "no speakers.md or no transcript",
+                                             3: "chat deployment not configured"},
+                    examples=['python speakers_fill.py "<base or recording>" --language de --apply'])
     ap.add_argument("base", help="<base> stem or any companion file of the recording")
     ap.add_argument("--language", default=None, help="Language of evidence and quotes, e.g. de")
     ap.add_argument("--force", action="store_true", help="Overwrite names the file already carries")
     ap.add_argument("--apply", action="store_true", help="Run speakers.py --apply afterwards")
     ap.add_argument("--dry-run", action="store_true", help="Print the model's JSON, write nothing")
-    args = ap.parse_args()
+    args = cli.parse(ap)
 
     p = Paths(resolve_base(args.base))
     if not p.speakers.is_file():

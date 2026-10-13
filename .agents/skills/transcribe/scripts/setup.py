@@ -1633,6 +1633,18 @@ Flags:
                       when the target already resolves (the escape hatch for a
                       stale or broken copy on PATH)
   -h, --help          this text
+
+Exit codes of --check:
+  0    a transcription path is ready (check local_venv.ready in --json for
+       the local-only path)
+  2    tools missing: run setup.py
+  3    no transcription path: run setup.py --venv
+  4    tools and transcription path missing: run setup.py
+
+Examples:
+  python setup.py --check
+  python setup.py --venv
+  python setup.py              # interactive installer
 """
 
 COMMANDS = {

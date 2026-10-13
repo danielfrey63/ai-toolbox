@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Crop decisive illustrations out of key video frames at native resolution.
 
-This runs *after* Claude has watched the 512px analysis frames and decided
+This runs *after* the agent has watched the 512px analysis frames and decided
 which ones carry an essential diagram / chart / architecture slide. The
 deterministic work – re-extracting those moments at full resolution, cropping
-to the region Claude marked, trimming the surrounding chrome, and dropping
+to the region the agent marked, trimming the surrounding chrome, and dropping
 duplicate slides – lives here so the model only does the genuinely analytical
 part (which frame, which region, what caption).
 
@@ -18,7 +18,7 @@ Pipeline per spec entry:
   3. Dedup via the existing dHash machinery (`frames._dhash_from_file`): a
      slide shown across several cuts collapses to one crop.
   4. Write `manifest.json` (surviving crops with caption/timestamp/type) for
-     Claude to embed into the report and surface via SendUserFile.
+     the agent to embed into the report.
 
 Spec JSON (list):
   [ { "id": 1, "timestamp": 734.0, "bbox": [0.08, 0.12, 0.84, 0.76],
@@ -51,6 +51,8 @@ import subprocess
 import cpu
 import sys
 from pathlib import Path
+
+import cli
 
 # Windows consoles default to cp1252; captions carry arrows/dashes that would
 # raise UnicodeEncodeError mid-print AFTER the crops are already written,
@@ -367,7 +369,10 @@ def _fmt_ts(t: float) -> str:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Crop key illustrations out of video frames.")
+    ap = cli.parser(__doc__, exit_codes={0: "done", 1: "no crops produced", 2: "usage or spec error"},
+                    examples=['python illustrate.py --video "<recording>" --spec "<base>.illustrations.spec.json" '
+                              '--out-dir "<base>.illustrations"',
+                              'python illustrate.py --video "<recording>" --sheet --interval 30'])
     ap.add_argument("--refine-worker", nargs="+", metavar="PNG",
                     help="(internal) refine these PNGs in place under Pillow, then exit")
     ap.add_argument("--video", help="source video (local file or downloaded path)")
@@ -391,7 +396,7 @@ def main() -> int:
                          "(seconds; use transcript timestamps to pick the window)")
     ap.add_argument("--step", type=float, default=10.0,
                     help="--extract-range: seconds between sampled frames (default 10)")
-    args = ap.parse_args()
+    args = cli.parse(ap)
 
     # Internal re-exec path: just refine and exit (runs inside `uv run --with pillow`).
     if args.refine_worker:

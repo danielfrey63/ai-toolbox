@@ -18,9 +18,13 @@ this script only makes the three judgement calls the session used to make:
 
 The spec <base>.illustrations.spec.json stays the single source of truth;
 illustrate.py renders it. Idempotent: an existing spec is kept unless --force.
+When only the redaction setting differs from the one the spec was built
+with, the redaction boxes are added or removed and the crops re-rendered;
+selection, boxes and captions - and so the report's image links - stay.
 
   python illustrate_agent.py "<base or any companion>" [--language de]
                              [--force] [--max 12] [--rounds 2]
+                             [--redact | --no-redact]
 """
 from __future__ import annotations
 
@@ -31,6 +35,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import cli
 import llm
 from companions import (Paths, fmt_ts, language_rules, read_json, read_protocol, resolve_base, screen_context,
                         ts_seconds,
@@ -55,6 +60,10 @@ QS_SYSTEM = """You check a cropped illustration against its source frame and cap
 Image 1 is the full frame, image 2 is the crop. Defects: the crop does not show what the caption claims; browser bar, taskbar, meeting tiles or window chrome inside the crop; a transient overlay (tooltip, error dialog, loading spinner) covering the content; content cut off mid-element although it is fully visible in the frame; unredacted lists of person names that are not the subject.
 Return ONLY a JSON object {"ok": true|false, "defect": "<short, empty when ok>", "bbox": [x, y, w, h] (corrected box in normalized FULL-FRAME coordinates, only when not ok), "redact": [[x, y, w, h], ...] (only when names must be hidden), "caption": "<corrected caption, only when the crop is right but the caption misnames what it shows>"}.
 A caption that names things not visible in the crop is fixed via "caption", not via "bbox"."""
+
+REDACT_SYSTEM = """You mark personal data to black out in screenshots of a screen share.
+For EACH frame you get the crop region as normalized [x, y, w, h] of the full frame. Inside that region, find lists of real person names, user IDs or e-mail addresses that are not the subject of the illustration.
+Return ONLY a JSON object {"frames": [{"ts": "<as given>", "redact": [[x, y, w, h], ...]}]} with boxes in normalized FULL-FRAME coordinates; an empty list when there is nothing to hide."""
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess:
@@ -125,14 +134,20 @@ REDACT_OFF = ("Redaction is OFF for this run: return no redact boxes and do not 
               "names as a defect.")
 
 
-def redact_enabled(flag: bool | None) -> bool:
-    """--redact / --no-redact win; else TRANSCRIBE_REDACT (1/true/yes/on); default off.
-    Off by default because the agent stages run on an approved tenant model; switch it
-    on when the crops are published to a wider audience than the recording itself."""
+def redact_setting(flag: bool | None) -> bool | None:
+    """--redact / --no-redact win; else TRANSCRIBE_REDACT (1/true/yes/on, 0/false/no/off);
+    None when neither is set - an existing spec then keeps its state, a new one is built
+    without redaction. Off by default because the agent stages run on an approved tenant
+    model; switch it on when the crops reach a wider audience than the recording itself."""
     if flag is not None:
         return flag
     from stt import _get_config
-    return (_get_config("TRANSCRIBE_REDACT") or "").strip().lower() in ("1", "true", "yes", "on")
+    env = (_get_config("TRANSCRIBE_REDACT") or "").strip().lower()
+    if env in ("1", "true", "yes", "on"):
+        return True
+    if env in ("0", "false", "no", "off"):
+        return False
+    return None
 
 
 def qs(spec: list[dict], manifest: list[dict], frames: dict[float, Path], p: Paths, language: str | None,
@@ -163,37 +178,97 @@ def qs(spec: list[dict], manifest: list[dict], frames: dict[float, Path], p: Pat
             print(f"[illustrate-agent] caption {e['id']}: {v.get('defect', '')}", file=sys.stderr)
         if isinstance(v.get("bbox"), list) and len(v["bbox"]) == 4:
             e["bbox"] = [round(float(x), 3) for x in v["bbox"]]
-            if redact and v.get("redact"):
-                e["redact"] = v["redact"]
             fixed += 1
             print(f"[illustrate-agent] fix {e['id']}: {v.get('defect', '')}", file=sys.stderr)
+        if redact and v.get("redact") and v["redact"] != e.get("redact"):
+            e["redact"] = v["redact"]
+            fixed += 1
+            print(f"[illustrate-agent] redact {e['id']}: {v.get('defect', '')}", file=sys.stderr)
     return fixed
 
 
+def spec_redaction(spec: list[dict]) -> bool:
+    """Whether the spec was built with redaction on. Specs from before the
+    "redaction" field were built with the default, which is off."""
+    return bool(spec) and all(e.get("redaction") == "on" for e in spec)
+
+
+def set_redaction(spec: list[dict], video: Path, p: Paths, redact: bool) -> None:
+    """Switch an existing spec to the requested redaction without touching
+    selection, boxes or captions - the crop file names, and with them the
+    report's image links, stay the same."""
+    if redact:
+        with tempfile.TemporaryDirectory(prefix="transcribe-ill-") as tmp:
+            frames = extract(video, [float(e["timestamp"]) for e in spec], Path(tmp))
+            items = [(e, frames.get(float(e["timestamp"]))) for e in spec]
+            items = [(e, f) for e, f in items if f]
+            for i in range(0, len(items), 4):
+                batch = items[i:i + 4]
+                listing = "\n".join(f"{k + 1}. ts={fmt_ts(float(e['timestamp']))} | region {e.get('bbox')}"
+                                    for k, (e, _) in enumerate(batch))
+                obj = llm.ask_json(f"Frames in this order:\n{listing}", system=REDACT_SYSTEM,
+                                   images=[f for _, f in batch], role="vision", max_tokens=1500,
+                                   label=f"illustrate-redact {i + 1}")
+                got = obj.get("frames", []) or []
+                by_ts = {g.get("ts"): g for g in got}
+                for k, (e, _) in enumerate(batch):
+                    g = by_ts.get(fmt_ts(float(e["timestamp"]))) or (got[k] if k < len(got) else {})
+                    boxes_ = [b for b in (g.get("redact") or []) if isinstance(b, list) and len(b) == 4]
+                    if boxes_:
+                        e["redact"] = boxes_
+                    else:
+                        e.pop("redact", None)
+    else:
+        for e in spec:
+            e.pop("redact", None)
+    for e in spec:
+        e["redaction"] = "on" if redact else "off"
+    write_json(p.spec, spec)
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = cli.parser(__doc__, exit_codes={0: "done, skipped or nothing to illustrate",
+                                             3: "chat deployment not configured"},
+                    examples=['python illustrate_agent.py "<base or recording>" --language de',
+                              'python illustrate_agent.py "<base or recording>" --redact   # add redaction only'])
     ap.add_argument("base", help="<base> stem or any companion file of the recording")
-    ap.add_argument("--language", default=None)
+    ap.add_argument("--language", default=None, help="Language of the captions, e.g. de")
     ap.add_argument("--force", action="store_true", help="Replace an existing spec")
     ap.add_argument("--max", type=int, default=12, help="Maximum illustrations (default 12)")
     ap.add_argument("--rounds", type=int, default=2, help="Visual-check rounds (default 2)")
     ap.add_argument("--redact", dest="redact", action="store_true", default=None,
-                    help="Black out lists of person names in the crops (default: TRANSCRIBE_REDACT, else off)")
-    ap.add_argument("--no-redact", dest="redact", action="store_false", help="Force redaction off")
-    args = ap.parse_args()
+                    help="Black out lists of person names in the crops (default: TRANSCRIBE_REDACT, else the state of the existing spec, else off)")
+    ap.add_argument("--no-redact", dest="redact", action="store_false", help="Remove redaction from existing crops, or build new ones without")
+    args = cli.parse(ap)
 
     p = Paths(resolve_base(args.base))
-    if p.spec.is_file() and not args.force:
-        print(f"[illustrate-agent] spec exists - skip (use --force): {p.spec}", file=sys.stderr)
+    existing = read_json(p.spec) if p.spec.is_file() and not args.force else None
+    setting = redact_setting(args.redact)
+    if isinstance(existing, list) and existing:
+        redact = spec_redaction(existing) if setting is None else setting
+    else:
+        redact = bool(setting)
+    if isinstance(existing, list) and existing and spec_redaction(existing) == redact:
+        print(f"[illustrate-agent] spec exists, redaction {'on' if redact else 'off'} - skip (use --force): "
+              f"{p.spec}", file=sys.stderr)
         return 0
     ok, reason = llm.available()
-    if not ok:
+    if not ok and (existing is None or redact):
         print(f"[illustrate-agent] skipped: LLM not configured ({reason})", file=sys.stderr)
         return 3
     proto = read_protocol(p.protocol)
     video = video_path(proto, p)
     if not video:
         print("[illustrate-agent] no video next to the report - nothing to illustrate", file=sys.stderr)
+        return 0
+    if isinstance(existing, list) and existing:
+        print(f"[illustrate-agent] spec exists - switching redaction {'on' if redact else 'off'} "
+              f"(selection, boxes and captions unchanged)", file=sys.stderr)
+        set_redaction(existing, video, p, redact)
+        manifest = render(video, p)
+        n = sum(1 for e in existing if e.get("redact"))
+        print(f"[illustrate-agent] {len(manifest)} illustration(s), {n} with redaction -> {p.illustrations}",
+              file=sys.stderr)
         return 0
     fj = read_json(p.frames_json)
     if not (isinstance(fj, dict) and fj.get("frames")):
@@ -208,7 +283,6 @@ def main() -> int:
     chapters = analysis.get("chapters", []) if isinstance(analysis, dict) else []
 
     context = screen_context(p.links)
-    redact = redact_enabled(args.redact)
     print(f"[illustrate-agent] redaction {'on' if redact else 'off'}", file=sys.stderr)
     sel = select(frames_desc, chapters, args.max, args.language, context)
     picks = [x for x in sel.get("picks", []) if x.get("ts")][: args.max]
@@ -229,7 +303,7 @@ def main() -> int:
                 continue
             entry = {"id": i, "timestamp": round(x["_t"], 1), "bbox": [round(float(v), 3) for v in b["bbox"]],
                      "caption": (b.get("caption") or x["caption"]).strip(), "type": x.get("type", "Screenshot"),
-                     "_t": x["_t"]}
+                     "redaction": "on" if redact else "off", "_t": x["_t"]}
             if redact and b.get("redact"):
                 entry["redact"] = b["redact"]
             spec.append(entry)

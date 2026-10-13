@@ -32,6 +32,8 @@ import re
 import sys
 from pathlib import Path
 
+import cli
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
@@ -423,12 +425,13 @@ def _ts_seconds(ts: str) -> float:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap = cli.parser(__doc__, exit_codes={0: "done", 2: "usage error"},
+                    examples=['python speakers.py --apply "<base>"', 'python speakers.py --prefill "<base>"'])
     ap.add_argument("--prefill", metavar="BASE",
                     help="print the pre-filled speakers.md for <BASE> (needs <BASE>.segments.json + .turns.json)")
     ap.add_argument("--apply", metavar="BASE",
                     help="substitute the names of <BASE>.speakers.md into <BASE>.transcript.md and .vtt")
-    args = ap.parse_args()
+    args = cli.parse(ap)
     if args.prefill:
         from diarize import align_speakers  # noqa: PLC0415
 

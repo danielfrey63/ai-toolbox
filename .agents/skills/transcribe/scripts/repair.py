@@ -41,6 +41,8 @@ import tempfile
 import unicodedata
 from pathlib import Path
 
+import cli
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
@@ -555,8 +557,9 @@ def main() -> int:
         except (AttributeError, ValueError):
             pass
 
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = cli.parser(__doc__, exit_codes={0: "done", 1: "selftest failures", 2: "usage error"},
+                    examples=['python repair.py --selftest',
+                              'python repair.py --segments "<base>.segments.json" --video "<recording>" --dry-run'])
     ap.add_argument("--segments", help="<base>.segments.json")
     ap.add_argument("--audio", help="audio file (mp3/wav)")
     ap.add_argument("--video", help="source video - audio is cut from it directly")
@@ -570,7 +573,7 @@ def main() -> int:
     ap.add_argument("--selftest", action="store_true",
                     help="run the detection regression cases and exit")
     ap.add_argument("-o", "--out", help="write result here (default: in place)")
-    args = ap.parse_args()
+    args = cli.parse(ap)
 
     if args.selftest:
         return selftest()

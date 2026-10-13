@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""/transcribe entry point: download video, extract frames, parse transcript.
+"""Local stages of /transcribe: download, frames, OCR, transcript, diarization.
 
-Prints a markdown report to stdout listing frame paths + transcript. Claude
-then Reads each frame path to see the video.
+Writes the companion files next to the recording (<base>.protocol.md,
+.transcript.md, .speakers.md, .links.md, .vtt, the report stub <base>.md)
+and prints the protocol to stdout. Nothing leaves the machine with the
+local backends (--whisper whisper-local, --diarize pyannote-local). The
+agent stages follow: agent.py, the chat agent, or pipeline.py for both.
 """
 from __future__ import annotations
 
@@ -18,6 +21,8 @@ import tempfile
 import time
 import unicodedata
 from pathlib import Path
+
+import cli
 
 
 # Make stdout/stderr UTF-8-safe before any print() runs. Windows consoles
@@ -234,10 +239,10 @@ ANALYSIS_MARKERS = ("## Übersicht", "## Summary", "## Analysis")
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(
-        prog="transcribe",
-        description="Download a video, extract auto-scaled frames, and surface the transcript.",
-    )
+    ap = cli.parser(__doc__, exit_codes={0: "done", 1: "error (message on stderr)", 2: "usage error"},
+                    examples=['python run.py "<recording.mp4>" --language de --whisper whisper-local',
+                              'python run.py "<recording.mp4>" --start 0 --end 5:00 --no-diarize',
+                              'python run.py "https://youtu.be/..." --language en'])
     ap.add_argument(
         "--version",
         action="version",
@@ -443,7 +448,7 @@ def main() -> int:
              "manual run on the same recording takes over instead of "
              "competing - see joblock.py.",
     )
-    args = ap.parse_args()
+    args = cli.parse(ap)
 
     if args.no_diarize:
         args.diarize = None

@@ -45,6 +45,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+import cli
 from urllib.parse import parse_qsl, unquote_plus, urlencode, urlparse, urlunparse
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -478,7 +480,7 @@ def format_links(refs: list[dict], title: str, n_frames: int, min_score: float,
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap = cli.parser(__doc__, exit_codes={0: "done", 2: "OCR unavailable or usage error"})
     ap.add_argument("--worker", action="store_true", help="internal: run inside the uv env")
     ap.add_argument("--frames", help="worker: JSON spec with video/ffmpeg/frames")
     ap.add_argument("--out-dir", help="worker: where native PNGs go")
@@ -488,7 +490,7 @@ def main() -> int:
                     help="worker: ONNX Runtime provider to use")
     ap.add_argument("--render", help="re-render links.md from an existing <base>.ocr.json")
     ap.add_argument("--min-score", type=float, default=DEFAULT_MIN_SCORE)
-    args = ap.parse_args()
+    args = cli.parse(ap)
     if args.worker:
         return worker(args)
     if args.render:

@@ -31,6 +31,7 @@ import re
 import sys
 from pathlib import Path
 
+import cli
 import llm
 from companions import (REPORT_STUB_NOTE, Paths, fmt_ts, language_rules, read_glossary, read_json, read_protocol, read_speakers,
                         read_transcript, references_from_links, resolve_base, ts_seconds, write_json)
@@ -286,13 +287,16 @@ def write_report(p: Paths, body: str, flow: str, force: bool) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = cli.parser(__doc__, exit_codes={0: "done or report exists", 1: "model reply unusable",
+                                             2: "no transcript", 3: "chat deployment not configured"},
+                    examples=['python report.py "<base or recording>" --language de',
+                              'python report.py "<base or recording>" --force --no-frames'])
     ap.add_argument("base", help="<base> stem or any companion file of the recording")
     ap.add_argument("--language", default=None, help="Report language, e.g. de")
     ap.add_argument("--force", action="store_true", help="Replace an existing report (and re-describe frames)")
     ap.add_argument("--no-frames", action="store_true", help="Skip the vision frame pass")
     ap.add_argument("--max-frames", type=int, default=48, help="Frames sent to the vision model (default 48)")
-    args = ap.parse_args()
+    args = cli.parse(ap)
 
     p = Paths(resolve_base(args.base))
     if p.report.is_file() and has_report(p.report.read_text(encoding="utf-8")) and not args.force:

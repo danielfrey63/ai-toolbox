@@ -32,6 +32,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import cli
 import llm
 from companions import Paths, input_status, read_protocol, read_speakers, resolve_base
 from version import APP_VERSION
@@ -83,7 +84,10 @@ def write_review(p: Paths) -> Path:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = cli.parser(__doc__, examples=[
+        'python agent.py "<base or recording>" --language de',
+        'python agent.py "<base or recording>" --stop-at-speakers',
+        'python agent.py "<base or recording>" --only speakers,kompakt,report --force'])
     ap.add_argument("base", help="<base> stem, the recording, or any companion file")
     ap.add_argument("--language", default=None, help="Output language, e.g. de")
     ap.add_argument("--force", action="store_true", help="Redo stages that already have output")
@@ -91,10 +95,11 @@ def main() -> int:
     ap.add_argument("--stop-at-speakers", action="store_true",
                     help="End after the speaker stage so a person can correct speakers.md")
     ap.add_argument("--no-frames", action="store_true", help="Skip every vision call")
-    ap.add_argument("--redact", action="store_true",
-                    help="Black out person-name lists in the illustration crops (default off; "
-                         "TRANSCRIBE_REDACT=1 in .env makes it the default)")
-    args = ap.parse_args()
+    ap.add_argument("--redact", dest="redact", action="store_true", default=None,
+                    help="Black out person-name lists in the illustration crops; on finished crops only "
+                         "the redaction is added (default: TRANSCRIBE_REDACT, else unchanged, else off)")
+    ap.add_argument("--no-redact", dest="redact", action="store_false", help="Remove or skip redaction")
+    args = cli.parse(ap)
 
     p = Paths(resolve_base(args.base))
     if not p.transcript.is_file():
@@ -127,7 +132,7 @@ def main() -> int:
     if "kompakt" in only:
         step("kompakt", "kompakt.py", p.base, lang + force)
     if "illustrate" in only and has_video and not args.no_frames:
-        step("illustrate", "illustrate_agent.py", p.base, lang + force + (["--redact"] if args.redact else []))
+        step("illustrate", "illustrate_agent.py", p.base, lang + force + ({True: ["--redact"], False: ["--no-redact"]}.get(args.redact, [])))
     if "report" in only:
         step("report", "report.py", p.base, lang + force + (["--no-frames"] if args.no_frames else []))
     review = write_review(p)

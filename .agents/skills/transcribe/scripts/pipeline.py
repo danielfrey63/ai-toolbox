@@ -33,6 +33,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import cli
 import llm
 from companions import Paths, resolve_base
 from download import is_url
@@ -49,7 +50,11 @@ def call(script: str, *args: str, capture: bool = False) -> subprocess.Completed
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = cli.parser(__doc__, examples=[
+        'python pipeline.py "20261013-1100 - Thema.mp4" --language de --local',
+        'python pipeline.py "20261013-1100 - Thema.mp4" --language de --local --stop-at-speakers',
+        'python pipeline.py "20261013-1100 - Thema.mp4" --redact   # add redaction to a finished run',
+        'python pipeline.py "https://youtu.be/..." --language en --start 0 --end 5:00'])
     ap.add_argument("source", help="Local video or audio file, or a URL")
     ap.add_argument("--language", default=None, help="Language of transcript and report, e.g. de")
     ap.add_argument("--local", action="store_true",
@@ -57,10 +62,13 @@ def main() -> int:
     ap.add_argument("--rerun", action="store_true", help="Run run.py again although a transcript exists")
     ap.add_argument("--stop-at-speakers", action="store_true",
                     help="End after the speaker stage so a person can correct speakers.md")
-    ap.add_argument("--redact", action="store_true", help="Black out person-name lists in the crops")
+    ap.add_argument("--redact", dest="redact", action="store_true", default=None,
+                    help="Black out person-name lists in the crops; on a finished run only the redaction "
+                         "is added (default: TRANSCRIBE_REDACT, else the state of the existing crops, else off)")
+    ap.add_argument("--no-redact", dest="redact", action="store_false", help="Remove or skip redaction")
     ap.add_argument("--no-frames", action="store_true", help="Skip every image call in the agent stages")
     ap.add_argument("--force", action="store_true", help="Redo finished agent stages")
-    args, run_extra = ap.parse_known_args()
+    args, run_extra = cli.parse_known(ap)
 
     url = is_url(args.source)
     p = None
@@ -102,9 +110,11 @@ def main() -> int:
         return 3
 
     agent = [*lang]
-    for flag in ("stop_at_speakers", "redact", "no_frames", "force"):
+    for flag in ("stop_at_speakers", "no_frames", "force"):
         if getattr(args, flag):
             agent.append("--" + flag.replace("_", "-"))
+    if args.redact is not None:
+        agent.append("--redact" if args.redact else "--no-redact")
     rc = call("agent.py", str(p.base), *agent).returncode
     if rc == 0:
         print(f"[pipeline] done. Report: {p.report}\n[pipeline] Review list: "
