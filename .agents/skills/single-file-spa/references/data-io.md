@@ -8,7 +8,7 @@
 - **Legacy-Formate erkennen und ABLEHNEN** mit Migrations-Hinweis, statt sie still in neue Datenbestände zu mischen (orggraph lehnt v1-Dateien mit Verweis aufs Migrationsskript ab).
 - **Import-Report zurückgeben:** `{stored, unknown, missing, ignored, rejected}` – der User sieht, was mit jedem File passiert ist.
 
-## Drag & Drop + ZIP (Stufe L, orggraph)
+## Drag & Drop + ZIP (orggraph)
 
 - Window-weites `installGlobalDrop`; Escape/Backdrop schliesst den Drop-Dialog nur, wenn bereits Daten geladen sind.
 - Ordner-Drops via `getAsFileSystemHandle()` / `webkitGetAsEntry()`; unter `file://` fehlen die Ordner-APIs teils → **nie still enden**, sondern Hinweis «als ZIP packen und droppen».
@@ -35,6 +35,6 @@ Für Apps, die Datenstände aus mehreren Quellen/Zeitpunkten zusammenführen:
 - **Property-Timelines** statt letzter-gewinnt: Werte als `{from, to, value, source}`-Intervalle; Merge mit Quellen-Präzedenz zuerst, dann deterministischem Tie-Breaker; unauflösbare Fälle als offene `conflicts` persistieren und im UI zeigen, nicht verschlucken.
 - **Kanonische Identitäts-Keys** als kanonisches JSON über die identitätsstiftenden Felder (`[type, source, target, ...identityProps]`) – nie zusammengesetzte Strings mit Trennzeichen-Kollisionsrisiko.
 
-## Szenario-Dateien (Stufe M, Stundentracker)
+## Szenario-Dateien (Stundentracker)
 
 Ein Szenario-JSON transportiert nicht nur Daten, sondern **überschreibt das Berechnungsmodell**: ein `basis`-Block (Pensen, Bestellwerte, Feiertage) wird beim Import in die Modell-Konstanten geschrieben (die deshalb `let` statt `const` sind), danach `recomputeBudgets()`. Konvention: sprechende Dateinamen für What-ifs (`www-65` = What-if 65%), ein `scenario`-Beschreibungsfeld im JSON, und pro Szenario ein eigener Persistenz-Key (siehe persistence.md). Alte Feld-Schreibweisen beim Import tolerieren (camelCase UND snake_case lesen), solange Migrationen fehlen.

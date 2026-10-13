@@ -1,14 +1,23 @@
-# Persistenz-Leiter – von localStorage bis Mandanten-Stores
+# Persistenz-Leiter – vom URL-Hash bis zu Mandanten-Stores
 
-Vier erprobte Schichten; die Stufe der App (S/M/L) bestimmt, welche gebraucht werden. Grundregel überall: **ein** serialisiertes `state`-Objekt, `saveState()` nach jeder Mutation, Laden als Merge über Defaults (`state = { ...defaults, ...JSON.parse(raw) }` in try/catch) – so tolerieren alte Stände neue Felder. Von Anfang an `state.schemaVersion` mitschreiben und beim Laden prüfen; ohne dieses Feld ist später keine sichere Migration möglich (Lücke in nem-wochenplan UND Stundentracker).
+Vier erprobte Stufen, unabhängig von der Struktur der App (Monolith oder Sections + Build) und kombinierbar. Grundregel für gespeicherten State: **ein** serialisiertes `state`-Objekt, `saveState()` nach jeder Mutation, Laden als Merge über Defaults (`state = { ...defaults, ...JSON.parse(raw) }` in try/catch) – so tolerieren alte Stände neue Felder. Von Anfang an `state.schemaVersion` mitschreiben und beim Laden prüfen; ohne dieses Feld ist später keine sichere Migration möglich (Lücke in nem-wochenplan UND Stundentracker).
 
-## Stufe S – localStorage, ein versionierter Key (nem-wochenplan)
+## URL-Hash – teilbarer Zustand ohne Speicher (avers, rain)
+
+- Für Zustand, der eine Eingabe ist und weitergegeben werden soll: Formular eines Rechners (avers), Ansicht und Abfrage einer Karte (rain). Der Link IST die Speicherung; das Gerät merkt sich nichts, der Server schreibt nichts.
+- `encodeState(state)` / `decodeState(hash)` als pure Funktionen in einer Engine-Section über `URLSearchParams`; kurze, stabile Parameternamen, Defaults weglassen. Unbekannte oder kaputte Werte fallen still auf Defaults zurück.
+- Aktualisieren mit `history.replaceState(null, '', hash)` – jede Eingabe als neuer History-Eintrag würde den Zurück-Knopf unbrauchbar machen.
+- Mit Hash-Routen kombiniert: Route vorne, Zustand als Query dahinter (`#/preise?from=…`, siehe [ui-patterns.md](ui-patterns.md)). Alte Link-Formate weiter erkennen und umleiten – geteilte Links leben länger als das Format.
+
+## localStorage, ein versionierter Key (nem-wochenplan)
 
 - Genau ein Key: `STORAGE_KEY = "<app>-v1"` – der `-v1`-Suffix ist ein manueller Storage-Schema-Marker (bei inkompatiblem Umbau `-v2`, Migrationscode liest den alten Key einmalig).
 - Gesamter State als ein JSON-Blob; kein Feld-Splitting.
 - UI-State (Filter, expandierte Panels) darf im selben Blob leben oder als separater Key (`<app>_filter`).
+- Zugriffe in try/catch: im privaten Modus oder bei vollem Speicher wirft `localStorage` – die App bleibt dann ohne Gedächtnis benutzbar (avers-Checkliste).
+- Storage injizierbar machen (`loadUi(storage)`, `saveUi(storage, ui)`, rain), damit Tests ohne Browser laufen.
 
-## Stufe M – Szenario-Namespacing + Tab-Isolation + Datei-Verknüpfung (Stundentracker)
+## localStorage + Dateien – Szenario-Namespacing + Tab-Isolation + Datei-Verknüpfung (Stundentracker)
 
 Drei Storage-APIs mit je EINER Aufgabe:
 
@@ -24,7 +33,7 @@ Drei Storage-APIs mit je EINER Aufgabe:
 
 Den aktiven Modus im UI farbcodiert anzeigen (`linked`/`fallback`) – der User muss sehen, ob seine Datei wirklich geschrieben wird.
 
-## Stufe L – IndexedDB, ein Object-Store pro Mandant (orggraph)
+## IndexedDB, ein Object-Store pro Mandant (orggraph)
 
 - **Der Store IST der Namespace:** pro Mandant/Profil ein Object-Store `p:<id>`, logische Keys (`env`, `data`, `uiState`, …) roh darin. Vorteil gegenüber Präfix-Keys in einem Store: DevTools zeigen Mandanten als getrennte Knoten, Löschen = Store droppen (`idbClear()` droppt Stores statt nur zu leeren).
 - **`__meta__`-Store** mit einem Record `__profiles__` = `{active, list:[{id,name,createdAt,source}]}` für die Profilverwaltung (CRUD + aktiver Mandant).
