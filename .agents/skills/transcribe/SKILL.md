@@ -15,6 +15,22 @@ Claude has no video input; this skill provides one. `scripts/run.py` downloads t
 
 **Python interpreter:** commands use `python3` (macOS/Linux). On Windows use `python`; `python3` there is the Microsoft Store stub.
 
+**Skill directory:** `${CLAUDE_SKILL_DIR}` below is the folder holding this `SKILL.md`. Claude Code substitutes it; under GitHub Copilot, Codex or any other agent use the absolute path of this folder instead. Nothing in `scripts/` depends on the agent.
+
+## Two ways to do the agent work
+
+Steps 3–5 (reading frames, naming speakers, compact transcript, illustrations, report) need judgement. Either the chat agent running this skill does them as described below, or a configured cloud model does them headless:
+
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/llm.py"                       # configured? which deployments?
+python3 "${CLAUDE_SKILL_DIR}/scripts/run.py" "<source>" --language de
+python3 "${CLAUDE_SKILL_DIR}/scripts/agent.py" "<base>" --language de
+```
+
+`agent.py` runs `speakers_fill.py`, `kompakt.py`, `illustrate_agent.py` and `report.py` against the model set in `~/.config/transcribe/.env` (`AZURE_LLM_ENDPOINT`, `AZURE_LLM_KEY`, `AZURE_LLM_MODEL`; see `.env.example`). It writes the same companion files as the interactive path plus `<base>.review.md`, the list of human gates (speaker attributions, illustrations, report review). Every stage is idempotent; `--force` redoes, `--only` picks stages, `--stop-at-speakers` ends at the speaker gate. The report's `Datenfluss` line names the model and what it received.
+
+**Choose headless when** an agent other than Claude runs the skill (Copilot, Codex), the run is unattended, or data must stay on an approved tenant deployment. **Choose interactive when** no model is configured or the user wants to steer the report. When `llm.py` reports a configured provider and the user did not ask for the interactive path, prefer `agent.py`, then answer from the files it wrote (Step 5 reply format).
+
 ## When to use
 
 - A video URL (YouTube, Vimeo, X, TikTok, Twitch clip, most yt-dlp-supported sites) or a local video file (`.mp4`, `.mov`, `.mkv`, `.webm`) with a request to transcribe, summarize or answer questions about it.
