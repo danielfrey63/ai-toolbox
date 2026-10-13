@@ -46,7 +46,7 @@
 # Always exits 0 (except on a usage error) — a non-artifact edit is a silent
 # no-op, so it is hook-safe.
 
-APP_VERSION='0.8.21'
+APP_VERSION='0.9.23'
 set -u
 
 INIT_VERSION='0.0.1'
@@ -183,8 +183,10 @@ bump_version() {
 
 re_escape() {
     # Escape regex metacharacters in a version string for safe use as a sed/awk
-    # pattern. Versions are digits + dots, so escaping dots is sufficient.
-    printf '%s' "${1//./\\.}"
+    # pattern. Versions are digits + dots, so escaping dots is sufficient. A
+    # bracket class instead of a backslash: `awk -v` processes escape sequences
+    # and would turn "\." into "." (with a warning), "[.]" survives everywhere.
+    printf '%s' "${1//./[.]}"
 }
 
 fm_version() {
