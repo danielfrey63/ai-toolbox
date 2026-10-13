@@ -184,21 +184,15 @@ Eine kurze, unkritische Testaufnahme mit bekanntem Inhalt und einheitlichem Name
 
    ```powershell
    $Recording = Read-Host 'Absolute path of the non-sensitive test recording'
-   python (Join-Path $Skill 'scripts\run.py') $Recording --language de --whisper whisper-local --no-diarize
-   if ($LASTEXITCODE -ne 0) { throw 'Test run failed.' }
+   python (Join-Path $Skill 'scripts\pipeline.py') $Recording --language de --local --no-diarize
+   if ($LASTEXITCODE -ne 0) { throw "Test run failed (exit $LASTEXITCODE)." }
    ```
 
+   `pipeline.py` prüft das Setup, führt die lokalen Stufen (`run.py`) und danach die Auswertung (`agent.py`) aus. Exit `1` heisst, dass `run.py` fehlgeschlagen ist, Exit `2`, dass das Setup unvollständig ist, Exit `3`, dass kein Modell-Endpunkt konfiguriert ist. Exit `4` heisst, dass der Lauf am Sprecher-Gate angehalten hat (`--stop-at-speakers`). Ein erneuter Aufruf überspringt fertige Stufen und setzt fort.
 3. Im Protokoll die tatsächliche Transkriptionsquelle kontrollieren. Ausgabe und Transkript müssen zur Aufnahme passen und plausible Zeitstempel haben.
-4. Die Auswertung über die Kommandozeile erstellen:
-
-   ```powershell
-   python (Join-Path $Skill 'scripts\agent.py') $Recording --language de
-   if ($LASTEXITCODE -ne 0) { throw "Agent stages failed (exit $LASTEXITCODE)." }
-   ```
-
-   Exit `3` heisst, dass kein Modell-Endpunkt konfiguriert ist. Exit `4` heisst, dass der Lauf an einem menschlichen Gate angehalten hat, etwa nach `--stop-at-speakers`. Nach der Korrektur von `speakers.md` setzt ein erneuter Aufruf fort.
+4. Die Meldungen von `pipeline.py` auf übersprungene oder fehlgeschlagene Stufen durchsehen.
 5. Der Bericht `<base>.md` enthält `Übersicht`, `Summary`, `Analysis` und die Zeile «Datenfluss». `<base>.review.md` listet die Punkte, die ein Mensch vor der Weitergabe prüft.
-6. Optional zusätzlich einen Agent-Test über `/transcribe` mit derselben Aufnahme durchführen. Explizit lokale Transkription und keine Sprechertrennung verlangen. Der Agent liest die Pflichtreferenz `references\report-writing.md` oder übergibt an `agent.py`.
+6. Optional zusätzlich einen Agent-Test über `/transcribe` mit derselben Aufnahme durchführen. Explizit lokale Transkription und keine Sprechertrennung verlangen. Der Agent liest die Pflichtreferenz `references\report-writing.md` oder übergibt an `pipeline.py`.
 7. Mindestens einen bekannten Satz und seine Zeitposition manuell vergleichen. Bei Video zusätzlich einen bekannten Bildschirminhalt prüfen.
 8. Commit-ID, Rechner/CPU/GPU, Modell-Endpunkt und Deployment, Dauer, verwendetes Backend und Ergebnis der manuellen Kontrolle im Freigabenachweis festhalten.
 
@@ -209,8 +203,8 @@ Erst danach den Stand für andere freigeben. Sprechertrennung und OCR bei Bedarf
 1. Berechtigung, Klassifikation, Agent-Endpunkt und Ablageort prüfen.
 2. Aufnahme nach `YYYYMMDD-hhmm - Thema` benennen. Datum und Teilnehmer kontrollieren; Dateimetadaten sind nur Hinweise.
 3. Optional `transcribe-glossary.txt` und `transcribe-participants.txt` neben die Aufnahme legen: Fachbegriffe bzw. `Name - Rolle` je Zeile.
-4. Entweder `run.py` und danach `agent.py` mit absolutem Aufnahmepfad und Sprache aufrufen, oder `/transcribe` im Agenten mit Aufnahmepfad, Sprache und gewünschter Fragestellung. Für vertrauliche Aufnahmen lokale Backends ausdrücklich festlegen.
-5. Bei mehreren Sprechern `agent.py --stop-at-speakers` verwenden, die offenen Zuordnungen in `speakers.md` prüfen und korrigieren, dann `agent.py` erneut aufrufen.
+4. Entweder `pipeline.py` mit absolutem Aufnahmepfad, Sprache und `--local` aufrufen, oder `/transcribe` im Agenten mit Aufnahmepfad, Sprache und gewünschter Fragestellung. Für vertrauliche Aufnahmen lokale Backends ausdrücklich festlegen (`--local`).
+5. Bei mehreren Sprechern `pipeline.py … --stop-at-speakers` verwenden, die offenen Zuordnungen in `speakers.md` prüfen und korrigieren, dann denselben Befehl ohne `--stop-at-speakers` erneut aufrufen.
 6. Bericht und Transkript anhand `review.md` prüfen: Eigennamen, Zahlen, Sprecher, Bildausschnitte, Entscheidungen und Aufgaben nicht ungeprüft übernehmen. Unsicherheiten kennzeichnen.
 7. Nur die geprüften Ergebnisse an die berechtigten Empfänger weitergeben. Rohaufnahme, Transkript und temporäre Bilder gemäss Aufbewahrungsregel behandeln.
 

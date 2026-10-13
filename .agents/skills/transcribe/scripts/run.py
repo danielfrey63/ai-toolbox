@@ -223,6 +223,7 @@ from transcribe import (  # noqa: E402
 )
 from stt import extract_audio, load_hotwords, select_backend, select_backends, transcribe_video  # noqa: E402
 from version import APP_VERSION  # noqa: E402
+from companions import REPORT_STUB_NOTE  # noqa: E402
 import cpu  # noqa: E402
 
 
@@ -1313,10 +1314,7 @@ def main() -> int:
                 if speakers_path and speakers_path.exists() else []
             ),
             "",
-            "_Claude appends `## Übersicht` (Kernaussagen + Chapter-Struktur),"
-            " `## Summary` (thematic bullet catalog), and `## Analysis`"
-            " (Inventar / Beurteilungen / Schlüsselaussagen / Details / Abdeckung /"
-            " Resources) below this line._",
+            REPORT_STUB_NOTE,
             "",
         ]
         # Idempotency: a re-run must not delete the analysis Claude appended.
@@ -1398,7 +1396,7 @@ def main() -> int:
             d, srcs = date_candidates[0]
             emit(f"- **Date candidates:** {d} ({' + '.join(srcs)})")
         else:
-            emit("- **Date candidates** (Claude: confirm against frame 1 title slide):")
+            emit("- **Date candidates** (confirm against the title slide in frame 1):")
             for d, srcs in date_candidates:
                 emit(f"  - {d} ({' + '.join(srcs)})")
 
@@ -1477,7 +1475,7 @@ def main() -> int:
     if save_md_path:
         emit(f"- **Protocol file:** `{protocol_path}`")
         emit(f"- **Transcript file:** `{transcript_path}`")
-        emit(f"- **Analysis target:** `{save_md_path}` (Claude writes Summary + Analysis here)")
+        emit(f"- **Analysis target:** `{save_md_path}` (the report sections are written here)")
         # Source video stays available until Step 6 cleanup; illustrate.py needs
         # it to re-extract key frames at native resolution and crop illustrations.
         if video_path and Path(video_path).exists():
@@ -1514,12 +1512,12 @@ def main() -> int:
     if all_frames:
         emit()
         emit(
-            "**Read each frame path below with the Read tool to view the image.** "
+            "**Each frame path below is an image file to view.** "
             "Frames are in chronological order; `t=MM:SS` is the absolute timestamp "
             "in the source video. Tag `[REG]` = regular interval sampling, "
             "`[CUT]` = scene-cut detected by scdet."
             if cut_frames else
-            "**Read each frame path below with the Read tool to view the image.** "
+            "**Each frame path below is an image file to view.** "
             "Frames are in chronological order; `t=MM:SS` is the absolute timestamp in the source video."
         )
         emit()

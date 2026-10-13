@@ -23,13 +23,12 @@ Steps 3–5 (reading frames, naming speakers, compact transcript, illustrations,
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/scripts/llm.py"                       # configured? which deployments?
-python3 "${CLAUDE_SKILL_DIR}/scripts/run.py" "<source>" --language de
-python3 "${CLAUDE_SKILL_DIR}/scripts/agent.py" "<base>" --language de
+python3 "${CLAUDE_SKILL_DIR}/scripts/pipeline.py" "<local file>" --language de [--local]
 ```
 
-`agent.py` runs `speakers_fill.py`, `kompakt.py`, `illustrate_agent.py` and `report.py` against the model set in `~/.config/transcribe/.env` (`AZURE_LLM_ENDPOINT`, `AZURE_LLM_KEY`, `AZURE_LLM_MODEL`; see `.env.example`). It writes the same companion files as the interactive path plus `<base>.review.md`, the list of human gates (speaker attributions, illustrations, report review). Every stage is idempotent; `--force` redoes, `--only` picks stages, `--stop-at-speakers` ends at the speaker gate. The report's `Datenfluss` line names the model and what it received.
+`pipeline.py` chains `setup.py --check`, `run.py` and `agent.py`; for a URL source call `run.py "<source>"` and then `agent.py "<base>"` yourself. `agent.py` runs `speakers_fill.py`, `kompakt.py`, `illustrate_agent.py` and `report.py` against the model set in `~/.config/transcribe/.env` (`AZURE_LLM_ENDPOINT`, `AZURE_LLM_KEY`, `AZURE_LLM_MODEL`; see `.env.example`). It writes the same companion files as the interactive path plus `<base>.review.md`, the list of human gates (speaker attributions, illustrations, report review). Every stage is idempotent; `--force` redoes, `--only` picks stages, `--stop-at-speakers` ends at the speaker gate. The report's `Datenfluss` line names the model and what it received.
 
-**Choose headless when** an agent other than Claude runs the skill (Copilot, Codex), the run is unattended, or data must stay on an approved tenant deployment. **Choose interactive when** no model is configured or the user wants to steer the report. When `llm.py` reports a configured provider and the user did not ask for the interactive path, prefer `agent.py`, then answer from the files it wrote (Step 5 reply format).
+**Choose headless when** an agent other than Claude runs the skill (Copilot, Codex), the run is unattended, or data must stay on an approved tenant deployment. **Choose interactive when** no model is configured or the user wants to steer the report. When `llm.py` reports a configured provider and the user did not ask for the interactive path, prefer `pipeline.py` (or `agent.py` after an existing `run.py` pass), then answer from the files it wrote (Step 5 reply format).
 
 ## When to use
 

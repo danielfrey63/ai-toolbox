@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 
 import llm
-from companions import (Paths, fmt_ts, language_rules, read_glossary, read_json, read_protocol, read_speakers,
+from companions import (REPORT_STUB_NOTE, Paths, fmt_ts, language_rules, read_glossary, read_json, read_protocol, read_speakers,
                         read_transcript, references_from_links, resolve_base, ts_seconds, write_json)
 from version import APP_VERSION
 
@@ -221,7 +221,11 @@ def _ill_markdown(p: Paths, ill: dict) -> str:
     rel = f"./{p.illustrations.name}/{ill['path']}"
     ts = ill.get("timestamp_label") or ""
     cap = ill.get("caption", "")
-    return f"![{cap[:60]}](<{rel}>)\n*Abb. – {cap}" + (f" [{ts}]" if ts else "") + "*"
+    alt = cap if len(cap) <= 60 else cap[:60].rsplit(" ", 1)[0] + " …"
+    alt = alt.replace("[", "(").replace("]", ")")
+    # Blank lines around the block: consecutive images must not merge into one
+    # paragraph, and the next heading must not be glued to the caption.
+    return f"\n![{alt}](<{rel}>)\n*Abb. – {cap}" + (f" [{ts}]" if ts else "") + "*\n"
 
 
 def embed_illustrations(p: Paths, md: str) -> tuple[str, int]:
@@ -241,7 +245,7 @@ def embed_illustrations(p: Paths, md: str) -> tuple[str, int]:
         extra = "\n\n".join(_ill_markdown(p, i) for i in ills.values())
         md = md.replace("\n## Analysis", f"\n### Weitere Illustrationen\n\n{extra}\n\n## Analysis", 1)
         used += len(ills)
-    return md, used
+    return re.sub(r"\n{3,}", "\n\n", md), used
 
 
 def data_flow_line(p: Paths, proto: dict) -> str:
@@ -275,7 +279,9 @@ def write_report(p: Paths, body: str, flow: str, force: bool) -> None:
         if not force:
             raise SystemExit("[report] report exists - use --force")
         text = text[: m.start()].rstrip("\n") + "\n"
-    head = re.sub(r"^- \*\*Datenfluss:\*\*.*\n?", "", text, flags=re.M).rstrip("\n")
+    # The written report replaces the stub's placeholder; the data-flow line joins the header bullets.
+    head = re.sub(r"^- \*\*Datenfluss:\*\*.*\n?", "", text, flags=re.M)
+    head = head.replace(REPORT_STUB_NOTE, "").strip("\n")
     p.report.write_text(f"{head}\n{flow}\n\n{body.strip()}\n", encoding="utf-8")
 
 

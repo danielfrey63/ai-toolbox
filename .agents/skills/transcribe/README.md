@@ -158,20 +158,20 @@ The whole pipeline runs without Claude or any other chat agent. `run.py` does th
    AZURE_LLM_MODEL=gpt-6.1-sol
    ```
 
-2. Run the four steps (Windows: `python`, macOS/Linux: `python3`; `$skill` is `<ai-toolbox>/.agents/skills/transcribe`):
+2. Probe the deployment once, then run the pipeline (Windows: `python`, macOS/Linux: `python3`; `$skill` is `<ai-toolbox>/.agents/skills/transcribe`):
 
    ```bash
-   python "$skill/scripts/setup.py" --check                      # tools + local transcription ready?
-   python "$skill/scripts/llm.py" --probe --image some.png        # deployment answers text and images?
-   python "$skill/scripts/run.py" "<recording.mp4>" --language de # local stages, nothing leaves the machine
-   python "$skill/scripts/agent.py" "<recording.mp4>" --language de
+   python "$skill/scripts/llm.py" --probe --image some.png             # deployment answers text and images?
+   python "$skill/scripts/pipeline.py" "<recording.mp4>" --language de --local
    ```
+
+   `pipeline.py` runs `setup.py --check`, `run.py` (local stages) and `agent.py` (agent stages) in one go. `--local` pins whisper-local and pyannote-local, so no audio leaves the machine. Options it does not know go to `run.py`. A second call skips everything already done, so after correcting `speakers.md` the same command continues. Exit codes: 0 done, 1 `run.py` failed, 2 setup incomplete, 3 no chat deployment, 4 stopped at the speaker gate.
 
 3. Read the results next to the recording: `<base>.md` (report with a `Datenfluss` line naming the model and what it received), `<base>.transcript-kompakt.md`, `<base>.speakers.md`, `<base>.illustrations/`, and `<base>.review.md` – the list of points a person checks before anything is published.
 
-`agent.py` options: `--stop-at-speakers` ends after the speaker stage so `speakers.md` can be corrected first (the next call continues), `--only speakers,kompakt,illustrate,report` runs a subset, `--force` redoes finished stages, `--redact` blacks out person-name lists in the crops (off by default; `TRANSCRIBE_REDACT=1` makes it the default), `--no-frames` skips every image call. Each stage is idempotent and can also be called on its own (`speakers_fill.py`, `kompakt.py`, `illustrate_agent.py`, `report.py`).
+`pipeline.py` and `agent.py` options: `--stop-at-speakers` ends after the speaker stage so `speakers.md` can be corrected first (the next call continues), `--only speakers,kompakt,illustrate,report` runs a subset (`agent.py` only), `--force` redoes finished stages, `--redact` blacks out person-name lists in the crops (off by default; `TRANSCRIBE_REDACT=1` makes it the default), `--no-frames` skips every image call. Each stage is idempotent and can also be called on its own (`speakers_fill.py`, `kompakt.py`, `illustrate_agent.py`, `report.py`).
 
-For a quick first test take a few minutes of a recording: `run.py "<recording.mp4>" --start 0 --end 5:00`. A full 40-minute meeting takes about ten minutes for `agent.py`.
+For a quick first test take a few minutes of a recording: `pipeline.py "<recording.mp4>" --start 0 --end 5:00`. A full 40-minute meeting takes about ten minutes for the agent stages.
 
 ## First run
 
@@ -274,6 +274,7 @@ Other knobs (passed to `scripts/run.py`):
 │   ├── resources.py         # URL extraction from description + transcript, categorized
 │   ├── setup.py             # preflight + installer + .env scaffolding + managed-venv provisioning
 │   ├── llm.py               # chat client for the agent stages (Azure OpenAI / Anthropic passthrough), --probe
+│   ├── pipeline.py          # one command: setup check → run.py → agent.py
 │   ├── agent.py             # headless orchestrator: speakers → kompakt → illustrations → report → review.md
 │   ├── speakers_fill.py     # fills speakers.md, lists contributions filed under another label
 │   ├── kompakt.py           # compact transcript, chapters first, then per-chapter condensing

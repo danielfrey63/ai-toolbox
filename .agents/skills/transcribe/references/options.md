@@ -49,7 +49,7 @@ Resources and run control:
 
 ## Output locations (`--save-md`)
 
-`--save-md PATH` writes companion files: PATH itself (the main file, a stub to which Claude appends the report), `<base>.protocol.md` (metadata, frame list, resources) and `<base>.transcript.md`, where `<base>` is PATH without `.md`. Next to them: `<base>.vtt` (WebVTT with speaker voice tags). A pre-existing foreign VTT (for example a Teams export) is preserved as `<base>.original.vtt` first; skill-generated VTTs are overwritten on re-runs. When `<base>.original.vtt` exists, `<base>.crosscheck.md` is written as well.
+`--save-md PATH` writes companion files: PATH itself (the main file, a stub to which the report sections are appended by the chat agent or report.py), `<base>.protocol.md` (metadata, frame list, resources) and `<base>.transcript.md`, where `<base>` is PATH without `.md`. Next to them: `<base>.vtt` (WebVTT with speaker voice tags). A pre-existing foreign VTT (for example a Teams export) is preserved as `<base>.original.vtt` first; skill-generated VTTs are overwritten on re-runs. When `<base>.original.vtt` exists, `<base>.crosscheck.md` is written as well.
 
 Defaults:
 

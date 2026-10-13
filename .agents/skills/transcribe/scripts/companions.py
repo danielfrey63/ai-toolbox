@@ -17,6 +17,12 @@ BLOCK_RE = re.compile(r"^\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s+(?:\[([^\]]+)\]\s+)?(.
 META_RE = re.compile(r"^- \*\*(.+?):\*\*\s*(.*)$")
 FRAME_RE = re.compile(r"^- `(.+?)` \(t=(\d{1,2}:\d{2}(?::\d{2})?)\) \[(REG|CUT)\]")
 
+# Placeholder line run.py writes into the report stub; whoever writes the report
+# (chat agent or report.py) replaces it with the sections it names.
+REPORT_STUB_NOTE = ("_Report sections go below this line: `## Übersicht` (Kernaussagen + Chapter-Struktur), "
+                    "`## Summary` (thematic bullet catalog) and `## Analysis` (Inventar / Beurteilungen / "
+                    "Schlüsselaussagen / Details / Abdeckung / Resources)._")
+
 
 def resolve_base(arg: str | Path) -> Path:
     """`<base>` from any companion path or the bare stem. Strips the known
