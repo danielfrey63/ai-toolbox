@@ -115,6 +115,7 @@ git clone https://github.com/danielfrey63/ai-toolbox.git
 | **Codex** | Symlink the skill into `~/.codex/skills/transcribe` (see below) |
 | **claude.ai** (web) | Build `dist/transcribe.skill` with `scripts/build-skill.sh`, upload it under Settings → Capabilities → Skills |
 | **Other skill clients** | The skill sits on the cross-client `.agents/skills/` path – point the client at it or symlink it |
+| **Command line, GitHub Copilot, cron** | No skill client needed – Python plus a configured chat deployment, see [Command line (headless)](#command-line-headless) |
 
 ### Claude Code
 
@@ -143,6 +144,33 @@ ln -s <ai-toolbox>/.agents/skills/transcribe ~/.codex/skills/transcribe
 
 Enable "Code execution and file creation" under Capabilities first – the skill shells out to `ffmpeg` and `yt-dlp`, so it won't run without it.
 
+### Command line (headless)
+
+The whole pipeline runs without Claude or any other chat agent. `run.py` does the local stages (frames, OCR, Whisper, diarization); `agent.py` does the judgement stages – speaker naming, compact transcript, illustrations, report – on a chat deployment you configure. This is the path for GitHub Copilot, Codex, scheduled jobs and tenants where only an approved model may see the data.
+
+1. Add the chat deployment to `~/.config/transcribe/.env` (endpoint is the resource base, the model is the deployment name; all keys in `.env.example`):
+
+   ```
+   AZURE_LLM_ENDPOINT=https://<resource>.openai.azure.com
+   AZURE_LLM_KEY=<key>
+   AZURE_LLM_MODEL=gpt-6.1-sol
+   ```
+
+2. Run the four steps (Windows: `python`, macOS/Linux: `python3`; `$skill` is `<ai-toolbox>/.agents/skills/transcribe`):
+
+   ```bash
+   python "$skill/scripts/setup.py" --check                      # tools + local transcription ready?
+   python "$skill/scripts/llm.py" --probe --image some.png        # deployment answers text and images?
+   python "$skill/scripts/run.py" "<recording.mp4>" --language de # local stages, nothing leaves the machine
+   python "$skill/scripts/agent.py" "<recording.mp4>" --language de
+   ```
+
+3. Read the results next to the recording: `<base>.md` (report with a `Datenfluss` line naming the model and what it received), `<base>.transcript-kompakt.md`, `<base>.speakers.md`, `<base>.illustrations/`, and `<base>.review.md` – the list of points a person checks before anything is published.
+
+`agent.py` options: `--stop-at-speakers` ends after the speaker stage so `speakers.md` can be corrected first (the next call continues), `--only speakers,kompakt,illustrate,report` runs a subset, `--force` redoes finished stages, `--redact` blacks out person-name lists in the crops (off by default; `TRANSCRIBE_REDACT=1` makes it the default), `--no-frames` skips every image call. Each stage is idempotent and can also be called on its own (`speakers_fill.py`, `kompakt.py`, `illustrate_agent.py`, `report.py`).
+
+For a quick first test take a few minutes of a recording: `run.py "<recording.mp4>" --start 0 --end 5:00`. A full 40-minute meeting takes about ten minutes for `agent.py`.
+
 ## First run
 
 On the first `/transcribe` call, the skill runs `scripts/setup.py --check`. If `ffmpeg` / `yt-dlp` aren't on your PATH, or no Whisper API key is set, it walks you through fixing it:
@@ -150,7 +178,7 @@ On the first `/transcribe` call, the skill runs `scripts/setup.py --check`. If `
 - **macOS** – auto-runs `brew install ffmpeg yt-dlp`.
 - **Linux** – prints the exact `apt` / `dnf` / `pipx` commands.
 - **Windows** – prints the `winget` / `pip` commands.
-- **API keys** – scaffolds `~/.config/transcribe/.env` (mode `0600`) from `.env.example` with commented placeholders for every backend: `GROQ_API_KEY` / `OPENAI_API_KEY`, the private Azure `gpt-4o-transcribe-diarize` + `claude-opus-4-7` endpoints, and the speaker-diarization backends. **None of these are required** – the local backends carry transcription (and, with a free `HF_TOKEN`, diarization) on their own.
+- **API keys** – scaffolds `~/.config/transcribe/.env` (mode `0600`) from `.env.example` with commented placeholders for every backend: `GROQ_API_KEY` / `OPENAI_API_KEY`, the private Azure `gpt-4o-transcribe-diarize` endpoint, the chat deployment for the headless agent stages, and the speaker-diarization backends. **None of these are required** – the local backends carry transcription (and, with a free `HF_TOKEN`, diarization) on their own.
 - **Managed ML venv** – the local backends (whisper-local, pyannote-local) run as worker subprocesses inside a pinned venv at `~/.config/transcribe/venv/`, provisioned automatically on first use (or explicitly via `setup.py --venv`). GPU is auto-detected (CUDA wheels); your own Python environments are never touched. The pin set lives in `setup.py` (`VENV_PINS`) and the venv self-heals when it changes.
 
 After setup, preflight is silent and `/transcribe` just works. The check is a sub-100ms lookup, so it doesn't slow you down on subsequent runs.
@@ -166,7 +194,7 @@ Captions cover the majority of public videos for free. The STT fallback only kic
 | Whisper cloud (cascade level 3) | [Groq API key](https://console.groq.com/keys) – `whisper-large-v3` | Cheap, fast |
 | Whisper cloud (cascade level 4) | [OpenAI API key](https://platform.openai.com/api-keys) – `whisper-1` | Standard pricing |
 | Transcription + diarization, private tenant (cascade level 2) | Azure `gpt-4o-transcribe-diarize` deployment URL + key | Your Azure tenant – audio never leaves it |
-| Speaker reconciliation for long private audio | Azure `claude-opus-4-7` endpoint URL + key | Your Azure tenant |
+| Headless agent stages + speaker reconciliation for long private audio | Azure chat deployment (`AZURE_LLM_ENDPOINT`, `_KEY`, `_MODEL`), or the Anthropic passthrough `AZURE_CLAUDE_URL` + key | Your Azure tenant |
 | Disable transcription entirely | `--no-whisper` | Free, frames-only when no captions |
 | **Speaker diarization, local (DEFAULT)** | [HF_TOKEN](https://huggingface.co/settings/tokens) + license accept on [speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) *and* [segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) – model runs in the managed venv | Free; ~90 s for 41 min audio on GPU |
 | Speaker diarization – pyannote.ai (cascade level 2) | [pyannote.ai key](https://www.pyannote.ai/) – cloud diarization, aligned to the transcript | Cheaper than AssemblyAI, two API calls |
@@ -243,6 +271,13 @@ Other knobs (passed to `scripts/run.py`):
 │   ├── whisper_local_worker.py  # faster-whisper worker – runs INSIDE the managed venv
 │   ├── resources.py         # URL extraction from description + transcript, categorized
 │   ├── setup.py             # preflight + installer + .env scaffolding + managed-venv provisioning
+│   ├── llm.py               # chat client for the agent stages (Azure OpenAI / Anthropic passthrough), --probe
+│   ├── agent.py             # headless orchestrator: speakers → kompakt → illustrations → report → review.md
+│   ├── speakers_fill.py     # fills speakers.md, lists contributions filed under another label
+│   ├── kompakt.py           # compact transcript, chapters first, then per-chapter condensing
+│   ├── illustrate_agent.py  # picks frames, sets crop + caption, visual check of the crops
+│   ├── report.py            # frame descriptions + report (Übersicht, Summary, Analysis, Datenfluss)
+│   ├── companions.py        # shared readers for the companion files
 │   └── build-skill.sh       # build dist/transcribe.skill for claude.ai upload
 ├── hooks/                   # SessionStart status hook (Claude Code only)
 ├── .claude-plugin/          # plugin.json + marketplace.json (Claude Code)
