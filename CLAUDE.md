@@ -7,14 +7,12 @@ Zwei strikt getrennte Sprach-Domänen:
 - **Englisch – Code & Commits.** Jegliche Skripte, Quellcode, Programmierung, Kommentare *im Code* und Commit-Messages sind **immer** auf Englisch. Ausnahmslos, in allen Repos.
 - **Deutsch (Schweiz) – Kommunikation.** Konversation, Zusammenfassungen und Markdown-Dateien, die dem Austausch zwischen Mensch und Maschine dienen (Hand-offs, Notizen, Pläne, CLAUDE.md, …), sind auf Deutsch.
 - **Umlaute & ss.** Wo Deutsch geschrieben wird: IMMER echte Umlaute (ä, ö, ü, é) und `ss` statt `ß` – NIEMALS `ae`, `oe`, `ue` als Ersatz.
-- **Gedankenstrich: immer der deutsche Halbgeviertstrich `–` (U+2013), mit Leerzeichen davor und danach.** NIE der amerikanische Geviertstrich `—` (U+2014), der doppelt so lang ist. Gilt für alles, was ich schreibe: Konversation, Markdown, Code-Kommentare, Commit-Messages, auch in englischem Text. Beim Editieren bestehender Dateien betroffene Absätze gleich mit umstellen. Für Nachrichtenentwürfe in Daniels Namen gilt zusätzlich der Schreibstil unten: dort möglichst gar kein Gedankenstrich.
+- **Gedankenstrich: immer der deutsche Halbgeviertstrich `–` (U+2013), mit Leerzeichen davor und danach.** NIE der amerikanische Geviertstrich `—` (U+2014), der doppelt so lang ist. Gilt für alles, was ich schreibe: Konversation, Markdown, Code-Kommentare, Commit-Messages, auch in englischem Text. Beim Editieren bestehender Dateien betroffene Absätze gleich mit umstellen. Für Nachrichtenentwürfe in Daniels Namen gilt zusätzlich der Skill `schreibstil`: dort möglichst gar kein Gedankenstrich.
 - **Markdown: ein Absatz = eine Zeile.** Keine Pseudosatz-/Spiegel-Umbrüche (hard wraps) innerhalb von Absätzen oder Listenpunkten. Zeilenumbrüche nur an echten Struktur-Grenzen (Absatz, Listenpunkt, Überschrift, Tabellenzeile, Code-Zeile). Gilt für alle neu geschriebenen oder umgeschriebenen Markdown-Dateien; beim Editieren bestehender Dateien betroffene Absätze auf Einzeiler zusammenziehen.
 
 ### Schreibstil für Nachrichtenentwürfe in Daniels Namen
 
-Sobald ein Text **in Daniels Namen** entworfen wird (Chat, Mail, Teams) – in jedem Projekt und jeder Session – gilt verbindlich der nachfolgend importierte Schreibstil (`schreibstil.md`, neben dieser CLAUDE.md im ai-toolbox-Repo): maximal kurz, dialogisch, per Du, Konjunktiv für Vorschläge, kein Briefing-Ton.
-
-@schreibstil.md
+Sobald ein Text **in Daniels Namen** entworfen wird (Chat, Mail, Teams) – in jedem Projekt und jeder Session – zuerst den Skill `schreibstil` laden (`.agents/skills/schreibstil/SKILL.md` im ai-toolbox-Repo) und ihn verbindlich anwenden, inklusive VOICE-Check vor der Übergabe. Kurzfassung: maximal kurz, dialogisch, per Du, Konjunktiv für Vorschläge, kein Briefing-Ton, kein Gedankenstrich.
 
 ## Umgebungen
 
@@ -54,4 +52,4 @@ Sobald ein Text **in Daniels Namen** entworfen wird (Chat, Mail, Teams) – in j
 
 Die globale Settings-Baseline steht versioniert in `claude-settings.json` (dieses Repo) und wird mit `toolbox install --what claude-settings` nach `~/.claude/settings.json` gemerged. Braucht eine Aufgabe ein dort abgeschaltetes Tool, NICHT stillschweigend einen Workaround bauen: den User darauf hinweisen und die Reaktivierung nennen (Eintrag in `claude-settings.json` entfernen, `toolbox remove` + `install`, Session neu starten).
 
-<!-- APP_VERSION: 0.20.30 -->
+<!-- APP_VERSION: 0.21.33 -->

@@ -1,13 +1,13 @@
 ---
 name: gdrive
-description: Reads Google-native files (.gsheet/.gdoc/.gslides/.gdraw pointer files) from a Google Drive sync folder («Meine Ablage»/«My Drive») through the Google MCP tools instead of failing on the local JSON pointers, and searches and reads Drive content in general. Use when a .gsheet/.gdoc/.gslides/.gdraw file must be read, a path under a Drive sync folder returns only a pointer, a Google Sheet must be evaluated in structured form, or an autonomous run reviews document folders containing Google-native files. Trigger: «auf Google Drive suchen», «lies das Google Sheet», «was steht in der .gdoc».
+description: "Reads Google-native files (.gsheet/.gdoc/.gslides/.gdraw pointer files) from a Google Drive sync folder («Meine Ablage»/«My Drive») through the Google MCP tools instead of failing on the local JSON pointers, and searches and reads Drive content in general. Use when a .gsheet/.gdoc/.gslides/.gdraw file must be read, a path under a Drive sync folder returns only a pointer, a Google Sheet must be evaluated in structured form, or an autonomous run reviews document folders containing Google-native files. Trigger: «auf Google Drive suchen», «lies das Google Sheet», «was steht in der .gdoc»."
 argument-hint: "<pfad-zur-pointer-datei | suchbegriff>"
 allowed-tools: Read, Glob, Grep, ToolSearch
 homepage: https://github.com/danielfrey63/ai-toolbox
 repository: https://github.com/danielfrey63/ai-toolbox
 license: MIT
 metadata:
-  version: "0.2.3"
+  version: "0.3.6"
 ---
 
 # /gdrive – Google-native Dateien aus einem Drive-Sync-Ordner lesen

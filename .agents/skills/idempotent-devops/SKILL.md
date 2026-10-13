@@ -1,8 +1,8 @@
 ---
 name: idempotent-devops
-description: Scaffolds and audits idempotent, verify-then-mutate DevOps scripts (setup, deploy, install, maintenance, cleanup) with a bundled single-file Bash library (desired_state, desired_absent, parse_action, run_cmd, confirm_destructive) and templates for the setup script, README and config. Also guides a manual verify loop (verify/install/cleanup, each run twice) that proves a script is safe to re-run. Use when the user wants a new setup/deploy/install script, wants an existing script made idempotent or audited for non-idempotent patterns, reports that a script fails on re-run, or writes Bash that mutates system state (apt install, systemctl, useradd, mkdir, ufw, docker run). Trigger: «mach das Skript idempotent», «ist das Skript wirklich idempotent?», «Kampagne durchziehen».
+description: "Scaffolds and audits idempotent, verify-then-mutate DevOps scripts (setup, deploy, install, maintenance, cleanup) with a bundled single-file Bash library (desired_state, desired_absent, parse_action, run_cmd, confirm_destructive) and templates for the setup script, README and config. Also guides a manual verify loop (verify/install/cleanup, each run twice) that proves a script is safe to re-run. Use when the user wants a new setup/deploy/install script, wants an existing script made idempotent or audited for non-idempotent patterns, reports that a script fails on re-run, or writes Bash that mutates system state (apt install, systemctl, useradd, mkdir, ufw, docker run). Trigger: «mach das Skript idempotent», «ist das Skript wirklich idempotent?», «Kampagne durchziehen»."
 metadata:
-  version: "0.4.12"
+  version: "0.5.15"
 ---
 
 # Idempotent DevOps

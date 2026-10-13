@@ -1,3 +1,10 @@
+---
+name: schreibstil
+description: "Daniel Frey's personal writing style for drafting messages in his name (chat, mail, Teams, comments, replies): maximally short, dialogic, informal Du, subjunctive for proposals, no briefing tone, no dashes, plus a VOICE check before handing over. Use BEFORE writing any text that Daniel will send or post as himself, in any project. Trigger: «Entwurf», «formuliere eine Antwort», «schreib Micha», «Nachricht an», «Mail an», «Teams-Nachricht»."
+metadata:
+  version: "0.1.2"
+---
+
 # Schreibstil Daniel Frey – für Nachrichtenentwürfe
 
 Gilt für **alle Nachrichten-/Antwortentwürfe in Danis Namen** (Chat, Mail, Teams) – in allen Projekten und Sessions. Ziel: Texte klingen wie von Dani, nicht wie eine Doku.

@@ -1,6 +1,6 @@
 ---
 name: oracle-sql
-description: Answers natural-language data questions against an Oracle database through the Oracle SQLcl MCP server (`sql -mcp`) and sets that server up idempotently (verify/install/cleanup). The model queries saved, named SQLcl connections and never sees the database password. Supports Easy Connect (on-prem) and wallet/TNS (Autonomous DB) and registers the server with Claude Code or Kilo, or prints the snippet for VS Code Copilot. Use when the user wants to query an Oracle database, set up Oracle data access for an agent, register an Oracle MCP server, or test Oracle connectivity. Trigger: «Oracle abfragen», «Oracle-MCP einrichten», «SQLcl MCP».
+description: "Answers natural-language data questions against an Oracle database through the Oracle SQLcl MCP server (`sql -mcp`) and sets that server up idempotently (verify/install/cleanup). The model queries saved, named SQLcl connections and never sees the database password. Supports Easy Connect (on-prem) and wallet/TNS (Autonomous DB) and registers the server with Claude Code or Kilo, or prints the snippet for VS Code Copilot. Use when the user wants to query an Oracle database, set up Oracle data access for an agent, register an Oracle MCP server, or test Oracle connectivity. Trigger: «Oracle abfragen», «Oracle-MCP einrichten», «SQLcl MCP»."
 argument-hint: "[verify|install|cleanup] or a natural-language question about the data"
 allowed-tools: Bash, Read, AskUserQuestion
 homepage: https://github.com/danielfrey63/ai-toolbox
@@ -8,7 +8,7 @@ repository: https://github.com/danielfrey63/ai-toolbox
 license: MIT
 user-invocable: true
 metadata:
-  version: "0.8.42"
+  version: "0.9.45"
 ---
 
 # oracle-sql – query an Oracle database via the SQLcl MCP server

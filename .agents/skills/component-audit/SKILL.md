@@ -1,8 +1,8 @@
 ---
 name: component-audit
-description: Audits a codebase for component-orientation drift – finds UI/DOM construction that bypasses the project's shared factories, hand-rolled patterns that deserve a factory, and stale exceptions, then refactors the findings, verifies and commits. Driven by a project-local component inventory. Optionally uses OpenAI Codex as a cross-model read-only auditor. Use after any UI-touching change or when the user asks to verify component consistency, check for duplication or audit the components. Trigger: «Komponenten prüfen», «Component-Audit», «Duplikate im UI suchen».
+description: "Audits a codebase for component-orientation drift – finds UI/DOM construction that bypasses the project's shared factories, hand-rolled patterns that deserve a factory, and stale exceptions, then refactors the findings, verifies and commits. Driven by a project-local component inventory. Optionally uses OpenAI Codex as a cross-model read-only auditor. Use after any UI-touching change or when the user asks to verify component consistency, check for duplication or audit the components. Trigger: «Komponenten prüfen», «Component-Audit», «Duplikate im UI suchen»."
 metadata:
-  version: "0.8.2"
+  version: "0.9.5"
 ---
 
 # Component-Audit Skill

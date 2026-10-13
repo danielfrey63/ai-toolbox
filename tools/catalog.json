@@ -12,6 +12,11 @@
       "path": ".agents/skills/discover"
     },
     {
+      "name": "schreibstil",
+      "type": "skill",
+      "path": ".agents/skills/schreibstil"
+    },
+    {
       "name": "transcribe",
       "type": "skill",
       "path": ".agents/skills/transcribe"

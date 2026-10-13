@@ -1,10 +1,10 @@
 ---
 name: discover
-description: Discovers the most interesting recent YouTube videos on AI, frontier models, coding IDEs, programming, AI antipatterns, Claude skills, MCP servers and notable GitHub projects, ranked by views per day in a markdown table. Use when the user asks what is worth watching, wants a digest of recent AI/coding videos, or looks for candidates to summarize with /transcribe. Trigger: «Was gibt es Neues auf YouTube?», «Video-Digest», «interessante Videos der Woche».
+description: "Discovers the most interesting recent YouTube videos on AI, frontier models, coding IDEs, programming, AI antipatterns, Claude skills, MCP servers and notable GitHub projects, ranked by views per day in a markdown table. Use when the user asks what is worth watching, wants a digest of recent AI/coding videos, or looks for candidates to summarize with /transcribe. Trigger: «Was gibt es Neues auf YouTube?», «Video-Digest», «interessante Videos der Woche»."
 allowed-tools: Bash, Read
 user-invocable: true
 metadata:
-  version: "0.3.4"
+  version: "0.4.7"
 ---
 
 # /discover – curate recent interesting videos
