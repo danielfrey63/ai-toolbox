@@ -226,6 +226,30 @@ def references_from_links(path: Path) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+def screen_context(path: Path) -> list[str]:
+    """«[MM:SS] host» lines from links.md: which application was on screen
+    when. A logo-only web app (Omada, Jira) is named by its host, so the
+    vision stages can tell «omada.sbb.ch» from a generic «SBB-Portal»."""
+    out: list[str] = []
+    if not path.is_file():
+        return out
+    seen: set[str] = set()
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not raw.startswith("| [") or "(?)" in raw:
+            continue
+        cells = [c.strip() for c in raw.strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        ts = cells[0].split("]")[0] + "]"
+        ref = cells[1].strip("`<> ")
+        m = re.match(r"https?://([^/]+)", ref)
+        host = m.group(1) if m else (ref if re.fullmatch(r"[\w.-]+\.[a-z]{2,}", ref) else "")
+        if host and (ts, host) not in seen:
+            seen.add((ts, host))
+            out.append(f"{ts} {host}")
+    return out
+
+
 def read_glossary(path: Path) -> list[str]:
     if not path.is_file():
         return []

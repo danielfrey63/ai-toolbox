@@ -32,7 +32,8 @@ import tempfile
 from pathlib import Path
 
 import llm
-from companions import (Paths, fmt_ts, language_rules, read_json, read_protocol, resolve_base, ts_seconds,
+from companions import (Paths, fmt_ts, language_rules, read_json, read_protocol, resolve_base, screen_context,
+                        ts_seconds,
                         write_json)
 
 HERE = Path(__file__).resolve().parent
@@ -47,7 +48,7 @@ Pick between 3 and MAX frames, chronological, ts exactly as listed."""
 BBOX_SYSTEM = """You get native-resolution frames of a screen share. For EACH frame return the bounding box of the content area as normalized [x, y, w, h] in 0..1 of the full frame.
 Content area = the page body, editor pane, dialog body or slide. Exclude: browser tab bar and address bar (top ~12-14 %), the OS taskbar (bottom ~5 %), meeting participant strip or camera tiles (right or bottom), window title bars, the meeting toolbar. A slightly generous box is fine; uniform margins are trimmed afterwards.
 If the content shows a list of real person names, user IDs or e-mail addresses that is not the subject, add "redact": [[x, y, w, h], ...] in the same frame coordinates.
-Each frame comes with a DRAFT caption written from a low-resolution thumbnail. Read the native frame and return "caption": the draft corrected so that every name, label, object and application it mentions is spelled exactly as on screen (application names from window titles or logos, not guessed). Keep the draft's intent and length.
+Each frame comes with a DRAFT caption written from a low-resolution thumbnail. Read the native frame and return "caption": the draft corrected so that every name, label, object and application it mentions is spelled exactly as on screen (application names from window titles or logos, not guessed). Name a web application by the host the screen context lists for that time (omada.sbb.ch is Omada, flow.sbb.ch is Jira, confluence.sbb.ch is Confluence), never by a generic «portal». Keep the draft's intent and length.
 Return ONLY a JSON object {"boxes": [{"ts": "<as given>", "bbox": [x, y, w, h], "redact": [], "caption": "<corrected caption>"}]}."""
 
 QS_SYSTEM = """You check a cropped illustration against its source frame and caption.
@@ -68,13 +69,15 @@ def video_path(proto: dict, p: Paths) -> Path | None:
     return next((c for c in cand if c.is_file()), None)
 
 
-def select(frames: list[dict], chapters: list[dict], max_n: int, language: str | None) -> dict:
+def select(frames: list[dict], chapters: list[dict], max_n: int, language: str | None,
+           context: list[str]) -> dict:
     listing = "\n".join(
         f"- {f.get('ts')} [{f.get('kind', '')}] {f.get('screen', '')}: {f.get('content', '')}"
         + (f" | candidate: {f.get('why')}" if f.get("illustration") else "") for f in frames)
     chap = "\n".join(f"- [{c['start']} – {c['end']}] {c['title']}" for c in chapters) or "- none known"
     prompt = (f"{language_rules(language)} Captions in that language.\nMAX = {max_n}\n\n"
-              f"## Chapters\n{chap}\n\n## Frames\n{listing}\n")
+              f"## Chapters\n{chap}\n\n## Screen context (host read off the screen at that time)\n"
+              + ("\n".join(context) or "- none") + f"\n\n## Frames\n{listing}\n")
     return llm.ask_json(prompt, system=SELECT_SYSTEM, role="text", max_tokens=3000, label="illustrate-select")
 
 
@@ -85,7 +88,8 @@ def extract(video: Path, stamps: list[float], out: Path) -> dict[float, Path]:
     return {t: out / f"frame_t{int(t):05d}.png" for t in stamps if (out / f"frame_t{int(t):05d}.png").is_file()}
 
 
-def boxes(frames: dict[float, Path], drafts: dict[float, str], language: str | None) -> dict[float, dict]:
+def boxes(frames: dict[float, Path], drafts: dict[float, str], language: str | None,
+          context: list[str]) -> dict[float, dict]:
     out: dict[float, dict] = {}
     items = sorted(frames.items())
     for i in range(0, len(items), 4):
@@ -93,7 +97,9 @@ def boxes(frames: dict[float, Path], drafts: dict[float, str], language: str | N
         listing = "\n".join(f"{k + 1}. ts={fmt_ts(t)} | DRAFT caption: {drafts.get(t, '')}"
                             for k, (t, _) in enumerate(batch))
         obj = llm.ask_json(f"{language_rules(language)} Captions in that language.\n"
-                           f"Frames in this order:\n{listing}", system=BBOX_SYSTEM,
+                           "Screen context (host read off the screen at that time):\n"
+                           + ("\n".join(context) or "- none") +
+                           f"\nFrames in this order:\n{listing}", system=BBOX_SYSTEM,
                            images=[p for _, p in batch], role="vision", max_tokens=2000,
                            label=f"illustrate-bbox {i + 1}")
         got = obj.get("boxes", []) or []
@@ -181,7 +187,8 @@ def main() -> int:
     analysis = read_json(p.analysis) or {}
     chapters = analysis.get("chapters", []) if isinstance(analysis, dict) else []
 
-    sel = select(frames_desc, chapters, args.max, args.language)
+    context = screen_context(p.links)
+    sel = select(frames_desc, chapters, args.max, args.language, context)
     picks = [x for x in sel.get("picks", []) if x.get("ts")][: args.max]
     if not picks:
         print("[illustrate-agent] model picked no illustrations", file=sys.stderr)
@@ -192,7 +199,7 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="transcribe-ill-") as tmp:
         frames = extract(video, [x["_t"] for x in picks], Path(tmp))
-        bx = boxes(frames, {x["_t"]: x["caption"] for x in picks}, args.language)
+        bx = boxes(frames, {x["_t"]: x["caption"] for x in picks}, args.language, context)
         spec = []
         for i, x in enumerate(picks, 1):
             b = bx.get(x["_t"])
