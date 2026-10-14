@@ -19,7 +19,13 @@
     {
       "name": "transcribe",
       "type": "skill",
-      "path": ".agents/skills/transcribe"
+      "path": ".agents/skills/transcribe",
+      "mirror": {
+        "remote": "bitbucket-transcribe",
+        "url": "ssh://git@codessh.sbb.ch:7999/am_dfa/transcribe.git",
+        "branch": "master",
+        "description": "One-way team mirror (SBB Bitbucket): tools/mirror-skill pushes the skill's own history there; never commit on that side."
+      }
     },
     {
       "name": "gdrive",
