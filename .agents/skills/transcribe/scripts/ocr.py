@@ -56,6 +56,18 @@ if str(SCRIPT_DIR) not in sys.path:
 OCR_PACKAGE = "rapidocr-onnxruntime"
 DEFAULT_MIN_SCORE = 0.85
 DEFAULT_MAX_FRAMES = 60
+
+
+def cache_key(source: Path, frames: list[dict], max_frames: int, settle: float) -> str:
+    """Identify actual OCR inputs without tying reuse to temporary directories."""
+    import config
+    from state import digest, file_hash, media_identity
+    return digest({"source": media_identity(source), "max_frames": max_frames, "settle": settle,
+                   "acceleration": config.get("TRANSCRIBE_OCR_ACCEL"), "code": file_hash(Path(__file__)),
+                   "frames": [{"t": f["timestamp_seconds"], "kind": f.get("kind", "regular"),
+                               "image": file_hash(Path(f["path"]))} for f in frames]})
+
+
 # 17x16 sidecar -> 256-bit hash, like illustrate.py: two different wiki
 # pages are near-identical under the coarse 9x8 analysis hash.
 _HASH_W, _HASH_H = 17, 16

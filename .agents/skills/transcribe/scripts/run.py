@@ -220,9 +220,9 @@ def build_parser():
         "--whisper",
         choices=["azure-diarize", "groq", "openai", "whisper-local"],
         default=None,
-        help="Force a specific transcription backend. Default: prefer "
-             "azure-diarize (private, when configured), then Groq, then "
-             "OpenAI, then whisper-local (fully on-device faster-whisper in "
+        help="Force a specific transcription backend. Default: whisper-local first, "
+             "then configured Azure, Groq and OpenAI cloud fallbacks. "
+             "Local faster-whisper runs in "
              "the managed venv; no key needed, self-provisions on first use).",
     )
     ap.add_argument(
@@ -252,8 +252,8 @@ def build_parser():
     ap.add_argument(
         "--language",
         default=None,
-        help='Language hint, e.g. "de". Only used by the repair pass, to decide '
-             "which scripts count as foreign and to pin the re-transcription. "
+        help='Language hint, e.g. "de", passed to local speech recognition, AssemblyAI '
+             "and repair. "
              "Omit for auto-detect.",
     )
     ap.add_argument(
@@ -316,7 +316,7 @@ def build_parser():
         metavar="SPEC",
         help="Cap the CPU the pipeline's CPU-bound stages may use together: "
              "a share (\"50%%\"), an absolute thread count (\"6\"), or "
-             "\"all\" for no limit. Default: 75%% of the cores, or "
+             "\"all\" for no limit. Default: 50%% of the usable cores, or "
              "TRANSCRIBE_CPU_BUDGET from the environment / .env. Lower it if "
              "the machine gets hot or unresponsive during a run.",
     )
@@ -325,7 +325,7 @@ def build_parser():
         type=int,
         default=None,
         help="Thread-pool size for per-frame ffmpeg calls (default: "
-             "min(8, cpu_count())). Each worker spawns one ffmpeg subprocess. "
+             "derived from the shared CPU budget). Each worker spawns one ffmpeg subprocess. "
              "Set to 1 to force sequential extraction (useful on HDDs where "
              "concurrent seeks thrash, or for benchmark comparison). "
              "Going above 8 rarely helps on consumer hardware - ffmpeg "
@@ -335,7 +335,7 @@ def build_parser():
         "--no-dedup",
         action="store_true",
         help="Disable dHash-based deduplication of near-identical regular "
-             "frames (default: dedup enabled with threshold 6). Cut frames "
+             "frames (default: adaptive threshold). Cut frames "
              "are never deduplicated regardless of this flag.",
     )
     ap.add_argument(
@@ -407,17 +407,52 @@ def build_parser():
     return ap
 
 
+def validate_args(args, ap) -> None:
+    import math
+    import config
+    for name in ("max_frames", "resolution", "frame_workers", "whisper_workers", "scene_max_frames", "ocr_max_frames", "fps"):
+        value = getattr(args, name, None)
+        if value is not None and (not math.isfinite(value) or value <= 0):
+            ap.error(f"--{name.replace('_', '-')} must be positive")
+    for name, upper in (("scene_min_gap", None), ("scene_settle_seconds", None), ("scene_threshold", 100), ("ocr_min_score", 1)):
+        value = getattr(args, name, None)
+        if value is not None and (not math.isfinite(value) or value < 0 or (upper is not None and value > upper)):
+            ap.error(f"Invalid --{name.replace('_', '-')}")
+    try:
+        if args.cpu_budget:
+            config.validate("TRANSCRIBE_CPU_BUDGET", args.cpu_budget)
+        start, end = parse_time(args.start), parse_time(args.end)
+        if any(v is not None and (not math.isfinite(v) or v < 0) for v in (start, end)) or (end is not None and end <= (start or 0)):
+            raise ValueError("Expected 0 <= start < end")
+    except (ValueError, SystemExit) as exc:
+        ap.error(str(exc))
+    if args.save_md and not args.save_md.lower().endswith(".md"):
+        ap.error("--save-md must name a Markdown (.md) file")
+
+
 def main() -> int:
     ap = build_parser()
     args = cli.parse(ap)
-    for name in ("max_frames", "resolution", "frame_workers", "whisper_workers"):
-        value = getattr(args, name, None)
-        if value is not None and value < 1:
-            ap.error(f"--{name.replace('_', '-')} must be positive")
+    validate_args(args, ap)
+    from companions import resolve_base
+    from joblock import workflow_lock
+    target = Path(args.save_md).expanduser().resolve() if args.save_md else (
+        resolve_source_path(args.source).with_suffix(".md") if not args.no_save_md and not is_url(args.source) else None)
+    if target is not None:
+        with workflow_lock(resolve_base(target), background=args.background) as acquired:
+            if not acquired:
+                return 0
+            return execute(args)
+    return execute(args)
+
+
+def execute(args) -> int:
     import config
     from state import media_identity, digest, write_json, write, StageState
     # Validate the complete configuration before allocating work or downloading.
     config.snapshot()
+    if not is_url(args.source):
+        args.source = str(resolve_source_path(args.source).resolve())
     requested_options = {k: v for k, v in vars(args).items() if k not in ("result_json", "fresh", "background")}
     from pipeline import local_config, glossary_hash
     requested_config = local_config()
@@ -452,15 +487,7 @@ def main() -> int:
         src = resolve_source_path(args.source)
         save_md_path = src.with_suffix(".md")
 
-    # One job per recording: the watcher's background run and a manual
-    # /transcribe on the same file hand over instead of computing twice.
-    if save_md_path is not None:
-        from joblock import JobLock
-        job = JobLock(save_md_path.with_name(save_md_path.stem + ".transcribe.lock"),
-                      background=args.background)
-        if job.acquire() == "busy":
-            return 0
-    elif args.background:
+    if args.background and save_md_path is None:
         from joblock import lower_own_priority
         lower_own_priority()
 
@@ -576,8 +603,11 @@ def main() -> int:
         save_md_path.parent.mkdir(parents=True, exist_ok=True)
 
     identity = media_identity(Path(video_path)) if has_media else {"url": args.source}
+    stt_settings = {name: value for name, value in requested_config.items()
+                    if name.startswith(("AZURE_TRANSCRIBE_", "ASSEMBLYAI_", "TRANSCRIBE_WHISPER_"))
+                    or name == "TRANSCRIBE_GPU_COMPUTE"}
     stt_key = digest({"source": identity, "backend": args.whisper, "diarize": args.diarize, "language": args.language,
-                      "glossary": hotwords, "model": config.get("TRANSCRIBE_WHISPER_MODEL")})
+                      "glossary": hotwords, "settings": stt_settings})
     cache_meta = (seg_store or work / "segments.json").with_suffix(".meta.json")
     from state import read_json as read_state
     prior_meta = read_state(cache_meta, {}) or {}
@@ -775,9 +805,12 @@ def main() -> int:
     ocr_refs: list[dict] = []
     if all_frames and not args.no_ocr:
         ocr_cache = ocr_store or (work / "ocr" / "ocr.json")
+        ocr_key = ocr_stage.cache_key(video_path, all_frames, args.ocr_max_frames, args.scene_settle_seconds)
         if not args.fresh and ocr_cache.exists():
             try:
                 ocr_result = json.loads(ocr_cache.read_text(encoding="utf-8"))
+                if not isinstance(ocr_result, dict) or ocr_result.get("input") != ocr_key:
+                    raise ValueError("OCR inputs changed")
                 print(
                     f"[transcribe] on-screen references: resumed from {ocr_cache.name} "
                     f"({len(ocr_result.get('frames', []))} frames)",
@@ -811,10 +844,7 @@ def main() -> int:
             )
             if ocr_result is not None and ocr_store:
                 try:
-                    ocr_store.write_text(
-                        json.dumps({"skill_version": APP_VERSION, **ocr_result}, ensure_ascii=False, indent=1),
-                        encoding="utf-8",
-                    )
+                    write_json(ocr_store, {"skill_version": APP_VERSION, **ocr_result, "input": ocr_key})
                 except OSError as exc:
                     print(f"[transcribe] WARNING: could not cache OCR result: {exc}", file=sys.stderr)
         if ocr_result is not None:
@@ -839,6 +869,11 @@ def main() -> int:
             except OSError as exc:
                 print(f"[transcribe] WARNING: could not write links.md: {exc}", file=sys.stderr)
 
+    if ocr_store and ocr_result is None:
+        # Later stages must not use references from an earlier scope or source.
+        write_json(ocr_store, {"frames": [], "status": "disabled" if args.no_ocr else "unavailable"})
+        write(links_path, "# On-screen references\n\n_No current OCR evidence._\n")
+
     # Diarization is on by default (auto = local first). When nothing is
     # configured, default-auto degrades silently to a plain transcript;
     # only an *explicit* --diarize on the command line earns a warning.
@@ -860,71 +895,26 @@ def main() -> int:
     # the report must not claim this build produced that transcript.
     resumed_version: str | None = None
 
-    # Transcript path: VTT captions → AssemblyAI → Whisper.
-    #
-    # A cached transcript outranks captions. Whether a platform hands out
-    # caption tracks at all varies between runs (yt-dlp gets rate-limited on
-    # them, see download.py), so letting captions win made the same command
-    # produce a different transcript on a re-run - and discard an expensive,
-    # already-computed Whisper result to do it. The cache is only consulted
-    # further down, so the check has to happen here, before captions are
-    # parsed. --fresh still forces a clean re-transcription.
+    # Transcript path: valid cache, captions, AssemblyAI, Whisper.
+    # Provider availability can vary; a completed cache outranks new captions.
     seg_cache = seg_store or (work / "segments.json")
-    if dl.get("subtitle_path") and not args.fresh and seg_cache.exists():
-        print(
-            f"[transcribe] captions available but {seg_cache.name} exists - "
-            "keeping the cached transcript (--fresh re-transcribes)",
-            file=sys.stderr,
-        )
-    elif dl.get("subtitle_path"):
-        try:
-            all_segments = parse_vtt(dl["subtitle_path"])
-            transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
-            transcript_source = "captions"
-        except Exception as exc:
-            print(f"[transcribe] subtitle parse failed: {exc}", file=sys.stderr)
-
-    if not transcript_segments and has_media and diarize_backend == "assemblyai":
-        # AssemblyAI returns transcript + speaker labels in one call.
-        try:
-            audio_path = extract_audio(video_path, work / "audio.mp3")
-            all_segments = diarize_assemblyai(audio_path)
-            transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
-            transcript_source = "assemblyai (transcript + diarization)"
-            diarize_backend = "done"
-        except SystemExit as exc:
-            msg = str(exc)
-            # Distinguish "key not configured" (expected, friendly) from
-            # "real API failure" (error). The "missing" path is what triggers
-            # when --diarize=assemblyai is picked but the key isn't set -
-            # we want this to read like a routine fallback, not an alarm.
-            if "ASSEMBLYAI_API_KEY missing" in msg:
-                print(
-                    "[transcribe] AssemblyAI skipped: ASSEMBLYAI_API_KEY not "
-                    "configured in ~/.config/transcribe/.env - falling back to Whisper.",
-                    file=sys.stderr,
-                )
-            else:
-                print(
-                    f"[transcribe] AssemblyAI failed ({msg}) - falling back to Whisper",
-                    file=sys.stderr,
-                )
-            diarize_backend = None
-
     # Segment cache for idempotent re-runs. When the output is persisted
     # (default for local files / save_md), the cache sits next to it as
     # <base>.segments.json and survives across runs - reprocessing the same
     # source skips the expensive STT step. With --no-save-md it falls back to
     # the ephemeral work dir. --fresh forces a clean re-transcription.
-    # (seg_cache is resolved above, where captions are gated on it.)
-    if not args.fresh and not transcript_segments and not args.no_whisper and seg_cache.exists():
+    if not args.fresh and not all_segments and not args.no_whisper and seg_cache.exists():
         try:
             cached = json.loads(seg_cache.read_text(encoding="utf-8"))
             all_segments = cached["segments"]
+            if not isinstance(all_segments, list) or any(not isinstance(s, dict) or
+                    not isinstance(s.get("text"), str) or not isinstance(s.get("start"), (int, float)) or
+                    not isinstance(s.get("end"), (int, float)) for s in all_segments):
+                raise ValueError("Invalid segment cache structure")
             used_backend = cached.get("backend", "unknown")
             cached_version = cached.get("skill_version", "unknown")
             transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
-            transcript_source = f"transcript ({used_backend}, resumed)"
+            transcript_source = f"{'assemblyai' if used_backend == 'assemblyai' else 'transcript'} ({used_backend}, resumed)"
             resumed_version = cached_version
             print(
                 f"[transcribe] resuming from {seg_cache.name} ({len(all_segments)} "
@@ -943,10 +933,49 @@ def main() -> int:
                 )
             if (work / "audio.mp3").exists():
                 audio_path = work / "audio.mp3"
-        except (ValueError, KeyError) as exc:
+        except (ValueError, KeyError, TypeError, OSError) as exc:
+            all_segments = []
             print(f"[transcribe] ignoring corrupt {seg_cache.name} ({exc})", file=sys.stderr)
 
-    if not transcript_segments and has_media and not args.no_whisper:
+    if not all_segments and dl.get("subtitle_path"):
+        try:
+            all_segments = parse_vtt(dl["subtitle_path"])
+            transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
+            transcript_source = "captions"
+        except Exception as exc:
+            print(f"[transcribe] subtitle parse failed: {exc}", file=sys.stderr)
+
+    if not all_segments and has_media and diarize_backend == "assemblyai":
+        # AssemblyAI returns transcript + speaker labels in one call.
+        try:
+            audio_path = extract_audio(video_path, work / "audio.mp3")
+            all_segments = diarize_assemblyai(audio_path, language=args.language)
+            write_json(seg_cache, {"skill_version": APP_VERSION, "backend": "assemblyai", "segments": all_segments})
+            transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
+            transcript_source = "assemblyai (transcript + diarization)"
+            diarize_backend = "done"
+        except SystemExit as exc:
+            if args.diarize == "assemblyai":
+                raise RuntimeError(config.redact(f"Requested AssemblyAI backend failed: {exc}")) from None
+            msg = str(exc)
+            # Distinguish "key not configured" (expected, friendly) from
+            # "real API failure" (error). The "missing" path is what triggers
+            # when --diarize=assemblyai is picked but the key isn't set -
+            # we want this to read like a routine fallback, not an alarm.
+            if "ASSEMBLYAI_API_KEY missing" in msg:
+                print(
+                    "[transcribe] AssemblyAI skipped: ASSEMBLYAI_API_KEY not "
+                    "configured - falling back to Whisper.",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"[transcribe] AssemblyAI failed ({msg}) - falling back to Whisper",
+                    file=sys.stderr,
+                )
+            diarize_backend = None
+
+    if not all_segments and has_media and not args.no_whisper:
         stt_cascade: list = []
         try:
             stt_cascade = select_backends(args.whisper or None)
@@ -1531,7 +1560,7 @@ def main() -> int:
         emit_t("```")
         emit_t(transcript_text)
         emit_t("```")
-    elif focused and dl.get("subtitle_path"):
+    elif focused and all_segments:
         emit_t(f"_No transcript lines fell inside {format_time(effective_start)} -> {format_time(effective_end)}._")
     else:
         setup_py = SCRIPT_DIR / "setup.py"
@@ -1563,7 +1592,7 @@ def main() -> int:
         for path, lines in ((protocol_path, protocol_lines), (transcript_path, transcript_lines)):
             if not path.is_file() or path.read_text(encoding="utf-8") != "\n".join(lines) + "\n":
                 raise RuntimeError(f"Required output was not persisted: {path}")
-    if transcript_segments:
+    if all_segments:
         write_json(cache_meta, {"stt": stt_key, "source": identity})
     result = {"schema": 1, "status": "complete", "source": args.source,
               "base": str(save_md_path.parent / base) if save_md_path else None,

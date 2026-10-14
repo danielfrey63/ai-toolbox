@@ -76,12 +76,16 @@ def items(p: Paths, target: str | None) -> list[tuple[str, str, str, list[str]]]
         if details:
             details.append("Nach Korrekturen: `agent.py <base> --only speakers,kompakt,report --force`")
         out.append(("speakers", text, _hash(p.speakers), details))
-    if p.spec.is_file():
+    from publish import publication_images
+    uploads = publication_images(p)
+    if p.spec.is_file() or uploads:
         k, n = redaction_summary(p)
         red = f"Schwärzung in {k} von {n} Bildern" if k else "keine Schwärzung"
-        text = (f"Illustrationen in `{p.illustrations.name}/` angesehen: {n} Ausschnitte, Bildunterschriften "
+        text = (f"Publizierte Bilder angesehen: {len(uploads)} verlinkte Bilder, {n} erzeugte Ausschnitte, Bildunterschriften "
                 f"stimmen, {red} passt zum Empfängerkreis")
-        crops = sorted(p.illustrations.glob("ill_*.png")) if p.illustrations.is_dir() else []
+        from companions import read_json
+        manifest = read_json(p.manifest) or {}
+        crops = list(dict.fromkeys(uploads + [p.illustrations / i["path"] for i in manifest.get("illustrations", [])]))
         out.append(("illustrations", text, _hash(p.spec, p.manifest, *crops),
                     ["Schwärzung ändern: `pipeline.py <base> --redact` bzw. `--no-redact`",
                      f"Ausschnitt oder Bildunterschrift ändern: `{p.spec.name}` bearbeiten, dann "

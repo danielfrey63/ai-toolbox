@@ -40,7 +40,7 @@ PARAMETERS = {
     "AZURE_TRANSCRIBE_DIARIZE_URL": Parameter(kind="url", description="Full Azure audio endpoint, including api-version."),
     "AZURE_TRANSCRIBE_DIARIZE_KEY": Parameter(secret=True),
     "AZURE_TRANSCRIBE_CHUNK_SECONDS": Parameter("600", "float", minimum=1, maximum=1500),
-    "AZURE_TRANSCRIBE_OVERLAP_SECONDS": Parameter("20", "float", minimum=0),
+    "AZURE_TRANSCRIBE_OVERLAP_SECONDS": Parameter("20", "float", "At most half of AZURE_TRANSCRIBE_CHUNK_SECONDS.", minimum=0),
     "AZURE_TRANSCRIBE_TIMEOUT": Parameter("900", "float", minimum=1),
     "GROQ_API_KEY": Parameter(secret=True),
     "OPENAI_API_KEY": Parameter(secret=True),
@@ -156,6 +156,8 @@ def snapshot(*, explain: bool = True) -> dict:
         value, origin = resolve(name)
         shown = ("set" if value else "not set") if spec.secret else value
         result[name] = {"value": shown, "source": origin} if explain else shown
+    if float(get("AZURE_TRANSCRIBE_OVERLAP_SECONDS")) > float(get("AZURE_TRANSCRIBE_CHUNK_SECONDS")) / 2:
+        raise ValueError("AZURE_TRANSCRIBE_OVERLAP_SECONDS must not exceed half of AZURE_TRANSCRIBE_CHUNK_SECONDS")
     return result
 
 

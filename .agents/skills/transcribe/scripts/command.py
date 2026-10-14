@@ -178,7 +178,7 @@ def option_reference() -> str:
                 continue
             seen.add(action.dest)
             default = "auto/unset" if action.default is None else str(action.default)
-            help_text = (action.help or "").replace("|", "/").replace("\n", " ")
+            help_text = (action.help or "").replace("|", "/").replace("\n", " ").replace("%%", "%")
             if action.choices:
                 help_text += " Choices: " + ", ".join(map(str, action.choices))
             lines.append(f"| `{', '.join(action.option_strings)}` | `{default}` | {help_text} |")

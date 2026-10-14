@@ -276,6 +276,8 @@ def set_redaction(spec: list[dict], video: Path, p: Paths, redact: bool) -> None
         with tempfile.TemporaryDirectory(prefix="transcribe-ill-") as tmp:
             frames = extract(video, [float(e["timestamp"]) for e in spec], Path(tmp))
             items = [(e, frames.get(float(e["timestamp"]))) for e in spec]
+            if any(f is None for _, f in items):
+                raise RuntimeError("Redaction source frames are missing; previous spec preserved")
             items = [(e, f) for e, f in items if f]
             for i in range(0, len(items), 4):
                 batch = items[i:i + 4]
@@ -286,8 +288,11 @@ def set_redaction(spec: list[dict], video: Path, p: Paths, redact: bool) -> None
                                    label=f"illustrate-redact {i + 1}")
                 got = obj.get("frames", []) or []
                 by_ts = {g.get("ts"): g for g in got}
+                expected = {fmt_ts(float(e["timestamp"])) for e, _ in batch}
+                if set(by_ts) != expected or len(got) != len(batch) or any(not isinstance(g.get("redact"), list) for g in got):
+                    raise RuntimeError("Incomplete redaction reply; previous spec preserved")
                 for k, (e, _) in enumerate(batch):
-                    g = by_ts.get(fmt_ts(float(e["timestamp"]))) or (got[k] if k < len(got) else {})
+                    g = by_ts[fmt_ts(float(e["timestamp"]))]
                     boxes_ = [b for b in (g.get("redact") or []) if isinstance(b, list) and len(b) == 4]
                     if boxes_:
                         e["redact"] = boxes_
@@ -324,12 +329,13 @@ def main() -> int:
     options = {"language": args.language, "max": args.max, "rounds": args.rounds}
     key = stage_key(p, "illustrate", options)
     old = state.entries().get("illustrate", {})
-    existing = read_json(p.spec) if p.spec.is_file() and not args.force else None
+    original = read_json(p.spec)
+    existing = original if not args.force else None
     if old and old.get("input") != key and old.get("detail") == file_hash(p.spec):
         existing = None
     setting = redact_setting(args.redact)
-    if isinstance(existing, list) and existing:
-        redact = spec_redaction(existing) if setting is None else setting
+    if isinstance(original, list) and original:
+        redact = spec_redaction(original) if setting is None else setting
     else:
         redact = bool(setting)
     manifest_data = read_json(p.manifest) or {}

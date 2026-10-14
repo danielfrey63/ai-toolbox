@@ -21,8 +21,8 @@ speakers.md first; the next agent.py call continues where it stopped
 (every stage is idempotent and skips finished work).
 
 A hand correction in speakers.md needs nothing but another plain call: the
-speaker stage keeps every name you wrote, asks the model only about labels
-still empty and applies the names to transcript and vtt, and kompakt and report are rebuilt because they no
+speaker stage keeps every name you wrote, rechecks changed evidence for
+unnamed labels and open contributions, and applies the names to transcript and vtt. Kompakt and report are rebuilt because they no
 longer match the inputs recorded in <base>.state.json. A second call reuses
 completed stages.
 

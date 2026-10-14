@@ -17,9 +17,9 @@ Rules (same as report-writing.md):
   one of the two                                      -> medium, name + (?)
   neither                                             -> name left empty
 
-Idempotent: a speakers.md whose labels are all named is left alone unless
---force, and so is one that nobody touched since the last fill (same file,
-transcript and participants list - the stamp carries their hash). The human
+Idempotent: matching speakers, transcript, participants, language and model
+settings reuse the completed stage. New evidence is evaluated even when
+all labels already have names. The human
 edits the same file; a re-run never overwrites a non-empty Name cell
 without --force, and it keeps every row of «Open attributions» as it
 stands (narrowed candidates, rewritten cells) - the model only adds
@@ -247,23 +247,19 @@ def main() -> int:
     if not sp["labels"]:
         print("[speakers-fill] no labels table - nothing to do", file=sys.stderr)
         return 0
-    unnamed = [r for r in sp["labels"] if not r.get("Name")]
-    if not unnamed and not args.force and OPEN_HEADING in sp["text"]:
-        print(f"[speakers-fill] all {len(sp['labels'])} labels named and open list present - skip (use --force)",
-              file=sys.stderr)
+    from state import StageState, stage_key
+    state = StageState(p.base)
+    options = {"language": args.language}
+    if not args.force and not args.dry_run and state.current("speakers_fill", stage_key(p, "speakers_fill", options), [p.speakers]):
+        print("[speakers-fill] inputs and model settings unchanged - skip", file=sys.stderr)
         finish(p, restamp=True, apply=args.apply)
-        return 0
-    stamp = STAMP_RE.search(sp["text"])
-    last = HASH_RE.search(stamp.group(0)) if stamp else None
-    if last and last.group(1) == input_hash(p) and not args.force:
-        print(f"[speakers-fill] speakers.md, transcript and participants unchanged since the last fill - skip "
-              f"(edit speakers.md or use --force)", file=sys.stderr)
-        finish(p, restamp=True, apply=args.apply)
+        state.record("speakers_fill", stage_key(p, "speakers_fill", options), [p.speakers])
         return 0
     ok, reason = llm.available()
     if not ok:
         print(f"[speakers-fill] skipped: LLM not configured ({reason})", file=sys.stderr)
-        finish(p, restamp=False, apply=args.apply)
+        if not args.dry_run:
+            finish(p, restamp=False, apply=args.apply)
         return 3
     blocks = read_transcript(p.transcript)
     if not blocks:
@@ -285,6 +281,7 @@ def main() -> int:
           file=sys.stderr)
     finish(p, restamp=False, apply=args.apply)
     stamp_hash(p)
+    state.record("speakers_fill", stage_key(p, "speakers_fill", options), [p.speakers])
     return 0
 
 

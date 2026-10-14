@@ -1,6 +1,6 @@
 {
   "name": "transcribe",
-  "version": "1.80.415",
+  "version": "1.81.416",
   "description": "Transcribe audio or video from a URL or local file. Portable CLI with verified installation, resumable processing, speaker mapping and analysis through a configured model or the calling harness. Local audio processing is explicitly selectable. Persistent reports and reproducible illustrations; human review gates optional Confluence publication.",
   "author": {
     "name": "Bradley Bonanno"

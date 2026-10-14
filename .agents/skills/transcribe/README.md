@@ -2,19 +2,49 @@
 
 Transcribe verarbeitet Audio- und Videoaufnahmen, erkennt Sprecher und erstellt Berichte mit Zeitstempeln und optionalen Bildausschnitten. Die lokale Medienverarbeitung funktioniert ohne Cloud-Key; eine Harness oder ein konfiguriertes Modell übernimmt die Auswertung.
 
-**Installation für Menschen und Harnesses: [INSTALL.md](INSTALL.md).** Die Anleitung gilt im eigenständigen Repository, im Toolbox-Unterordner und im Skill-Bundle. Der Skill-Ordner enthält immer `transcribe.py` und `SKILL.md`.
-
-## Schnellstart
+## CLI: die wichtigsten Aufrufe
 
 Im Skill-Ordner; unter macOS/Linux gegebenenfalls `python3` verwenden:
 
-```text
+```sh
+# Einmal installieren und prüfen
 python transcribe.py install --profile local --non-interactive
-python transcribe.py doctor --profile local --json
-python transcribe.py run "aufnahme.m4a" --local --no-diarize --analysis harness --json
+python transcribe.py doctor --profile local
+
+# Audio oder Video lokal transkribieren, ohne API-Key
+python transcribe.py run "aufnahme.mp4" --local --no-diarize --analysis none
+
+# Vorab zeigen, was berechnet oder wiederverwendet wird
+python transcribe.py run "aufnahme.mp4" --local --no-diarize --analysis none --plan
+
+# Wiederaufnehmen, mit den Einstellungen des ersten Laufs
+python transcribe.py run "aufnahme.transcript.md" --analysis none
+
+# Gespeicherten Stand und effektive Konfiguration ansehen
+python transcribe.py status "aufnahme.transcript.md"
+python transcribe.py config show --explain
+
+# Hilfe und sämtliche Medienoptionen
+python transcribe.py --help
+python transcribe.py run --help-all
 ```
 
-`--analysis harness` liefert Begleitdateien zur Auswertung durch den aufrufenden Agenten. `--analysis none` endet nach der Medienaufbereitung. Für automatische Berichtserstellung einen geeigneten Modell-Endpunkt konfigurieren, Profil `headless` prüfen und `--analysis model` verwenden.
+Das Transkript steht neben der Aufnahme in `aufnahme.transcript.md`. Statt einer Datei kann auch eine Video-URL übergeben werden. `--no-diarize` lässt die Sprechertrennung weg; dafür ist sonst ein Hugging-Face-Zugang nötig. Mit `--json` liefern die Lauf-, Plan-, Status- und Diagnosebefehle maschinenlesbare Ergebnisse.
+
+Für einen Bericht durch die aufrufende Harness:
+
+```sh
+python transcribe.py run "aufnahme.mp4" --local --no-diarize --analysis harness --json
+```
+
+Für automatische Berichtserstellung einen Analyse-Endpunkt gemäss [INSTALL.md](INSTALL.md) konfigurieren:
+
+```sh
+python transcribe.py doctor --profile headless
+python transcribe.py run "aufnahme.mp4" --local --no-diarize --analysis model
+```
+
+Nach der Installation ist auch `transcribe …` möglich, wenn `~/.transcribe/bin/` im `PATH` liegt. Die portable Form oben funktioniert ohne PATH-Änderung. **[Vollständige Installation für Menschen und Harnesses](INSTALL.md)**, gültig im eigenständigen Repository, im Toolbox-Unterordner und im Skill-Bundle.
 
 ## CLI
 

@@ -27,22 +27,28 @@ POLL_SECONDS = 5.0
 
 
 @contextmanager
-def workflow_lock(base: Path):
+def workflow_lock(base: Path, background: bool = False):
     """Subprocesses of one pipeline share its lock; unrelated entrypoints wait."""
     name = str(base.resolve())
     previous = os.environ.get("TRANSCRIBE_WORKFLOW_LOCK")
     if previous == name:
-        yield
+        yield True
         return
-    with JobLock(base.with_name(base.name + ".workflow.lock")):
+    job = JobLock(base.with_name(base.name + ".workflow.lock"), background=background)
+    if job.acquire() == "busy":
+        yield False
+        return
+    try:
         os.environ["TRANSCRIBE_WORKFLOW_LOCK"] = name
         try:
-            yield
+            yield True
         finally:
             if previous is None:
                 os.environ.pop("TRANSCRIBE_WORKFLOW_LOCK", None)
             else:
                 os.environ["TRANSCRIBE_WORKFLOW_LOCK"] = previous
+    finally:
+        job.release()
 
 _WIN = os.name == "nt"
 if _WIN:

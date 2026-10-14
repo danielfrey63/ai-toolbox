@@ -85,4 +85,4 @@ Vor einem Update die installierte Commit-ID notieren. Den gewünschten Stand aus
 | `4` | Am ausdrücklich angeforderten Sprecher-Review angehalten |
 | `5` | Publikationsfreigabe noch offen |
 
-Spezialskripte behalten ihre dokumentierten Legacy-Codes. Fehlercodes von Kindprozessen werden weitergereicht; unbekannte Nichtnull-Codes sind Fehler. Fortschritt läuft auf stderr, `--json` liefert ein JSON-Ergebnis auf stdout. Freigabe-Checkboxen werden ausschliesslich von Menschen gesetzt.
+Spezialskripte behalten ihre dokumentierten Legacy-Codes. Fehlercodes von Kindprozessen werden weitergereicht; unbekannte Nichtnull-Codes sind Fehler. Fortschritt läuft auf stderr, `--json` liefert bei abgeschlossenen Aktionen ein JSON-Ergebnis auf stdout. Ungültige Aufrufe oder frühe Laufzeitfehler können ohne JSON mit einem Nichtnull-Code enden. Ein Hintergrundlauf gegen eine bereits bearbeitete Aufnahme endet mit `0` und dem Status `busy`; eine Harness versucht ihn später erneut. Freigabe-Checkboxen werden ausschliesslich von Menschen gesetzt.

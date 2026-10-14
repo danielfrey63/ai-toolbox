@@ -29,7 +29,7 @@ def resolve_base(arg: str | Path) -> Path:
     suffixes so `x.transcript.md`, `x.md`, `x.mp4` and `x` all map to `x`."""
     p = Path(arg).expanduser()
     name = p.name
-    for suffix in (".review.md", ".state.json", ".agent.json", ".run.json", ".publish.json", ".publish-preview.xml", ".speaker-source.json", ".transcript-kompakt.md", ".transcript.md", ".protocol.md", ".speakers.md",
+    for suffix in (".review.md", ".state.json", ".agent.json", ".run.json", ".publish.json", ".publish-preview.xml", ".speaker-source.json", ".transcript-kompakt.md", ".transcript.md", ".transcribe.md", ".protocol.md", ".speakers.md",
                    ".links.md", ".crosscheck.md", ".analysis.json", ".frames.json",
                    ".illustrations.spec.json", ".segments.meta.json", ".kompakt.json", ".segments.json", ".turns.json", ".ocr.json",
                    ".original.vtt", ".vtt", ".md", ".mp4", ".mkv", ".mov", ".webm", ".m4a", ".mp3",

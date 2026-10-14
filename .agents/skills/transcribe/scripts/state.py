@@ -57,7 +57,8 @@ def write_json(path: Path, value) -> None:
 
 def read_json(path: Path, default=None):
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return default if default is not None and not isinstance(value, type(default)) else value
     except (OSError, ValueError):
         return default
 
@@ -92,11 +93,14 @@ class StageState:
 
     def entries(self) -> dict:
         data = read_json(self.path, {})
-        return data.get("stages", {}) if isinstance(data, dict) else {}
+        stages = data.get("stages", {}) if isinstance(data, dict) else {}
+        return {k: v for k, v in stages.items() if isinstance(v, dict)} if isinstance(stages, dict) else {}
 
     def current(self, stage: str, key: str, outputs=()) -> bool:
         entry = self.entries().get(stage, {})
-        return entry.get("status") == "complete" and entry.get("input") == key and all(Path(p).is_file() for p in outputs)
+        recorded = entry.get("outputs", [])
+        return (entry.get("status") == "complete" and entry.get("input") == key and isinstance(recorded, list)
+                and all(isinstance(p, (str, Path)) and Path(p).is_file() for p in [*recorded, *outputs]))
 
     def record(self, stage: str, key: str, outputs=(), status="complete", detail="") -> None:
         entries = self.entries()
@@ -106,8 +110,13 @@ class StageState:
 
 def stage_key(p, stage: str, options=None) -> str:
     import config
+    options = dict(options or {})
+    if stage == "report" and not options.get("no_frames"):
+        options["frame_inputs"] = stage_key(p, "frames", {"language": options.get("language"),
+                                                        "max_frames": options.get("max_frames", 48)})
     deps = {
         "speakers": [p.transcript, p.speakers, p.participants_file, p.ocr],
+        "speakers_fill": [p.transcript, p.speakers, p.participants_file],
         "kompakt": [p.transcript, p.speakers, p.glossary, p.links],
         "report": [p.transcript, p.speakers, p.glossary, p.participants_file, p.links, p.crosscheck, p.frames_json, p.manifest, p.protocol],
         "illustrate": [p.frames_json, p.analysis, p.links],
@@ -124,4 +133,4 @@ def stage_key(p, stage: str, options=None) -> str:
     if stage == "frames":
         deps.append(scripts / "report.py")
     settings = {name: config.get(name) for name in config.PARAMETERS if name.startswith(("AZURE_LLM_", "AZURE_CLAUDE_", "TRANSCRIBE_LLM_")) and not config.PARAMETERS[name].secret}
-    return signature(deps, {"settings": settings, **(options or {})})
+    return signature(deps, {"settings": settings, **options})

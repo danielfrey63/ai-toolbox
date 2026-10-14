@@ -19,6 +19,7 @@ import tempfile
 import json
 import contextlib
 import io
+import os
 import config
 from pathlib import Path
 
@@ -83,10 +84,7 @@ def main() -> int:
         ap.error("--local conflicts with a cloud backend override")
     if run_args.no_save_md:
         ap.error("The pipeline requires persisted companions; use run.py --no-save-md for ephemeral runs")
-    for name in ("max_frames", "resolution", "frame_workers", "whisper_workers"):
-        value = getattr(run_args, name, None)
-        if value is not None and value < 1:
-            ap.error(f"--{name.replace('_', '-')} must be positive")
+    run.validate_args(run_args, ap)
     url = is_url(args.source)
     index_path = config.user_dir() / "runs.json"
     index = read_json(index_path, {}) or {}
@@ -102,17 +100,26 @@ def main() -> int:
                 Path(source).suffix.lower() in (".md", ".json", ".vtt", ".xml"))
     if companion:
         source = previous["source"]
+        if not is_url(source):
+            source = (previous.get("source_identity") or {}).get("path") or source
         resume_parser = run.build_parser()
         resume_parser.set_defaults(**previous.get("options", {}))
         run_args = resume_parser.parse_args([source, *lang, *local, *run_extra])
         args.language = run_args.language
         lang = ["--language", args.language] if args.language else []
         url = is_url(source)
+    if not url:
+        source = str(Path(source).expanduser().resolve())
+        run_args.source = source
+    run.validate_args(run_args, ap)
     settings = {k: v for k, v in vars(run_args).items() if k not in ("result_json", "fresh", "background")}
     same_source = url or (Path(source).is_file() and previous.get("source_identity") == media_identity(Path(source)))
     reusable = bool(p and p.transcript.is_file() and p.protocol.is_file() and same_source and
                     previous.get("options") == settings and previous.get("local_config") == local_config() and
                     previous.get("glossary") == glossary_hash(Path(source) if not url else None))
+    if reusable and args.analysis != "none" and not args.no_frames:
+        from companions import read_protocol
+        reusable = all(Path(f["path"]).is_file() for f in read_protocol(p.protocol).get("frames", []))
     needed = args.rerun or run_args.fresh or not reusable
     if needed and not url and not Path(source).is_file():
         ap.error(f"Source is unavailable for recomputation: {source}")
@@ -143,7 +150,14 @@ def main() -> int:
     from joblock import workflow_lock
     # URL output paths are discovered during acquisition; serialize by URL until then.
     from state import digest
-    lock_base = base or config.user_dir() / ("url-" + digest(source)[:16])
+    lock_base = config.user_dir() / ("url-" + digest(source)[:16]) if url else base
+    if os.environ.get("TRANSCRIBE_WORKFLOW_LOCK") != str(lock_base.resolve()):
+        with workflow_lock(lock_base, background=run_args.background) as acquired:
+            if not acquired:
+                emit_result({"schema": 1, "status": "busy", "base": str(base) if base else None}, args.json)
+                return 0
+            # Another process may have completed while we waited. Re-read state.
+            return main()
     with workflow_lock(lock_base):
         if needed:
             import setup
@@ -163,8 +177,11 @@ def main() -> int:
                 return 1
             p = Paths(Path(result["base"]))
             if url:
-                index[source] = str(p.base)
-                write_json(index_path, index)
+                from joblock import JobLock
+                with JobLock(config.user_dir() / "runs-index.lock"):
+                    index = read_json(index_path, {})
+                    index[source] = str(p.base)
+                    write_json(index_path, index)
         if args.analysis == "model":
             agent_args = [*lang]
             for flag in ("stop_at_speakers", "no_frames", "force"):

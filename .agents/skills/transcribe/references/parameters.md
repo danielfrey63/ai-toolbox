@@ -23,7 +23,7 @@ Vorrang: CLI (wo angeboten) → Prozessumgebung → explizite `--config`-Datei �
 | `AZURE_TRANSCRIBE_DIARIZE_URL` | url | `` | Full Azure audio endpoint, including api-version. |
 | `AZURE_TRANSCRIBE_DIARIZE_KEY` | Geheimnis | `` |  |
 | `AZURE_TRANSCRIBE_CHUNK_SECONDS` | float | `600` |  |
-| `AZURE_TRANSCRIBE_OVERLAP_SECONDS` | float | `20` |  |
+| `AZURE_TRANSCRIBE_OVERLAP_SECONDS` | float | `20` | At most half of AZURE_TRANSCRIBE_CHUNK_SECONDS. |
 | `AZURE_TRANSCRIBE_TIMEOUT` | float | `900` |  |
 | `GROQ_API_KEY` | Geheimnis | `` |  |
 | `OPENAI_API_KEY` | Geheimnis | `` |  |

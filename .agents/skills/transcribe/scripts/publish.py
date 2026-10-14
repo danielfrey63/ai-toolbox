@@ -160,13 +160,19 @@ def _markdown():
         return None
 
 
+IMAGE_RE = re.compile(r"!\[([^\]]*)\]\((?:<([^>]+)>|([^\s)]+))\)")
+
+
 def md_to_storage(md_text: str) -> str:
     def img(m):
-        name = Path(m.group(2)).name
+        source = m.group(2) or m.group(3)
+        if source.startswith(("https://", "http://")):
+            return m.group(0)
+        name = Path(source).name
         return (f'<ac:image ac:width="{IMG_WIDTH}"><ri:attachment ri:filename="{html.escape(name)}" />'
                 f"</ac:image>")
 
-    md_text = re.sub(r"!\[(.*?)\]\(<(.*?)>\)", img, md_text)
+    md_text = IMAGE_RE.sub(img, md_text)
 
     def companion(m):
         text, name = m.group(1).strip("`"), Path(m.group(2)).name
@@ -220,9 +226,30 @@ def build_body(p: Paths, cfg: dict) -> str:
     return body
 
 
+def publication_images(p: Paths) -> list[Path]:
+    """Upload only locally referenced report images, never leftovers from a rerun."""
+    images = {}
+    for doc in (p.report, p.kompakt):
+        if not doc.is_file():
+            continue
+        for match in IMAGE_RE.finditer(doc.read_text(encoding="utf-8")):
+            source = match.group(2) or match.group(3)
+            if source.startswith(("https://", "http://")):
+                continue
+            path = (doc.parent / source).resolve()
+            if not path.is_relative_to(p.base.parent.resolve()) or path.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
+                raise ValueError(f"Publication image must be an image below the report directory: {source}")
+            if not path.is_file():
+                raise ValueError(f"Publication image missing: {source}")
+            name = path.name.casefold()
+            if name in images and images[name] != path:
+                raise ValueError(f"Publication images have conflicting attachment names: {path.name}")
+            images[name] = path
+    return list(images.values())
+
+
 def attachments(p: Paths) -> list[Path]:
-    ills = sorted(p.illustrations.glob("ill_*.png")) if p.illustrations.is_dir() else []
-    return ills + [f for f in (p.kompakt, p.transcript) if f.is_file()]
+    return publication_images(p) + [f for f in (p.kompakt, p.transcript) if f.is_file()]
 
 
 # --- hub row ----------------------------------------------------------------------
