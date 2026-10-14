@@ -217,11 +217,13 @@ When relevant, surface the most useful entries from `## Resources` (Projects + D
 ### Offene Sprecherzuordnung
 *(only if the transcript carries speaker labels and at least one label – or one cluster of a split speaker – stayed unresolved after the Personen & Stimmen pass)*
 
-This is the reader's worklist: every contribution the report could not attribute, in one table, so the person who was in the room can close the gaps in a single pass and the transcript can be corrected afterwards. One row per contribution (not per label – a label may hold several distinct remarks, and a diarizer on a room microphone routinely splits one person into several labels):
+This is the reader's worklist: every contribution the report could not attribute, in one table, so the person who was in the room can close the gaps in a single pass and the transcript can be corrected afterwards. One row per contribution (not per label – a label may hold several distinct remarks, and a diarizer on a room microphone routinely splits one person into several labels).
 
-| Zeit | Wortmeldung | Label | Kandidaten |
-|---|---|---|---|
-| `[MM:SS]` | short verbatim quote – enough to recognise the moment, not the whole turn | `SPEAKER_NN` | who it could be, from the participant list |
+**The rows live in `<base>.speakers.md`, section «Open attributions», and nowhere else.** Record them there first (`speakers_fill.py` does it headless). The report shows the same rows verbatim – same times, quotes, labels, candidates and weight, no narrowing of the candidates to a guess – so the reader listens to exactly the moments the worklist names. `report.py "<base>"` on an existing report inserts or refreshes that table from speakers.md without a model call; run it after writing or editing the section by hand:
+
+| Zeit | Wortmeldung | Label | Kandidaten | Gewicht |
+|---|---|---|---|---|
+| [MM:SS] | short verbatim quote – enough to recognise the moment, not the whole turn | SPEAKER_NN | who it could be, from the participant list | decision / objection / commitment / question |
 
 Lead with one sentence naming the pool of possible speakers (participants minus the presenter, with any known constraint such as "remote until ~16:00"), then the table, then flag the rows that matter for the record – a question that triggered a decision, an objection, a commitment – so the reader closes those first. Do not fold this into Details or Abdeckung: those are about content coverage; this is about attribution.
 
@@ -270,5 +272,5 @@ Lead with one sentence naming the pool of possible speakers (participants minus 
 <curated subset of the ## Resources extracted in protocol.md, plus every URL / page ID / ticket key / share path read off the frames, each with the [MM:SS] it was seen at; heard-only references tagged «nicht verifiziert»>
 
 ### Offene Sprecherzuordnung
-<only with unresolved speaker labels: pool of candidates in one sentence, then one table row per unattributed contribution – [MM:SS] | quote | label | candidates – and a pointer to the rows that carry a decision or commitment>
+<only with open attributions in speakers.md: pool of candidates in one sentence, then the rows of speakers.md «Open attributions» verbatim – [MM:SS] | quote | label | candidates | weight (report.py syncs them) – and a pointer to the rows that carry a decision or commitment>
 ```

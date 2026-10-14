@@ -21,6 +21,11 @@ report below the stub in <base>.md.
 
 Idempotent: a <base>.md that already carries «## Übersicht» is kept unless
 --force; with --force the section from «## Übersicht» on is replaced.
+
+The table of «Offene Sprecherzuordnung» always comes verbatim from the
+«Open attributions» of speakers.md, so the report and the worklist show the
+same rows. On an existing report (also one the chat agent wrote) a plain
+call only re-syncs that table - no model call, no --force needed.
 """
 from __future__ import annotations
 
@@ -60,7 +65,7 @@ the mandatory pre-stage (Inventar, Konsistenz-Check, date identification) happen
 ### Details
 ### Abdeckung
 ### Resources
-### Offene Sprecherzuordnung (only when OPEN ATTRIBUTIONS lists rows; use them as the table rows)
+### Offene Sprecherzuordnung (only when OPEN ATTRIBUTIONS lists rows: one sentence on the candidate pool, one on which rows to clarify first; NO table and no own candidate guesses - the script inserts the rows verbatim from speakers.md)
 
 Constraints that override the methodology where they differ:
 - You cannot crop illustrations. Where an illustration from ILLUSTRATIONS fits a Summary group, put the placeholder line {{ILL:<id>}} on its own line at that spot; the script replaces it with the image and caption. Use each id at most once.
@@ -267,6 +272,44 @@ def data_flow_line(p: Paths, proto: dict) -> str:
 
 
 SECTION_RE = re.compile(r"^## Übersicht\s*$", re.M)  # a heading line, not the stub's prose mention
+OPEN_HEADING = "### Offene Sprecherzuordnung"
+OPEN_SOURCE = "_Zeilen aus «Open attributions» in `{name}`. Klären dort: Name in die Overrides-Tabelle eintragen._"
+
+
+def open_attributions_table(p: Paths) -> list[str]:
+    """The open speaker attributions exactly as speakers.md lists them - the report
+    and the worklist the person in the room uses must show the same rows."""
+    sp = read_speakers(p.speakers) if p.speakers.is_file() else {"open": []}
+    rows = sp.get("open") or []
+    if not rows:
+        return []
+    cell = lambda v: str(v or "").replace("|", "/").strip()
+    lines = ["| Zeit | Wortmeldung | Label | Kandidaten | Gewicht |", "|---|---|---|---|---|"]
+    lines += [f"| {cell(r.get('Zeit')).strip('`')} | {cell(r.get('Wortmeldung'))} | {cell(r.get('Label'))} | "
+              f"{cell(r.get('Kandidaten'))} | {cell(r.get('Gewicht'))} |" for r in rows]
+    return lines + ["", OPEN_SOURCE.format(name=p.speakers.name)]
+
+
+def sync_open_attributions(p: Paths, md: str) -> str:
+    """Replace the table of «Offene Sprecherzuordnung» with the rows of speakers.md.
+    The prose the report writer put there stays; the section is added when
+    speakers.md has open rows and dropped when it has none."""
+    table = open_attributions_table(p)
+    m = re.search(rf"^{re.escape(OPEN_HEADING)}\s*$", md, re.M)
+    if not m:
+        return md if not table else md.rstrip("\n") + f"\n\n{OPEN_HEADING}\n\n" + "\n".join(table) + "\n"
+    nxt = re.search(r"^#{1,3} ", md[m.end():], re.M)
+    end = m.end() + nxt.start() if nxt else len(md)
+    if not table:
+        return md[:m.start()].rstrip("\n") + ("\n\n" + md[end:] if nxt else "\n")
+    source_re = re.escape(OPEN_SOURCE.split("`")[0])
+    prose = [l for l in md[m.end():end].strip("\n").splitlines()
+             if not l.lstrip().startswith("|") and not re.match(source_re, l)]
+    paras = [x.strip() for x in "\n".join(prose).split("\n\n") if x.strip()]
+    section = [OPEN_HEADING, ""] + ([paras[0], ""] if paras else []) + table + \
+              [""] + ["\n\n".join(paras[1:])] * bool(paras[1:])
+    tail = md[end:]
+    return md[:m.start()] + "\n".join(section).rstrip("\n") + ("\n\n" + tail if tail else "\n")
 
 
 def has_report(text: str) -> bool:
@@ -300,7 +343,14 @@ def main() -> int:
 
     p = Paths(resolve_base(args.base))
     if p.report.is_file() and has_report(p.report.read_text(encoding="utf-8")) and not args.force:
-        print(f"[report] report exists - skip (use --force): {p.report}", file=sys.stderr)
+        text = p.report.read_text(encoding="utf-8")
+        synced = sync_open_attributions(p, text)
+        if synced != text:
+            p.report.write_text(synced, encoding="utf-8")
+            print(f"[report] report exists - open speaker attributions synced from {p.speakers.name}",
+                  file=sys.stderr)
+        else:
+            print(f"[report] report exists - skip (use --force): {p.report}", file=sys.stderr)
         return 0
     ok, reason = llm.available()
     if not ok:
@@ -323,6 +373,7 @@ def main() -> int:
         raise SystemExit(f"[report] reply has no «## Übersicht» section: {body[:300]!r}")
     body = body[body.index("## Übersicht"):]
     body, n_ill = embed_illustrations(p, body)
+    body = sync_open_attributions(p, body)
     write_report(p, body, data_flow_line(p, proto), args.force)
     print(f"[report] {len(body)} chars, {n_ill} illustration(s) embedded -> {p.report}", file=sys.stderr)
     print(f"[report] usage: {llm.USAGE.summary()}", file=sys.stderr)
