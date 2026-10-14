@@ -21,7 +21,9 @@ Idempotent: a speakers.md whose labels are all named is left alone unless
 --force, and so is one that nobody touched since the last fill (same file,
 transcript and participants list - the stamp carries their hash). The human
 edits the same file; a re-run never overwrites a non-empty Name cell
-without --force.
+without --force, and it keeps every row of «Open attributions» as it
+stands (narrowed candidates, rewritten cells) - the model only adds
+contributions not listed yet.
 
 After every fill (and on a skip) grounding.py ties each uncertainty to the
 transcript: verbatim quote and sentence start time in «Open attributions»,
@@ -105,6 +107,26 @@ def build_prompt(sp: dict, participants: list[str], blocks, language: str | None
     )
 
 
+OPEN_COLS = ("Zeit", "Wortmeldung", "Label", "Kandidaten", "Gewicht")
+
+
+def merge_open(p: Paths, kept: list[dict], proposed: list[dict]) -> list[dict]:
+    """Rows already in speakers.md stay verbatim - the human may have narrowed
+    the candidates or rewritten a cell; the model only adds contributions not
+    listed yet. Both sides are grounded first, so the same sentence carries
+    the same time on either side and a time match means the same row."""
+    import grounding
+    rows = [{"Zeit": f"`[{r.get('time', '')}]`", "Wortmeldung": r.get("quote", ""), "Label": r.get("label", ""),
+             "Kandidaten": r.get("candidates", ""), "Gewicht": r.get("weight", "")} for r in proposed]
+    sents = grounding.sentences(p) if p.transcript.is_file() else []
+    if sents:
+        rows = grounding.ground_open_rows(rows, sents)
+    seen = {(r.get("Zeit") or "").strip("`[] ") for r in kept}
+    added = [r for r in rows if (r.get("Zeit") or "").strip("`[] ") not in seen]
+    key = lambda r: grounding.ts_seconds(z) if grounding.TS_CELL.fullmatch(z := (r.get("Zeit") or "").strip("`[] ")) else 0
+    return sorted([r for r in kept if (r.get("Wortmeldung") or "") != "keine"] + added, key=key)
+
+
 def _render_open(open_rows: list[dict], model: str, notes: str) -> list[str]:
     lines = ["", OPEN_HEADING, "",
              f"_Contributions filed under another label - the worklist for the person who was in the "
@@ -114,15 +136,17 @@ def _render_open(open_rows: list[dict], model: str, notes: str) -> list[str]:
         lines += [f"_{notes.strip()}_", ""]
     lines += ["| Zeit | Wortmeldung | Label | Kandidaten | Gewicht |", "|---|---|---|---|---|"]
     for r in open_rows:
-        lines.append(f"| `[{r.get('time', '')}]` | {r.get('quote', '').replace('|', '/')} | "
-                     f"{r.get('label', '')} | {r.get('candidates', '')} | {r.get('weight', '')} |")
+        lines.append("| " + " | ".join(str(r.get(c, "") or "").replace("|", "/") for c in OPEN_COLS) + " |")
     if not open_rows:
         lines.append("| | keine | | | |")
     return lines
 
 
-def write_back(path: Path, result: dict, model: str, force: bool) -> tuple[int, int]:
+def write_back(p: Paths, result: dict, model: str, force: bool) -> tuple[int, int]:
+    path = p.speakers
     text = path.read_text(encoding="utf-8", errors="replace")
+    # without --force the rows already listed survive the model's answer (merge_open)
+    open_rows = merge_open(p, [] if force else read_speakers(path)["open"], result.get("open") or [])
     lines = text.splitlines()
     labels = result.get("labels", {}) or {}
     named = 0
@@ -156,10 +180,10 @@ def write_back(path: Path, result: dict, model: str, force: bool) -> tuple[int, 
         head, _, tail = new_text.partition(OPEN_HEADING)
         rest = re.split(r"\n## ", tail, maxsplit=1)
         after = ("\n## " + rest[1]) if len(rest) > 1 else ""
-        new_text = head.rstrip("\n") + "\n" + "\n".join(_render_open(result.get("open") or [], model,
+        new_text = head.rstrip("\n") + "\n" + "\n".join(_render_open(open_rows, model,
                                                                       result.get("notes") or "")) + "\n" + after
     else:
-        new_text = new_text.rstrip("\n") + "\n" + "\n".join(_render_open(result.get("open") or [], model,
+        new_text = new_text.rstrip("\n") + "\n" + "\n".join(_render_open(open_rows, model,
                                                                          result.get("notes") or "")) + "\n"
     stamp = f"_Names proposed by speakers_fill.py (transcribe {APP_VERSION}, {model}) on {_dt.date.today().isoformat()}; the human corrects this file, the next render follows it._"
     if "_Names proposed by speakers_fill.py" not in new_text:
@@ -167,7 +191,7 @@ def write_back(path: Path, result: dict, model: str, force: bool) -> tuple[int, 
     else:
         new_text = STAMP_RE.sub(lambda _: stamp, new_text, count=1)
     path.write_text(new_text + ("" if new_text.endswith("\n") else "\n"), encoding="utf-8")
-    return named, len(result.get("open") or [])
+    return named, len(open_rows)
 
 
 def stamp_hash(p: Paths) -> None:
@@ -254,7 +278,7 @@ def main() -> int:
     if args.dry_run:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
-    named, n_open = write_back(p.speakers, result, model, args.force)
+    named, n_open = write_back(p, result, model, args.force)
     print(f"[speakers-fill] {named} label(s) named, {n_open} open contribution(s) -> {p.speakers}",
           file=sys.stderr)
     finish(p, restamp=False, apply=args.apply)
