@@ -38,7 +38,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from companions import input_file, read_input_lines, resolve_base  # noqa: E402
+from companions import fmt_ts, input_file, read_input_lines, resolve_base, ts_seconds  # noqa: E402
 
 PARTICIPANTS_HINT = "`<name>.participants.txt` or `transcribe-participants.txt`"
 LABEL_RE = re.compile(r"^(SPEAKER_\d+|[A-Z])$")
@@ -52,13 +52,6 @@ VOICE_TAG_RE = re.compile(r"<v\s+([^>]+)>")
 VTT_TS_RE = re.compile(r"(\d{1,2}):(\d{2}):(\d{2})[.,](\d{3})|(\d{1,2}):(\d{2})[.,](\d{3})")
 SELF_INTRO = r"(?:ich bin|hier ist|mein name ist|i am|i'm|this is|c'est|je suis)\s+"
 VOICE_MIN_SHARE = 0.6
-
-
-def fmt_ts(seconds: float) -> str:
-    s = int(seconds)
-    h, rem = divmod(s, 3600)
-    m, sec = divmod(rem, 60)
-    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
 
 
 # --- Evidence collection ----------------------------------------------------
@@ -373,8 +366,8 @@ def block_of(ts: str, starts: list[str]) -> str:
     """The start `[MM:SS]` of the transcript block that `ts` falls in, so the
     time of a sentence inside a block (as grounding.py writes it into Open
     attributions) addresses the same block as the block's own timestamp."""
-    t = _ts_seconds(ts)
-    hit = [s for s in sorted(starts, key=_ts_seconds) if _ts_seconds(s) <= t + 0.5]
+    t = ts_seconds(ts)
+    hit = [s for s in sorted(starts, key=ts_seconds) if ts_seconds(s) <= t + 0.5]
     return hit[-1] if hit else ts
 
 
@@ -455,7 +448,7 @@ def apply_to_files(base: Path, mapping: dict[str, str], overrides: dict[str, str
                 new_lines[i] = lines[i].replace(f"[{label}]", f"[{name}]", 1)
             if ts in overrides:
                 nxt = starts[k + 1][1] if k + 1 < len(starts) else None
-                spans.append((_ts_seconds(ts), _ts_seconds(nxt) if nxt else float("inf"), overrides[ts]))
+                spans.append((ts_seconds(ts), ts_seconds(nxt) if nxt else float("inf"), overrides[ts]))
         if new_lines != lines:
             text = tp.read_text(encoding="utf-8")
             tp.write_text("\n".join(new_lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
@@ -509,11 +502,6 @@ def apply_to_files(base: Path, mapping: dict[str, str], overrides: dict[str, str
     source["mapping"] = mapping
     write_json(source_path, source)
     return touched
-
-
-def _ts_seconds(ts: str) -> float:
-    parts = [int(x) for x in ts.split(":")]
-    return parts[0] * 3600 + parts[1] * 60 + parts[2] if len(parts) == 3 else parts[0] * 60 + parts[1]
 
 
 def main() -> int:

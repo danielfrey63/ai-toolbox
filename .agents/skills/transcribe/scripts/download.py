@@ -248,6 +248,7 @@ def _run_yt_dlp(cmd: list[str], env: dict) -> tuple[int, list[str]]:
         stderr=subprocess.STDOUT,
         env=env,
         text=True,
+        encoding="utf-8",
         errors="replace",
         bufsize=1,
     )

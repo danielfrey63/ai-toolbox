@@ -11,11 +11,11 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 
+import cli
 import cpu
 from pathlib import Path
 
@@ -79,18 +79,14 @@ def get_metadata(video_path: str) -> dict:
             "ffprobe is not installed. Run `python3 scripts/setup.py --install-binaries`."
         )
 
-    result = subprocess.run(
-        [
-            ffprobe,
-            "-v", "quiet",
-            "-print_format", "json",
-            "-show_format",
-            "-show_streams",
-            video_path,
-        ],
-        capture_output=True,
-        text=True,
-    )
+    result = cli.run_text([
+        ffprobe,
+        "-v", "quiet",
+        "-print_format", "json",
+        "-show_format",
+        "-show_streams",
+        video_path,
+    ])
     if result.returncode != 0:
         raise SystemExit(f"ffprobe failed: {result.stderr.strip()}")
 
@@ -202,7 +198,7 @@ def extract(
         output_pattern,
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = cli.run_text(cmd)
     if result.returncode != 0:
         raise SystemExit(f"ffmpeg frame extraction failed: {result.stderr.strip()}")
 
@@ -300,7 +296,7 @@ def detect_cuts(
             "-vf", f"scdet=threshold=0,metadata=mode=print:file={meta_path_for_filter}",
             "-an", "-f", "null", "-",
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = cli.run_text(cmd)
         if result.returncode != 0:
             raise SystemExit(f"ffmpeg scdet failed: {result.stderr.strip()}")
 
@@ -425,7 +421,7 @@ def _extract_one_frame(
             "-q:v", "4",
             str(out_path),
         ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = cli.run_text(cmd)
     return result.returncode == 0 and out_path.exists()
 
 

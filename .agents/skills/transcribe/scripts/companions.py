@@ -8,7 +8,6 @@ table, the links list. They live here once.
 """
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -122,7 +121,9 @@ def ts_seconds(ts: str) -> float:
 
 
 def fmt_ts(seconds: float) -> str:
-    s = int(round(seconds))
+    """`MM:SS` or `H:MM:SS`, floored like the transcript stamps so a time
+    quoted anywhere lands on the transcript block it refers to."""
+    s = int(seconds)
     h, rem = divmod(s, 3600)
     m, sec = divmod(rem, 60)
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
@@ -301,18 +302,8 @@ def read_links_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
 
 
-def read_json(path: Path) -> dict | list | None:
-    if not path.is_file():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-
-
-def write_json(path: Path, obj) -> None:
-    from state import write_json as atomic_json
-    atomic_json(path, obj)
+# JSON helpers live in state.py (atomic writes); re-exported for the agent stages.
+from state import read_json, write_json  # noqa: E402,F401
 
 
 def language_rules(lang: str | None) -> str:

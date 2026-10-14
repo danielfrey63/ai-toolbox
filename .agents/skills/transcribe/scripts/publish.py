@@ -59,13 +59,13 @@ IMG_WIDTH = 900
 
 # --- configuration -------------------------------------------------------------
 
-def config_files(p: Paths) -> list[Path]:
+def publication_config_files(p: Paths) -> list[Path]:
     return [p.base.parent / "transcribe-publish.txt", p.base.with_name(f"{p.base.name}.publish.txt")]
 
 
-def load_config(p: Paths, parent: str | None) -> dict:
+def load_publication_config(p: Paths, parent: str | None) -> dict:
     cfg: dict = {"intro": []}
-    for f in config_files(p):
+    for f in publication_config_files(p):
         if not f.is_file():
             continue
         intro_here: list[str] = []
@@ -313,10 +313,10 @@ def main() -> int:
     args = cli.parse(ap)
 
     p = Paths(resolve_base(args.base))
-    cfg = load_config(p, args.parent)
+    cfg = load_publication_config(p,args.parent)
     if not cfg.get("parent"):
         print(f"[publish] no parent page: pass --parent ID or put `parent: ID` in "
-              f"{' or '.join(f.name for f in config_files(p))}", file=sys.stderr)
+              f"{' or '.join(f.name for f in publication_config_files(p))}", file=sys.stderr)
         return 2
     if args.no_hub:
         cfg.pop("hub", None)

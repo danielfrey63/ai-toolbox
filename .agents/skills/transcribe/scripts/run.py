@@ -181,7 +181,7 @@ from transcribe import (  # noqa: E402
     format_vtt,
     parse_vtt,
 )
-from stt import extract_audio, load_hotwords, select_backend, select_backends, transcribe_video  # noqa: E402
+from stt import extract_audio, load_hotwords, runtime_label, select_backend, select_backends, transcribe_video  # noqa: E402
 from version import APP_VERSION  # noqa: E402
 from companions import REPORT_STUB_NOTE, input_status, resolve_base  # noqa: E402
 import cpu  # noqa: E402
@@ -869,8 +869,9 @@ def execute(args) -> int:
             except OSError as exc:
                 print(f"[transcribe] WARNING: could not write links.md: {exc}", file=sys.stderr)
 
-    if ocr_store and ocr_result is None:
+    if ocr_store and ocr_result is None and (all_frames or ocr_store.exists() or links_path.exists()):
         # Later stages must not use references from an earlier scope or source.
+        # A frame-less audio run creates no empty OCR files; it only clears old ones.
         write_json(ocr_store, {"frames": [], "status": "disabled" if args.no_ocr else "unavailable"})
         write(links_path, "# On-screen references\n\n_No current OCR evidence._\n")
 
@@ -890,6 +891,7 @@ def execute(args) -> int:
     all_segments: list[dict] = []  # unfiltered; transcript_segments may be a --start/--end slice
     transcript_text: str | None = None
     transcript_source: str | None = None
+    stt_runtime: dict = {}  # {model, device, compute, threads?} of the local backend, for the protocol
     audio_path: Path | None = None  # populated on first audio extraction
     # Set when segments come from a cache written by a *different* version -
     # the report must not claim this build produced that transcript.
@@ -913,6 +915,7 @@ def execute(args) -> int:
                 raise ValueError("Invalid segment cache structure")
             used_backend = cached.get("backend", "unknown")
             cached_version = cached.get("skill_version", "unknown")
+            stt_runtime = cached.get("runtime") if isinstance(cached.get("runtime"), dict) else {}
             transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
             transcript_source = f"{'assemblyai' if used_backend == 'assemblyai' else 'transcript'} ({used_backend}, resumed)"
             resumed_version = cached_version
@@ -994,7 +997,7 @@ def execute(args) -> int:
         # the cascade to that single backend - no silent degradation.
         for i, stt_backend in enumerate(stt_cascade):
             try:
-                all_segments, used_backend = transcribe_video(
+                all_segments, used_backend, stt_runtime = transcribe_video(
                     video_path,
                     work / "audio.mp3",
                     backend=stt_backend.name,
@@ -1007,6 +1010,7 @@ def execute(args) -> int:
                     json.dumps({
                         "skill_version": APP_VERSION,
                         "backend": used_backend,
+                        "runtime": stt_runtime,
                         "segments": all_segments,
                     }),
                     encoding="utf-8",
@@ -1477,6 +1481,10 @@ def execute(args) -> int:
             f"- **Transcript:** {len(transcript_segments)} segments{in_range} "
             f"(via {transcript_source or 'captions'})"
         )
+        # Model, device and compute type: a CPU fallback must be visible here,
+        # not only in the worker's stderr of a session long gone.
+        if runtime_label(stt_runtime):
+            emit(f"- **Transcription runtime:** {runtime_label(stt_runtime)}")
     else:
         emit("- **Transcript:** none available")
     if repair_report:

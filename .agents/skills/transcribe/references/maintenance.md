@@ -7,6 +7,8 @@
 - `scripts/state.py`: atomare Dateiausgaben und Stufenergebnisse mit Eingabe-Fingerprints. `.state.json` dokumentiert vollständige, übersprungene oder fehlgeschlagene Stufen.
 - `scripts/pipeline.py`: Eingabevalidierung, Medien-Wiederaufnahme, strukturierte Ergebnisse und Übergabe an Modell oder Harness.
 - Fachmodule: Transkription, Sprecher, Kapitel, Bilder, Report und Publikation. Bestehende Skriptaufrufe bleiben verfügbar.
+- Bibliotheksmodule ohne eigenen Einstieg: `cli.py`, `companions.py`, `config.py`, `cpu.py`, `joblock.py`, `state.py`. Ein Aufruf mit `--help` gibt dort nichts aus und endet mit `0`. `cli.run_text` ist der einzige Weg, Kindprozesse als Text einzufangen (UTF-8, unabhängig von der Konsolen-Codepage); `companions.fmt_ts`/`ts_seconds` sind die einzigen Zeitstempel-Helfer.
+- Namensgleichheit: `transcribe.py` an der Wurzel ist die öffentliche CLI, `scripts/transcribe.py` der VTT-Parser und Transkript-Formatierer mit `--selftest`. Eine Umbenennung des Fachskripts erfolgt erst mit dem nächsten Bruch der dokumentierten Fachskript-Aufrufe.
 
 ## Wiederaufnahme
 
@@ -38,7 +40,9 @@ python transcribe.py --help
 python transcribe.py run --help-all
 ```
 
-Die Regressionstests verwenden temporäre Verzeichnisse und simulierte Provider; sie lesen keine produktiven Schlüssel und senden keine Aufnahmen. Zusätzlich einen kurzen echten Medienlauf mit bekanntem Inhalt prüfen. Performance-Messungen auf realen Aufnahmen durchführen; synthetische Sprachschleifen verfälschen Decoder-Laufzeiten.
+Die Regressionstests verwenden temporäre Verzeichnisse und simulierte Provider; sie lesen keine produktiven Schlüssel und senden keine Aufnahmen. Zwei Tests brauchen ein installiertes ffmpeg/ffprobe und werden sonst übersprungen: der echte CLI-Lauf auf einer WAV-Datei und der Videolauf auf einem drei Sekunden langen `testsrc`-Clip, der Frames und die OCR-Signatur mit dem echten Pfadtyp durchläuft (der OCR-Worker selbst ist dabei simuliert). Zusätzlich einen kurzen echten Medienlauf mit bekanntem Inhalt prüfen. Performance-Messungen auf realen Aufnahmen durchführen; synthetische Sprachschleifen verfälschen Decoder-Laufzeiten.
+
+Das Protokoll nennt unter `Transcription runtime` Modell, Device, Compute-Typ und bei CPU die Thread-Zahl des lokalen Whisper-Laufs; der Wert stammt aus dem Worker-JSON und wird im Segment-Cache mitgeführt, damit auch eine Wiederaufnahme ihn zeigt. Ein unerwarteter CPU-Fallback ist damit ohne Session-Logs erkennbar.
 
 Die zusätzliche [Tiefenprüfung vom 14.10.2026](audit-2026-10-14.md) dokumentiert Fehlerbilder, Korrekturen und Grenzen der Abnahme. Die [unabhängige Evaluation vom selben Tag](evaluation-2026-10-14.md) bewertet Doku, Skripte, Konsistenz, Hilfe, Installierbarkeit, Einfachheit und Performance mit echten Läufen und listet die offenen Befunde nach Gewicht.
 
@@ -54,6 +58,6 @@ Die Ausgaben aktualisieren `.env.example`, `references/parameters.md` und `refer
 
 ## Spiegelung und Paket
 
-Die Toolbox bleibt die Entwicklungsquelle. Der Tree von `transcribe-split` muss dem Tree von `.agents/skills/transcribe` entsprechen. Im Split liegen `SKILL.md`, `INSTALL.md`, `transcribe.py`, `scripts/` und `references/` an der Wurzel. Der CLI-Einstieg darf deshalb keine Toolbox-Pfade voraussetzen.
+Die Toolbox bleibt die Entwicklungsquelle. Die Spiegelung ins Team-Repository bei SBB übernimmt das Toolbox-Skript `tools/mirror-skill/mirror-skill.sh transcribe`: es exportiert den Skill-Unterordner mit eigener History per `git subtree split` (deterministisch, gleiche Commits ergeben gleiche Hashes), prüft, dass der Zielbranch ein Vorfahre des Splits ist, und pusht nur vorwärts, inklusive Tag `v<version>` aus `plugin.json`. Ziel-Remote, URL und Branch stehen im Eintrag `mirror` des Skills in `tools/catalog.json`; auf der Spiegelseite wird nie committet. Ein `--dry-run` zeigt, was gepusht würde. Im Split liegen `SKILL.md`, `INSTALL.md`, `transcribe.py`, `scripts/` und `references/` an der Wurzel. Der CLI-Einstieg darf deshalb keine Toolbox-Pfade voraussetzen.
 
 `python scripts/build_skill.py` (Legacy-Wrapper: `scripts/build-skill.sh`) erzeugt aus dem committeten Stand ein `.skill`-Archiv. Tests und Entwicklungsunterlagen sind über `.gitattributes` ausgeschlossen; Installationsanleitung, Parameterreferenz und Laufzeit bleiben enthalten. Für Releases im Toolbox- und Split-Layout die portable CLI-Hilfe und die Regressionstests prüfen.

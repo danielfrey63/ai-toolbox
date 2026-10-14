@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import unittest
@@ -243,6 +244,38 @@ class DeepAudit(unittest.TestCase):
                 self.assertEqual(self.invoke(speakers_fill, [str(self.p.base), "--dry-run", "--apply"]), 0 if available else 3)
         self.assertEqual(before, self.p.speakers.read_bytes())
         self.assertFalse(StageState(self.p.base).path.exists())
+
+    def test_video_run_signs_ocr_with_string_media_path(self):
+        """A real video through frames and the OCR signature. download() hands the
+        media path over as a plain string; the OCR cache key must accept it."""
+        ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
+        if not ffmpeg or not ffprobe:
+            self.skipTest("ffmpeg not installed")
+        media = self.root / "clip.mp4"
+        subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                        "-f", "lavfi", "-i", "testsrc=size=320x240:rate=5:duration=3",
+                        "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+                        "-c:v", "mpeg4", "-c:a", "aac", "-pix_fmt", "yuv420p", "-shortest", str(media)],
+                       check=True, capture_output=True, timeout=120)
+        write_json(media.with_suffix(".segments.json"), {"backend": "fixture", "segments": [
+            {"start": 0, "end": 1, "text": "Synthetic sentence."}]})
+        p = Paths(self.root / "clip")
+        args = [str(media), "--out-dir", str(self.root / "work"), "--no-diarize", "--no-repair", "--no-scene",
+                "--max-frames", "4", "--language", "de"]
+        with patch.object(run.ocr_stage, "run", return_value={"frames": []}) as ocr_run:
+            self.assertEqual(self.invoke(run, args), 0)
+            self.assertEqual(self.invoke(run, args), 0)
+        self.assertEqual(ocr_run.call_count, 1, "second run must resume OCR from its cache")
+        self.assertIsInstance(ocr_run.call_args.args[0], str)
+        self.assertTrue(json.loads(p.ocr.read_text(encoding="utf-8"))["input"])
+        protocol = p.protocol.read_text(encoding="utf-8")
+        self.assertIn("- **Frames:**", protocol)
+        self.assertNotIn("- **Frames:** none", protocol)
+        self.assertIn("Synthetic sentence.", p.transcript.read_text(encoding="utf-8"))
+
+    def test_run_without_source_is_a_usage_error(self):
+        import command
+        self.assertEqual(self.invoke(command, ["run"]), 2)
 
 
 if __name__ == "__main__":

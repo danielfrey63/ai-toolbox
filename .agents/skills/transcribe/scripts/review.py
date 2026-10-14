@@ -101,9 +101,9 @@ def items(p: Paths, target: str | None) -> list[tuple[str, str, str, list[str]]]
                               f"gegen die Aufnahme", _hash(p.report), []))
     if target:
         import publish
-        cfg = publish.load_config(p, None)
+        cfg = publish.load_publication_config(p, None)
         from config import get
-        publication = _hash(get("CONFLUENCE_URL"), *publish.config_files(p))
+        publication = _hash(get("CONFLUENCE_URL"), *publish.publication_config_files(p))
         out.append(("release", f"Publikation freigegeben: {target}",
                     _hash(target, publication, *[h for _, _, h, _ in out]), []))
     else:
@@ -173,7 +173,7 @@ def _current_target(p: Paths) -> str | None:
         import publish
     except ImportError:
         return None
-    cfg = publish.load_config(p, None)
+    cfg = publish.load_publication_config(p, None)
     return publish.describe_target(p, cfg) if cfg.get("parent") else None
 
 

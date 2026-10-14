@@ -194,9 +194,11 @@ def main(argv=None) -> int:
     subs = ap.add_subparsers(dest="command")
     for name in ("install", "doctor"):
         p = subs.add_parser(name, help="Install and verify a profile" if name == "install" else "Inspect readiness without changing the machine")
-        p.add_argument("--profile", choices=PROFILES, default="local")
+        p.add_argument("--profile", choices=PROFILES, default="local",
+                       help="Desired state: local runtime, speaker access, headless analysis or publication (default local)")
         if name == "install":
-            p.add_argument("--non-interactive", action="store_true")
+            p.add_argument("--non-interactive", action="store_true",
+                           help="Never prompt for keys or confirmations; missing prerequisites fail with exit 2")
         else:
             p.add_argument("--json", action="store_true")
             p.add_argument("--probe", action="store_true", help="Call the configured analysis deployment")

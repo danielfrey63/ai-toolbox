@@ -34,6 +34,7 @@ import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
+import cli
 import config
 from state import write as atomic_write
 
@@ -216,9 +217,7 @@ def ytdlp_status() -> dict:
 
     if version is None:
         try:
-            result = subprocess.run(
-                [path, "--version"], capture_output=True, text=True, timeout=30
-            )
+            result = cli.run_text([path, "--version"], timeout=30)
             version = (result.stdout or "").strip().splitlines()[0].strip() if result.returncode == 0 else None
         except (OSError, subprocess.SubprocessError, IndexError):
             version = None
@@ -953,10 +952,10 @@ def _venv_runtime_version() -> str | None:
     that rebuild the venv must `cache_clear()` afterwards.
     """
     try:
-        out = subprocess.run(
+        out = cli.run_text(
             [str(venv_python()), "-I", "-c",
              "import sys; sys.stdout.write('%d.%d' % sys.version_info[:2])"],
-            capture_output=True, text=True, timeout=30,
+            timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

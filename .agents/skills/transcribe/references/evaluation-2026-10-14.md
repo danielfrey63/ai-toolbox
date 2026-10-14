@@ -58,6 +58,27 @@ Der Skill ist in einem Monat von einem Claude-Skill zu einer eigenständigen CLI
 
 **Performance.** Audio 253 s in 39 s, davon Whisper 13 s und pyannote 7 s; der Rest ist Audio-Extraktion, Modell-Laden und Prozessstarts. Video 7:09 ohne OCR in 48 s. Wiederholungen kosten 1 s. Die CPU-Budgetierung und die Turbo-Entscheidung vom September greifen. Nicht gemessen: OCR, Modell-Stufen und Publikation.
 
+## Stand nach den Korrekturen vom selben Tag
+
+Die Korrekturen folgten direkt auf die Evaluation; die Suite umfasst seither 54 Tests. Was offen bleibt, ist hier mit Grund benannt.
+
+| Befund | Stand |
+|---|---|
+| Regression Videopfad | Behoben: `state.media_identity` akzeptiert Zeichenketten wie Pfade. `test_video_run_signs_ocr_with_string_media_path` fährt einen drei Sekunden langen `testsrc`-Clip durch Frames und OCR-Signatur und schlägt auf dem alten Stand nachweislich fehl. |
+| Kein Videolauf in der Suite | Behoben durch denselben Test; er wird ohne ffmpeg übersprungen. |
+| SBB-Spiegelweg | Das Toolbox-Skript `tools/mirror-skill/mirror-skill.sh` mit Katalogeintrag `mirror` (Bitbucket-URL, Branch) kam am selben Tag in Commit `4e21567` dazu; `maintenance.md` beschreibt den Ablauf. Ob der Spiegel bereits auf dem aktuellen Stand ist, wurde hier nicht geprüft (`mirror-skill.sh transcribe --dry-run` zeigt es). |
+| `run.py::execute` 1163 Zeilen | Offen, bewusst: die Zerlegung ist eine eigene Änderung. Der neue Videotest macht sie jetzt überhaupt erst absicherbar. |
+| Subprozesse ohne Encoding | Behoben: `cli.run_text` ersetzt 15 Aufrufe in sieben Dateien; der yt-dlp-`Popen` und `resources.py` lesen UTF-8. |
+| Duplikate | `fmt_ts`, `ts_seconds`, `read_json`, `write_json` leben nur noch in `companions.py` bzw. `state.py`; alle Zeitstempel runden ab wie das Transkript. `publish.py` nennt seine Helfer `load_publication_config` und `publication_config_files`. Bewusst getrennt bleiben `parse_vtt` (Teams-Export ohne Dedupe gegen YouTube-Rolling-Cues mit Dedupe), `_dhash` (PIL-Bild im isolierten OCR-Worker gegen Rohdatei) und `_thin` (Schrittweite gegen gleichmässige Verteilung mit beiden Enden). |
+| `review`-Pfad im Ergebnis | Behoben: `null`, solange die Datei fehlt; `report` bleibt der Analyse-Zielpfad. |
+| `run` ohne Quelle Exit 0 | Behoben: Exit 2 mit Fehlermeldung; `test_run_without_source_is_a_usage_error`. |
+| Protokoll ohne Modell/Device | Behoben: Worker liefert `{"segments", "runtime"}`, `stt.worker_result` liest beide Formen, das Protokoll zeigt `Transcription runtime`, der Segment-Cache führt den Wert mit. |
+| Hilfe-Beispiele, `install --help` | Behoben. |
+| Fehlermeldung für fehlende Datei | Behoben: «Source not found», «unavailable for recomputation» nur bei bekannter Aufnahme. |
+| Leere OCR-Dateien bei Audio | Behoben: ohne Frames entstehen keine neuen `ocr.json`/`links.md`; vorhandene alte Belege werden weiterhin geleert. |
+| Module ohne CLI, Namenskollision | In `maintenance.md` dokumentiert; Umbenennung von `scripts/transcribe.py` bewusst verschoben. |
+| Deutsche Laufzeitmeldungen | Behoben in `repair.py` und `crosscheck.py`; der generierte `crosscheck.md`-Inhalt bleibt deutsch wie die übrige Nutzerdoku. |
+
 ## Grenzen dieser Prüfung
 
 Keine Cloud-Stufen (`--analysis model`, AssemblyAI, Confluence), keine frische ML-Installation, keine Qualitätsbewertung von Spracherkennung oder Sprecherzuordnung über die Stichprobe hinaus. Der SBB-Stand selbst war nicht erreichbar, weil seine Adresse nirgends steht.

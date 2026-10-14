@@ -49,6 +49,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import cpu  # noqa: E402
 from setup import find_tool  # noqa: E402
+from stt import worker_result  # noqa: E402
 
 # Languages written in Latin script - for these, a burst of Cyrillic / CJK /
 # Arabic characters is a collapse signature rather than legitimate content.
@@ -173,9 +174,9 @@ def find_suspects(segments: list[dict], language: str | None = None) -> list[dic
                 or cps >= SHORT_FLOOD_CHARS_PER_SEC
                 or len(text) >= SHORT_FLOOD_MIN_CHARS
             ):
-                reasons.append(f"Textflut ({cps:.0f} Z/s über {dur:.1f}s)")
+                reasons.append(f"text flood ({cps:.0f} chars/s over {dur:.1f}s)")
             elif dur >= MIN_DURATION_FOR_DENSITY and cps < MIN_CHARS_PER_SEC:
-                reasons.append(f"kaum Text ({cps:.1f} Z/s über {dur:.0f}s)")
+                reasons.append(f"hardly any text ({cps:.1f} chars/s over {dur:.0f}s)")
 
         if reasons:
             suspects.append({"index": i, "start": start, "end": end,
@@ -332,15 +333,15 @@ def repair_segments(segments: list[dict], audio: Path,
                 if not any(lo <= (s["start"] + s["end"]) / 2 <= hi for lo, hi in done)
             ]
             if before != len(suspects) and pass_no == 0:
-                print(f"[transcribe] repair: {before - len(suspects)} Segment(e) in "
-                      f"bereits reparierten Bereichen übersprungen", file=sys.stderr)
+                print(f"[transcribe] repair: {before - len(suspects)} segment(s) inside "
+                      f"already repaired ranges skipped", file=sys.stderr)
         if not suspects:
             break
 
         windows = build_windows(suspects, duration=duration)
-        print(f"[transcribe] repair: {len(suspects)} auffällige Segmente in "
-              f"{len(windows)} Fenster(n)"
-              f"{'' if pass_no == 0 else f' (Durchgang {pass_no + 1})'}",
+        print(f"[transcribe] repair: {len(suspects)} suspicious segments in "
+              f"{len(windows)} window(s)"
+              f"{'' if pass_no == 0 else f' (pass {pass_no + 1})'}",
               file=sys.stderr)
 
         if dry_run:
@@ -385,10 +386,10 @@ def _repair_windows(segments: list[dict], windows: list[dict], audio: Path,
         if hotwords:
             args += ["--hotwords", hotwords]
         try:
-            fresh = json.loads(run_venv_worker("whisper_local_worker.py", args))
+            fresh, _ = worker_result(run_venv_worker("whisper_local_worker.py", args))
         except (SystemExit, ValueError) as exc:
-            print(f"[transcribe] repair: Fenster {lo:.0f}-{hi:.0f}s "
-                  f"fehlgeschlagen ({exc}) - Original bleibt", file=sys.stderr)
+            print(f"[transcribe] repair: window {lo:.0f}-{hi:.0f}s "
+                  f"failed ({exc}) - keeping the original", file=sys.stderr)
             continue
 
         new = [{"start": round(lo + float(s["start"]), 2),

@@ -22,13 +22,13 @@ import mimetypes
 import os
 import re
 import ssl
-import subprocess
 import sys
 import time
 import urllib.error
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
+import cli
 import cpu
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -118,15 +118,12 @@ def _probe_duration(audio_path: Path) -> float:
         raise SystemExit(
             "ffprobe is not installed. Run `python3 scripts/setup.py --install-binaries`."
         )
-    result = subprocess.run(
-        [
-            ffprobe, "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            str(audio_path),
-        ],
-        capture_output=True, text=True,
-    )
+    result = cli.run_text([
+        ffprobe, "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(audio_path),
+    ])
     if result.returncode != 0 or not result.stdout.strip():
         raise SystemExit(
             f"ffprobe failed on {audio_path}: {result.stderr.strip()}"
@@ -184,7 +181,7 @@ def _chunk_audio(
             "-c", "copy",
             str(chunk_path),
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = cli.run_text(cmd)
         if result.returncode != 0:
             raise SystemExit(
                 f"ffmpeg chunk extraction failed (chunk {i}): "
@@ -254,7 +251,7 @@ def _chunk_audio_by_duration(
             "-c", "copy",
             str(chunk_path),
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = cli.run_text(cmd)
         if result.returncode != 0:
             raise SystemExit(
                 f"ffmpeg chunk extraction failed (chunk {i}): {result.stderr.strip()}"
@@ -343,7 +340,7 @@ def extract_audio(video_path: str, out_path: Path) -> Path:
         "-b:a", "64k",
         str(out_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = cli.run_text(cmd)
     if result.returncode != 0:
         raise SystemExit(f"ffmpeg audio extraction failed: {result.stderr.strip()}")
     if not out_path.exists() or out_path.stat().st_size == 0:
@@ -843,9 +840,9 @@ class WhisperLocalBackend(STTBackend):
         # auto-selection prefers configured cloud backends.
         return True, ""
 
-    def transcribe_one(self, audio_path: Path) -> list[dict]:
-        import json as _json
+    runtime: dict = {}
 
+    def transcribe_one(self, audio_path: Path) -> list[dict]:
         from setup import run_venv_worker
 
         worker_args = [str(audio_path)]
@@ -853,14 +850,37 @@ class WhisperLocalBackend(STTBackend):
             worker_args.append(self.language)
         if self.hotwords:
             worker_args += ["--hotwords", self.hotwords]
-        stdout = run_venv_worker("whisper_local_worker.py", worker_args)
-        try:
-            return _json.loads(stdout)
-        except ValueError as exc:
-            raise SystemExit(
-                f"whisper_local_worker returned invalid JSON ({exc}): "
-                f"{stdout[-300:]}"
-            )
+        segments, self.runtime = worker_result(run_venv_worker("whisper_local_worker.py", worker_args))
+        return segments
+
+
+def worker_result(stdout: str) -> tuple[list[dict], dict]:
+    """Segments and runtime block from whisper_local_worker output. Accepts the
+    current {"segments", "runtime"} object and the older bare segment list."""
+    import json as _json
+
+    try:
+        data = _json.loads(stdout)
+    except ValueError as exc:
+        raise SystemExit(f"whisper_local_worker returned invalid JSON ({exc}): {stdout[-300:]}")
+    if isinstance(data, dict):
+        segments, runtime = data.get("segments"), data.get("runtime") or {}
+    else:
+        segments, runtime = data, {}
+    if not isinstance(segments, list):
+        raise SystemExit("whisper_local_worker returned no segment list")
+    return segments, runtime if isinstance(runtime, dict) else {}
+
+
+def runtime_label(runtime: dict | None) -> str:
+    """`large-v3-turbo on cuda (float16)` / `medium on cpu (int8, 6 threads)`;
+    empty when the backend reported nothing (cloud backends, old caches)."""
+    if not runtime or not runtime.get("model"):
+        return ""
+    details = [str(runtime[k]) for k in ("compute",) if runtime.get(k)]
+    if runtime.get("threads"):
+        details.append(f"{runtime['threads']} threads")
+    return f"{runtime['model']} on {runtime.get('device', 'unknown')}" + (f" ({', '.join(details)})" if details else "")
 
 
 # Backend factories in auto-selection priority order - LOCAL FIRST: nothing
@@ -1166,7 +1186,9 @@ def transcribe_video(
     from a video file (run.py). `backend` is a backend name; when given
     with `api_key`, that key is injected so .env is not re-read. `hotwords`
     (see load_hotwords) biases capable backends toward domain vocabulary.
-    Returns (segments, backend_name). Raises SystemExit on any failure.
+    Returns (segments, backend_name, runtime); runtime is the backend's
+    {model, device, compute, threads?} block, empty for cloud backends.
+    Raises SystemExit on any failure.
     """
     if backend in ("groq", "openai"):
         stt: STTBackend | None = WhisperBackend(backend, api_key=api_key)
@@ -1192,8 +1214,11 @@ def transcribe_video(
     )
     if not segments:
         raise SystemExit("transcription returned no transcript segments")
-    print(f"[transcribe] transcribed {len(segments)} segments via {stt.name}", file=sys.stderr)
-    return segments, stt.name
+    runtime = getattr(stt, "runtime", None) or {}
+    label = runtime_label(runtime)
+    print(f"[transcribe] transcribed {len(segments)} segments via {stt.name}"
+          f"{f' ({label})' if label else ''}", file=sys.stderr)
+    return segments, stt.name, runtime
 
 
 if __name__ == "__main__":
@@ -1213,6 +1238,6 @@ if __name__ == "__main__":
 
     from transcribe import format_transcript
 
-    segments, used = transcribe_video(source, audio_out, backend=backend_override)
+    segments, used, _runtime = transcribe_video(source, audio_out, backend=backend_override)
     print(f"\n[stt] transcript via {used} ({len(segments)} segments)\n", file=sys.stderr)
     print(format_transcript(segments))

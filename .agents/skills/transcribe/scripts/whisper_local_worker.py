@@ -3,8 +3,11 @@
 
 Never import this from the host process; launch it via setup.run_venv_worker.
 Contract: argv[1] = audio path, optional argv[2] = language code (e.g. "de";
-omit for auto-detect). JSON segments [{start, end, text}] on stdout,
-progress on stderr.
+omit for auto-detect). JSON on stdout: {"segments": [{start, end, text}],
+"runtime": {model, device, compute, threads?}} - the runtime block is what
+the protocol reports, so a CPU fallback is visible without reading logs.
+stt.worker_result() reads this shape and the older bare segment list.
+Progress on stderr.
 
 Optional flag `--hotwords "term1, term2, ..."` biases decoding toward
 domain vocabulary: faster-whisper injects the string into every window's
@@ -134,6 +137,7 @@ def main() -> int:
             log(f"compute_type={compute} rejected ({type(exc).__name__}) - float16")
             compute = "float16"
             model = WhisperModel(model_name, device="cuda", compute_type=compute)
+        runtime = {"model": model_name, "device": "cuda", "compute": compute}
         desc = f"{model_name} / cuda {compute}"
     except Exception as exc:  # noqa: BLE001 - any CUDA failure -> CPU
         log(f"CUDA unavailable ({type(exc).__name__}) - CPU fallback (medium/int8)")
@@ -147,6 +151,7 @@ def main() -> int:
             threads = max(1, (os.cpu_count() or 4) - 2)
         model = WhisperModel("medium", device="cpu", compute_type="int8",
                              cpu_threads=threads)
+        runtime = {"model": "medium", "device": "cpu", "compute": "int8", "threads": threads}
         desc = f"medium / cpu int8 ({threads} threads)"
 
     hotwords = clamp_hotwords(hotwords)
@@ -198,7 +203,7 @@ def main() -> int:
         # glossary biasing beats no transcript at all.
         log(f"hotword biasing failed ({exc}) - retrying without glossary")
         out = run(None)
-    json.dump(out, sys.stdout)
+    json.dump({"segments": out, "runtime": runtime}, sys.stdout)
     return 0
 
 

@@ -31,7 +31,6 @@ and a per-speaker concatenation - the file to paste back for analysis.
 from __future__ import annotations
 
 import shutil
-import subprocess
 import sys
 import tempfile
 import time
@@ -41,6 +40,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent.resolve()
 sys.path.insert(0, str(SCRIPT_DIR))
 
+import cli  # noqa: E402
 from setup import find_tool  # noqa: E402
 from stt import (  # noqa: E402
     AzureDiarizeBackend,
@@ -76,7 +76,7 @@ def _trim(src: Path, max_seconds: float) -> Path:
         "-vn", "-acodec", "libmp3lame", "-ar", "16000", "-ac", "1", "-b:a", "64k",
         str(out),
     ]
-    if subprocess.run(cmd, capture_output=True, text=True).returncode != 0 \
+    if cli.run_text(cmd).returncode != 0 \
             or not out.exists():
         raise SystemExit("ffmpeg trim failed")
     return out

@@ -213,7 +213,7 @@ def main() -> int:
     report = format_report(result, Path(args.segments).name, Path(args.vtt).name)
     if args.out:
         Path(args.out).write_text(report, encoding="utf-8")
-        print(f"[crosscheck] {len(result['flagged'])} auffällige Fenster -> {args.out}",
+        print(f"[crosscheck] {len(result['flagged'])} divergent windows -> {args.out}",
               file=sys.stderr)
     else:
         print(report)

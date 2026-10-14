@@ -42,10 +42,10 @@ def call(script: str, *args: str, capture: bool = False) -> subprocess.Completed
 
 def build_parser():
     ap = cli.parser(__doc__, examples=[
-        'python pipeline.py "20261013-1100 - Thema.mp4" --language de --local',
-        'python pipeline.py "20261013-1100 - Thema.mp4" --language de --local --stop-at-speakers',
-        'python pipeline.py "20261013-1100 - Thema.mp4" --redact   # add redaction to a finished run',
-        'python pipeline.py "https://youtu.be/..." --language en --start 0 --end 5:00'])
+        'python transcribe.py run "20261013-1100 - Thema.mp4" --language de --local',
+        'python transcribe.py run "20261013-1100 - Thema.mp4" --language de --local --stop-at-speakers',
+        'python transcribe.py run "20261013-1100 - Thema.mp4" --redact   # add redaction to a finished run',
+        'python transcribe.py run "https://youtu.be/..." --language en --start 0 --end 5:00'])
     ap.add_argument("source", help="Local video or audio file, or a URL")
     ap.add_argument("--language", default=None, help="Language of transcript and report, e.g. de")
     ap.add_argument("--local", action="store_true",
@@ -73,6 +73,11 @@ def main() -> int:
         import run
         run.build_parser().print_help()
         return 0
+    if not sys.argv[1:]:
+        # The public `run` command: a missing source is a usage error (exit 2), not a help request.
+        ap.print_usage(sys.stderr)
+        print(f"{ap.prog}: error: a source file or URL is required (see --help)", file=sys.stderr)
+        return 2
     args, run_extra = cli.parse_known(ap)
     import run
     lang = ["--language", args.language] if args.language else []
@@ -122,7 +127,9 @@ def main() -> int:
         reusable = all(Path(f["path"]).is_file() for f in read_protocol(p.protocol).get("frames", []))
     needed = args.rerun or run_args.fresh or not reusable
     if needed and not url and not Path(source).is_file():
-        ap.error(f"Source is unavailable for recomputation: {source}")
+        if previous.get("source"):
+            ap.error(f"Source is unavailable for recomputation: {source}")
+        ap.error(f"Source not found: {source}")
     plan = {"schema": 1, "source": source, "base": str(base) if base else None,
             "stages": [{"stage": "media", "status": "pending" if needed else "current",
                         "reason": "inputs/options changed or refresh requested" if needed else "recorded inputs and outputs match"}],
@@ -195,10 +202,12 @@ def main() -> int:
             rc = analysed.returncode
         else:
             rc = 0
+        # The review list exists only after the model stages; a harness may take every path literally.
+        review_path = p.base.with_name(p.base.name + ".review.md")
         result = {"schema": 1, "status": "review_required" if rc in (4, 5) else "failed" if rc else
                   "handoff" if args.analysis == "harness" else "complete", "exit_code": rc,
                   "base": str(p.base), "protocol": str(p.protocol), "transcript": str(p.transcript),
-                  "report": str(p.report), "review": str(p.base.with_name(p.base.name + ".review.md"))}
+                  "report": str(p.report), "review": str(review_path) if review_path.is_file() else None}
         if args.analysis == "harness":
             from companions import read_protocol
             from report import select_frames

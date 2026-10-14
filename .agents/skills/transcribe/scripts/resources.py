@@ -18,6 +18,8 @@ from __future__ import annotations
 import re
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+from companions import fmt_ts
+
 
 URL_RE = re.compile(r'https?://[^\s<>"\'\)\]\}]+', re.UNICODE)
 
@@ -187,12 +189,6 @@ def categorize(url: str) -> str:
     return "other"
 
 
-def _fmt_ts(seconds: float) -> str:
-    s = int(seconds)
-    h, rem = divmod(s, 3600)
-    m, sec = divmod(rem, 60)
-    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
-
 
 def collect(description: str, transcript_segments: list[dict],
             frame_refs: list[dict] | None = None) -> dict[str, list[dict]]:
@@ -224,13 +220,13 @@ def collect(description: str, transcript_segments: list[dict],
         if "http" not in text:
             continue
         for u in extract_urls(text):
-            add(u, f"transcript@{_fmt_ts(seg.get('start', 0) or 0)}")
+            add(u, f"transcript@{fmt_ts(seg.get('start', 0) or 0)}")
 
     for ref in frame_refs or []:
         if ref.get("type") != "url":
             continue
         mark = "" if ref.get("ok", True) else " (?)"
-        add(ref["value"], f"frame@{_fmt_ts(ref.get('first', 0) or 0)}{mark}")
+        add(ref["value"], f"frame@{fmt_ts(ref.get('first', 0) or 0)}{mark}")
 
     out: dict[str, list[dict]] = {}
     for cat in CATEGORY_ORDER:
@@ -270,6 +266,7 @@ def format_section(grouped: dict[str, list[dict]]) -> str:
 if __name__ == "__main__":
     import json
     import sys
+    from pathlib import Path
 
     import cli
 
@@ -286,7 +283,7 @@ if __name__ == "__main__":
     if cli_args.transcript:
         path = cli_args.transcript
         if path.endswith(".json"):
-            segments = json.loads(open(path).read())
+            segments = json.loads(Path(path).read_text(encoding="utf-8"))
         else:
             from transcribe import parse_vtt
             segments = parse_vtt(path)

@@ -77,8 +77,12 @@ def file_hash(path: Path) -> str:
     return h.hexdigest()
 
 
-def media_identity(path: Path) -> dict:
-    """Fast media identity; replacing a recording invalidates its intermediates."""
+def media_identity(path: Path | str) -> dict:
+    """Fast media identity; replacing a recording invalidates its intermediates.
+
+    Accepts a string as well: run.py carries the downloaded media path as the
+    plain string yt-dlp returns, and every caller shares this one conversion."""
+    path = Path(path)
     s = path.stat()
     return {"path": str(path.resolve()), "size": s.st_size, "mtime_ns": s.st_mtime_ns}
 

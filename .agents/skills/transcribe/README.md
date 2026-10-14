@@ -70,7 +70,7 @@ Nach der Installation ist auch `transcribe …` möglich, wenn `~/.transcribe/bi
 
 ## Ergebnisse und Korrekturen
 
-Die JSON-Ausgabe nennt die tatsächlichen Pfade für Transkript, Protokoll, Bericht und Review. Je nach Inhalt kommen Sprecherdatei, Kompaktfassung, OCR-Referenzen und Illustrationen dazu. URL-Ergebnisse liegen unter `./transcribe/`; ein Index ermöglicht Wiederaufnahme.
+Die JSON-Ausgabe nennt die tatsächlichen Pfade für Transkript, Protokoll und Bericht; `review` ist `null`, solange keine Review-Liste existiert (`--analysis none` oder `harness`). Je nach Inhalt kommen Sprecherdatei, Kompaktfassung, OCR-Referenzen und Illustrationen dazu; ein Audio-Lauf legt keine leeren OCR-Dateien an. URL-Ergebnisse liegen unter `./transcribe/`; ein Index ermöglicht Wiederaufnahme.
 
 Sprecher und Wortmeldungen in `.speakers.md` korrigieren und denselben Befehl erneut ausführen. `--fresh` erneuert STT und Sprechertrennung, `--rerun` die Medienaufbereitung, `--force` die Modell-Stufen. Fehlgeschlagene Bild-Batches und Kapitel werden separat fortgesetzt. Vor einer Publikation prüft ein Mensch `.review.md`; geänderte Artefakte setzen Freigaben zurück.
 

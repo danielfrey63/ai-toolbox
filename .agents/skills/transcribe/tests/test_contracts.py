@@ -88,6 +88,16 @@ class Contracts(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["env"]["TRANSCRIBE_WHISPER_MODEL"], "medium")
         self.assertEqual(run.call_args.kwargs["env"]["TRANSCRIBE_GPU_DUTY"], "0.5")
 
+    def test_worker_result_shapes_and_runtime_label(self):
+        legacy = stt.worker_result('[{"start": 0, "end": 1, "text": "x"}]')
+        self.assertEqual(legacy, ([{"start": 0, "end": 1, "text": "x"}], {}))
+        _, runtime = stt.worker_result('{"segments": [], "runtime": {"model": "medium", "device": "cpu", "compute": "int8", "threads": 6}}')
+        self.assertEqual(stt.runtime_label(runtime), "medium on cpu (int8, 6 threads)")
+        self.assertEqual(stt.runtime_label({"model": "large-v3-turbo", "device": "cuda", "compute": "float16"}), "large-v3-turbo on cuda (float16)")
+        self.assertEqual(stt.runtime_label({}), "")
+        with self.assertRaises(SystemExit):
+            stt.worker_result('{"segments": "broken"}')
+
     def test_secrets_hidden_in_repr_and_errors(self):
         os.environ["AZURE_LLM_KEY"] = "synthetic-secret"
         self.assertNotIn("synthetic-secret", repr(llm.Config("azure", key="synthetic-secret")))
@@ -238,6 +248,8 @@ class Contracts(unittest.TestCase):
         self.assertEqual(first.returncode, 0, first.stderr)
         result = json.loads(first.stdout)
         self.assertEqual(result["status"], "complete")
+        self.assertIsNone(result["review"], "no review list exists without the model stages")
+        self.assertFalse(media.with_suffix(".ocr.json").exists(), "an audio run leaves no empty OCR files")
         transcript = Path(result["transcript"])
         self.assertIn("Final sentence.", transcript.read_text(encoding="utf-8"))
         resumed = subprocess.run([sys.executable, "-X", "utf8", "-B", str(ROOT / "transcribe.py"), "run",

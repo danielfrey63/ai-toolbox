@@ -47,6 +47,7 @@ import sys
 from pathlib import Path
 
 import cli
+from companions import fmt_ts
 from urllib.parse import parse_qsl, unquote_plus, urlencode, urlparse, urlunparse
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -112,13 +113,6 @@ REF_LABELS = {
     "host": "Hosts",
     "path": "Share paths",
 }
-
-
-def fmt_ts(seconds: float) -> str:
-    s = int(seconds)
-    h, rem = divmod(s, 3600)
-    m, sec = divmod(rem, 60)
-    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
 
 
 # --- Worker (isolated env: Pillow + RapidOCR) -------------------------------
@@ -191,7 +185,7 @@ def _extract_native(ffmpeg: str, video: str, seek: float, out: Path, threads: in
         "-ss", f"{max(0.0, seek):.3f}", "-i", video,
         "-frames:v", "1", str(out),
     ]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = cli.run_text(cmd)
     return r.returncode == 0 and out.exists()
 
 
@@ -285,7 +279,7 @@ def run(video: str, frames: list[dict], work: Path, ffmpeg: str, threads: int,
             "--frames", str(spec_path), "--out-dir", str(out_dir),
             "--result", str(result_path), "--max-frames", str(max_frames), "--accel", use,
         ]
-        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        r = cli.run_text(cmd)
         for line in (r.stderr or "").splitlines():
             if line.startswith("[ocr]"):
                 sys.stderr.write(line + "\n")

@@ -5,11 +5,24 @@ Every script shows its full help for -h, --help and a call without
 arguments. Two scripts give the bare call its own meaning and say so in
 their help: setup.py runs the interactive installer, llm.py prints the
 configured deployments. The help lists the exit codes and an example.
+
+run_text() is the one way to capture a child process as text: UTF-8 with
+replacement, independent of the console code page, so ffmpeg or yt-dlp
+output never raises UnicodeDecodeError on a cp1252 console.
 """
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
+
+
+def run_text(cmd: list, **kwargs) -> subprocess.CompletedProcess:
+    """subprocess.run with captured UTF-8 text output; extra keyword
+    arguments (timeout, env, ...) pass through unchanged."""
+    options = {"capture_output": True, "text": True, "encoding": "utf-8", "errors": "replace"}
+    options.update(kwargs)
+    return subprocess.run(cmd, **options)
 
 
 def parser(doc: str | None, *, exit_codes: dict[int, str] | None = None, examples: list[str] | None = None,

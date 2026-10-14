@@ -61,6 +61,7 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(errors="replace")
 
+from companions import fmt_ts
 from frames import _hash_sidecar_path
 from setup import find_tool
 
@@ -119,7 +120,7 @@ def _crop_one(ffmpeg: str, video: str, t: float, bbox, out_path: Path, redact=No
         "-vf", crop,
         str(out_path),
     ]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = cli.run_text(cmd)
     if r.returncode != 0 or not out_path.exists():
         sys.stderr.write(
             f"[illustrate] WARNING: crop failed at t={t:.1f}s: "
@@ -153,7 +154,7 @@ def _make_sheets(ffmpeg: str, video: str, out_dir: Path,
         "-vsync", "vfr",
         str(out_dir / "sheet_%02d.png"),
     ]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = cli.run_text(cmd)
     sheets = sorted(out_dir.glob("sheet_*.png"))
     if r.returncode != 0 or not sheets:
         sys.stderr.write(f"[illustrate] ERROR: sheet extraction failed: {r.stderr.strip()}\n")
@@ -163,7 +164,7 @@ def _make_sheets(ffmpeg: str, video: str, out_dir: Path,
           f"  (zero-based row/col, {cols}x{rows} tiles, 1 frame per {interval}s)")
     for i, s in enumerate(sheets):
         start, end = i * cols * rows * interval, ((i + 1) * cols * rows - 1) * interval
-        print(f"  - {s.name}  covers t={_fmt_ts(start)}..{_fmt_ts(end)}")
+        print(f"  - {s.name}  covers t={fmt_ts(start)}..{fmt_ts(end)}")
     return 0
 
 
@@ -178,7 +179,7 @@ def _extract_frames(ffmpeg: str, video: str, out_dir: Path, stamps: list[float])
             "-ss", f"{max(0.0, t):.3f}", "-i", video,
             "-frames:v", "1", str(path),
         ]
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = cli.run_text(cmd)
         if r.returncode == 0 and path.exists():
             written.append(path)
         else:
@@ -270,7 +271,7 @@ def _refine(paths: list[Path]) -> tuple[str, dict[str, str]]:
         return "skipped (no Pillow, no uv)", {}
     cmd = [uv, "run", "--no-project", "--with", "pillow",
            "python", __file__, "--refine-worker", *strs]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = cli.run_text(cmd)
     if r.returncode != 0:
         sys.stderr.write(f"[illustrate] refine worker failed: {r.stderr.strip()}\n")
         return "skipped (uv/Pillow error)", {}
@@ -366,12 +367,6 @@ def _dedup(ffmpeg: str, items: list[dict], threshold: int) -> tuple[list[dict], 
             f"add \"no_dedup\": true to that spec entry if it is genuinely distinct\n"
         )
     return kept, dropped
-
-
-def _fmt_ts(t: float) -> str:
-    m, s = divmod(int(t), 60)
-    h, m = divmod(m, 60)
-    return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:d}:{s:02d}"
 
 
 def main() -> int:
@@ -471,7 +466,7 @@ def main() -> int:
         path = out_dir / name
         if _crop_one(ffmpeg, video, t, entry.get("bbox"), path, entry.get("redact")):
             items.append({
-                "id": eid, "timestamp": round(t, 2), "timestamp_label": _fmt_ts(t),
+                "id": eid, "timestamp": round(t, 2), "timestamp_label": fmt_ts(t),
                 "caption": caption, "type": etype, "_path": str(path),
                 "_no_dedup": bool(entry.get("no_dedup")),
             })
