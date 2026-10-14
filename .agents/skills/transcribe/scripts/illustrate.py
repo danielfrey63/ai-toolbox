@@ -64,6 +64,12 @@ for _stream in (sys.stdout, sys.stderr):
 from frames import _hash_sidecar_path
 from setup import find_tool
 
+# Grey-level standard deviation below which a crop counts as empty. Real
+# screen content measured 21.5 and up (dark-mode diagrams included), a black
+# transition frame between two screens 9.6.
+UNIFORM_STDDEV = 15
+UNIFORM_REASON = "near-uniform content"
+
 
 def _slug(text: str, max_len: int = 32) -> str:
     """Lowercase ASCII slug for filenames; '' when nothing usable remains."""
@@ -209,8 +215,8 @@ def _refine_worker(paths: list[str], tol: int = 14, pad: int = 6) -> dict[str, s
         w, h = im.size
         if w < 64 or h < 64:
             return f"tiny crop ({w}x{h}px)"
-        if ImageStat.Stat(im.convert("L")).stddev[0] < 8:
-            return "near-uniform content (bbox likely missed the target)"
+        if ImageStat.Stat(im.convert("L")).stddev[0] < UNIFORM_STDDEV:
+            return f"{UNIFORM_REASON} (bbox missed the target or the frame is a blank transition)"
         return None
 
     verdicts: dict[str, str] = {}

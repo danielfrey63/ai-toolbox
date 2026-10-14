@@ -1454,11 +1454,7 @@ def main() -> int:
             + f" -> {where}"
         )
     if speakers_path and speakers_path.exists():
-        named = speakers_stage.parse_mapping(speakers_path)
-        emit(
-            f"- **Speakers:** {len(named)} label(s) named in [`{speakers_path.name}`](./{speakers_path.name})"
-            + (f" ({', '.join(f'{k} = {v}' for k, v in named.items())})" if named else " - all open")
-        )
+        emit(speakers_stage.protocol_line(speakers_path))
     if transcript_segments:
         in_range = " in range" if focused else ""
         emit(

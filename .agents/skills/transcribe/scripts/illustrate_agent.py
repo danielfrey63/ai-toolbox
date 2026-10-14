@@ -16,6 +16,10 @@ this script only makes the three judgement calls the session used to make:
    misses its caption, shows chrome or an overlay gets a corrected box.
    At most --rounds rounds.
 
+A crop that comes out near-uniform (a black transition frame a scene cut
+caught) is moved forward a few seconds to the settled screen, or dropped -
+measured, without a model call.
+
 The spec <base>.illustrations.spec.json stays the single source of truth;
 illustrate.py renders it. Idempotent: an existing spec is kept unless --force.
 When only the redaction setting differs from the one the spec was built
@@ -187,6 +191,77 @@ def qs(spec: list[dict], manifest: list[dict], frames: dict[float, Path], p: Pat
     return fixed
 
 
+BLANK_STEP = 2.0   # seconds to move an empty crop forward per try
+BLANK_TRIES = 3
+
+
+def replace_blank(spec: list[dict], manifest: list[dict], video: Path, p: Paths, save) -> tuple[list[dict], set]:
+    """A crop the renderer measures as near-uniform is usually a black
+    transition frame caught by a scene cut. Move it forward in BLANK_STEP
+    steps to where the next screen has settled; drop it when it stays empty.
+    Measured, no model call. Returns the manifest and the ids that moved -
+    their captions still describe the empty frame."""
+    from illustrate import UNIFORM_REASON
+    by_id = {e["id"]: e for e in spec}
+    moved: set = set()
+
+    def blank_ids() -> list:
+        return [i["id"] for i in manifest if (i.get("suspect") or "").startswith(UNIFORM_REASON) and i.get("id") in by_id]
+
+    for _ in range(BLANK_TRIES):
+        ids = blank_ids()
+        if not ids:
+            break
+        for i in ids:
+            by_id[i]["timestamp"] = round(float(by_id[i]["timestamp"]) + BLANK_STEP, 1)
+            moved.add(i)
+        save()
+        manifest = render(video, p)
+    ids = blank_ids()
+    if ids:
+        for i in ids:
+            print(f"[illustrate-agent] drop {i}: still empty {BLANK_STEP * BLANK_TRIES:.0f} s after the pick",
+                  file=sys.stderr)
+        spec[:] = [e for e in spec if e["id"] not in ids]
+        save()
+        manifest = render(video, p)
+    moved -= set(ids)
+    for i in sorted(moved):
+        print(f"[illustrate-agent] empty crop {i} moved to {fmt_ts(by_id[i]['timestamp'])}", file=sys.stderr)
+    return manifest, moved
+
+
+def recaption(spec: list[dict], moved: set, frames: dict[float, Path], frames_desc: list[dict], video: Path,
+              p: Paths, tmp: Path, save, language: str | None, context: list[str], redact: bool) -> list[dict]:
+    """Box and caption of a moved crop were made for the empty frame: redo
+    both on the settled one, drafted from the nearest frame description, then
+    one visual check. Returns the new manifest."""
+    ents = [e for e in spec if e["id"] in moved]
+    for e in ents:
+        e["_t"] = float(e["timestamp"])
+    new = extract(video, [e["_t"] for e in ents], tmp)
+    frames.update(new)
+
+    def nearest(t: float) -> str:
+        f = min(frames_desc, key=lambda d: abs(ts_seconds(d.get("ts", "0:00")) - t))
+        return f"{f.get('screen', '')}: {f.get('content', '')}"
+
+    bx = boxes(new, {e["_t"]: nearest(e["_t"]) for e in ents}, language, context, redact)
+    for e in ents:
+        b = bx.get(e["_t"])
+        if b:
+            e["bbox"] = [round(float(v), 3) for v in b["bbox"]]
+            e["caption"] = (b.get("caption") or e["caption"]).strip()
+            if redact and b.get("redact"):
+                e["redact"] = b["redact"]
+    save()
+    manifest = render(video, p)
+    if qs(spec, [m for m in manifest if m.get("id") in moved], frames, p, language, redact):
+        save()
+        manifest = render(video, p)
+    return manifest
+
+
 def spec_redaction(spec: list[dict]) -> bool:
     """Whether the spec was built with redaction on. Specs from before the
     "redaction" field were built with the default, which is off."""
@@ -320,6 +395,10 @@ def main() -> int:
                 break
             save()
             manifest = render(video, p)
+        manifest, moved = replace_blank(spec, manifest, video, p, save)
+        if moved:
+            manifest = recaption(spec, moved, frames, frames_desc, video, p, Path(tmp), save,
+                                 args.language, context, redact)
     for s in sel.get("skipped_chapters", []) or []:
         print(f"[illustrate-agent] no illustration for «{s.get('chapter')}»: {s.get('why')}", file=sys.stderr)
     print(f"[illustrate-agent] {len(manifest)} illustration(s) -> {p.illustrations}", file=sys.stderr)

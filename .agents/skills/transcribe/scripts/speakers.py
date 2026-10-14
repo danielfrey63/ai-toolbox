@@ -319,6 +319,29 @@ def parse_mapping(path: Path) -> dict[str, str]:
     return mapping
 
 
+PROTOCOL_PREFIX = "- **Speakers:** "
+
+
+def protocol_line(path: Path) -> str:
+    """The «Speakers» line of protocol.md: which labels carry a name now."""
+    named = parse_mapping(path)
+    return (f"{PROTOCOL_PREFIX}{len(named)} label(s) named in [`{path.name}`](./{path.name})"
+            + (f" ({', '.join(f'{k} = {v}' for k, v in named.items())})" if named else " - all open"))
+
+
+def refresh_protocol(protocol: Path, path: Path) -> bool:
+    """Bring the «Speakers» line of an existing protocol.md up to date - run.py
+    writes it before anyone named a label. True when it changed."""
+    if not protocol.is_file() or not path.is_file():
+        return False
+    text = protocol.read_text(encoding="utf-8")
+    new = re.sub(rf"^{re.escape(PROTOCOL_PREFIX)}.*$", lambda _: protocol_line(path), text, count=1, flags=re.M)
+    if new != text:
+        protocol.write_text(new, encoding="utf-8")
+        return True
+    return False
+
+
 def apply_mapping(segments: list[dict], mapping: dict[str, str]) -> list[dict]:
     if not mapping:
         return segments

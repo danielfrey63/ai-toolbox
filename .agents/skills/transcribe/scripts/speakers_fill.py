@@ -218,6 +218,8 @@ def finish(p: Paths, restamp: bool, apply: bool) -> None:
         print(f"[speakers-fill] applied {len(mapping)} name(s), {len(overrides)} override(s) to "
               f"{len(touched)} file(s)", file=sys.stderr)
         changed = bool(touched)
+        if speakers_mod.refresh_protocol(p.protocol, p.speakers):
+            print(f"[speakers-fill] speaker line in {p.protocol.name} updated", file=sys.stderr)
     # after the apply, so a second call finds the same transcript and changes nothing
     if grounding.ground_file(p):
         print(f"[speakers-fill] quotes and times grounded in the transcript, Hörproben updated", file=sys.stderr)

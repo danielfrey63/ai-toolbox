@@ -87,7 +87,14 @@ def main() -> int:
         log(f"soundfile preload unavailable ({exc}); pyannote decodes the file itself")
 
     log(f"running pyannote.audio on {audio_path.name} ({device})...")
-    diarization = pipeline(audio_input)
+    import warnings
+    with warnings.catch_warnings():
+        # Both are notices, not faults: pyannote switches TF32 off for
+        # reproducibility, and std() of a one-frame chunk has no degrees of
+        # freedom. Printed as tracebacks they read like a failed run.
+        warnings.filterwarnings("ignore", message=r".*TensorFloat-32.*")
+        warnings.filterwarnings("ignore", message=r".*degrees of freedom is <= 0.*")
+        diarization = pipeline(audio_input)
 
     turns = [
         {
