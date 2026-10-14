@@ -12,6 +12,10 @@ that quote starts, so a person can jump there and listen:
   (?) or not high-confidence, up to three verbatim sentences with their
   time - first the moments its Evidence cites, then samples spread over the
   recording.
+- A row whose time falls in a transcript block the Overrides table already
+  names is answered: it leaves «Open attributions» (its quote goes into the
+  override's empty Wortmeldung cell), so the open list shrinks with every
+  answer - in the report too.
 
 Times come from the Whisper segments (<base>.segments.json), interpolated
 by character position inside a segment (about ±3 s); without segments the
@@ -33,10 +37,13 @@ from pathlib import Path
 
 import cli
 from companions import Paths, fmt_ts, read_json, read_speakers, read_transcript, resolve_base, ts_seconds
+from speakers import block_of, parse_overrides
 
 SAMPLES_HEADING = "## Hörproben"
 OPEN_HEADING = "## Open attributions"
 NOT_FOUND = "nicht im Transkript gefunden"
+ALL_ANSWERED = "_Alle Stellen sind in den Overrides beantwortet._"
+TS_CELL = re.compile(r"\d{1,2}:\d{2}(?::\d{2})?")
 MAX_QUOTE = 220
 MIN_RATIO = 0.6
 
@@ -201,18 +208,49 @@ def _replace_section(text: str, heading: str, new_lines: list[str]) -> str:
 
 def _replace_open_table(text: str, rows: list[dict]) -> str:
     m = re.search(rf"^{re.escape(OPEN_HEADING)}\s*$", text, re.M)
-    if not m or not rows:
+    if not m:
         return text
     nxt = re.search(r"^## ", text[m.end():], re.M)
     end = m.end() + nxt.start() if nxt else len(text)
     section = text[m.end():end].split("\n")
-    first = next(i for i, l in enumerate(section) if l.lstrip().startswith("|"))
-    last = max(i for i, l in enumerate(section) if l.lstrip().startswith("|"))
+    idx = [i for i, l in enumerate(section) if l.lstrip().startswith("|")]
+    if not idx:
+        return text
     cols = ["Zeit", "Wortmeldung", "Label", "Kandidaten", "Gewicht"]
     table = ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
     table += ["| " + " | ".join(str(r.get(c, "") or "") for c in cols) + " |" for r in rows]
-    section[first:last + 1] = table
+    section[idx[0]:idx[-1] + 1] = table if rows else [ALL_ANSWERED]
     return text[:m.end()] + "\n".join(section) + text[end:]
+
+
+def _answered(rows: list[dict], overrides: dict[str, str], starts: list[str]) -> tuple[list[dict], dict[str, str]]:
+    """(rows still open, override block -> quote of the answered row)."""
+    done = {block_of(ts, starts) for ts in overrides}
+    still, quotes = [], {}
+    for r in rows:
+        zeit = (r.get("Zeit") or "").strip("`[] ")
+        blk = block_of(zeit, starts) if TS_CELL.fullmatch(zeit) else None
+        if blk in done:
+            quotes.setdefault(blk, re.sub(rf"\s*\({NOT_FOUND}\)\s*$", "", r.get("Wortmeldung") or ""))
+        else:
+            still.append(r)
+    return still, quotes
+
+
+def _fill_override_quotes(text: str, quotes: dict[str, str], starts: list[str]) -> str:
+    """Put the quote of an answered row into its override's empty Wortmeldung cell."""
+    out, in_section = [], False
+    for line in text.split("\n"):
+        if line.startswith("## "):
+            in_section = line[3:].strip().lower().startswith("overrides")
+        if in_section and line.lstrip().startswith("|"):
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            ts = cells[0].strip("`[] ")
+            quote = quotes.get(block_of(ts, starts)) if TS_CELL.fullmatch(ts) else None
+            if quote and len(cells) >= 2 and cells[1] and (len(cells) < 3 or not cells[2]):
+                line = "| " + " | ".join([cells[0], cells[1], quote] + cells[3:]) + " |"
+        out.append(line)
+    return "\n".join(out)
 
 
 def ground_file(p: Paths) -> bool:
@@ -224,7 +262,11 @@ def ground_file(p: Paths) -> bool:
     sents = sentences(p)
     if not sents:
         return False
-    new = _replace_open_table(text, ground_open_rows(sp["open"], sents)) if sp["open"] else text
+    new = text
+    if sp["open"]:
+        starts = [b.ts for b in read_transcript(p.transcript)]
+        rows, quotes = _answered(ground_open_rows(sp["open"], sents), parse_overrides(p.speakers), starts)
+        new = _fill_override_quotes(_replace_open_table(text, rows), quotes, starts)
     new = _replace_section(new, SAMPLES_HEADING, samples(sp["labels"], sents))
     if new != text:
         p.speakers.write_text(new, encoding="utf-8")

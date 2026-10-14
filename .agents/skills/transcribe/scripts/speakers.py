@@ -246,8 +246,10 @@ def prefill(title: str, segments: list[dict], ocr: dict | None, vtt_path: Path |
     lines += [
         "", "## Overrides", "",
         "_One row per transcript block that someone who was in the room attributes by hand - for the "
-        "contributions a shared microphone filed under the presenter's label. The timestamp is the block's "
-        "`[MM:SS]` in transcript.md; the name replaces the label for that block (and its VTT cues) only._",
+        "contributions a shared microphone filed under the presenter's label. The timestamp is any `[MM:SS]` "
+        "inside the block (the block's own or the time from Open attributions); the name replaces the label "
+        "for that block (and its VTT cues) only, and grounding.py takes the answered row out of Open "
+        "attributions._",
         "",
         "| Zeit | Name | Wortmeldung |",
         "|---|---|---|",
@@ -344,6 +346,19 @@ def parse_overrides(path: Path) -> dict[str, str]:
     return out
 
 
+def block_of(ts: str, starts: list[str]) -> str:
+    """The start `[MM:SS]` of the transcript block that `ts` falls in, so the
+    time of a sentence inside a block (as grounding.py writes it into Open
+    attributions) addresses the same block as the block's own timestamp."""
+    t = _ts_seconds(ts)
+    hit = [s for s in sorted(starts, key=_ts_seconds) if _ts_seconds(s) <= t + 0.5]
+    return hit[-1] if hit else ts
+
+
+def snap_overrides(overrides: dict[str, str], starts: list[str]) -> dict[str, str]:
+    return {block_of(ts, starts): name for ts, name in overrides.items()}
+
+
 TS_RE = re.compile(r"\[?\d{1,2}:\d{2}(?::\d{2})?\]?")
 BLOCK_RE = re.compile(r"^\[(\d{1,2}:\d{2}(?::\d{2})?)\] \[([^\]]+)\]")
 
@@ -361,7 +376,9 @@ def apply_overrides(segments: list[dict], overrides: dict[str, str]) -> list[dic
     """Rename the speaker of every segment inside an overridden block."""
     if not overrides:
         return segments
-    spans = [(s, e, overrides[ts]) for ts, s, e in _block_starts(segments) if ts in overrides]
+    blocks = _block_starts(segments)
+    overrides = snap_overrides(overrides, [ts for ts, _, _ in blocks])
+    spans = [(s, e, overrides[ts]) for ts, s, e in blocks if ts in overrides]
     out = []
     for seg in segments:
         st = float(seg["start"])
@@ -381,6 +398,7 @@ def apply_to_files(base: Path, mapping: dict[str, str], overrides: dict[str, str
     if tp.is_file():
         lines = tp.read_text(encoding="utf-8").splitlines()
         starts = [(i, m.group(1)) for i, l in enumerate(lines) if (m := BLOCK_RE.match(l))]
+        overrides = snap_overrides(overrides, [ts for _, ts in starts])
         new_lines = list(lines)
         for k, (i, ts) in enumerate(starts):
             m = BLOCK_RE.match(lines[i])
