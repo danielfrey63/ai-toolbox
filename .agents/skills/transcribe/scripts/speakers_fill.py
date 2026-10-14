@@ -26,6 +26,8 @@ without --force.
 After every fill (and on a skip) grounding.py ties each uncertainty to the
 transcript: verbatim quote and sentence start time in «Open attributions»,
 and a «Hörproben» section with quotes to listen to per uncertain label.
+With --apply the names then go into transcript and vtt - on a skip too, so a
+hand correction in speakers.md lands without a model call.
 """
 from __future__ import annotations
 
@@ -178,13 +180,26 @@ def stamp_hash(p: Paths) -> None:
     p.speakers.write_text(text, encoding="utf-8")
 
 
-def ground(p: Paths, restamp: bool) -> None:
-    """Verbatim quote and exact time for every uncertainty (grounding.py, no model call)."""
+def finish(p: Paths, restamp: bool, apply: bool) -> None:
+    """Ground every uncertainty in the transcript (grounding.py, no model call),
+    then - with --apply - put the names of speakers.md into transcript and vtt.
+    Both run on a skip too, so a hand correction lands without a model call;
+    the stamp is renewed afterwards because the transcript is part of its hash."""
     import grounding
+    import speakers as speakers_mod
+    changed = False
+    if apply:
+        mapping, overrides = speakers_mod.parse_mapping(p.speakers), speakers_mod.parse_overrides(p.speakers)
+        touched = speakers_mod.apply_to_files(p.base, mapping, overrides)
+        print(f"[speakers-fill] applied {len(mapping)} name(s), {len(overrides)} override(s) to "
+              f"{len(touched)} file(s)", file=sys.stderr)
+        changed = bool(touched)
+    # after the apply, so a second call finds the same transcript and changes nothing
     if grounding.ground_file(p):
         print(f"[speakers-fill] quotes and times grounded in the transcript, Hörproben updated", file=sys.stderr)
-        if restamp and STAMP_RE.search(p.speakers.read_text(encoding="utf-8")):
-            stamp_hash(p)
+        changed = True
+    if changed and restamp and STAMP_RE.search(p.speakers.read_text(encoding="utf-8")):
+        stamp_hash(p)
 
 
 def main() -> int:
@@ -210,19 +225,19 @@ def main() -> int:
     if not unnamed and not args.force and OPEN_HEADING in sp["text"]:
         print(f"[speakers-fill] all {len(sp['labels'])} labels named and open list present - skip (use --force)",
               file=sys.stderr)
-        ground(p, restamp=True)
+        finish(p, restamp=True, apply=args.apply)
         return 0
     stamp = STAMP_RE.search(sp["text"])
     last = HASH_RE.search(stamp.group(0)) if stamp else None
     if last and last.group(1) == input_hash(p) and not args.force:
         print(f"[speakers-fill] speakers.md, transcript and participants unchanged since the last fill - skip "
               f"(edit speakers.md or use --force)", file=sys.stderr)
-        ground(p, restamp=True)
+        finish(p, restamp=True, apply=args.apply)
         return 0
     ok, reason = llm.available()
     if not ok:
         print(f"[speakers-fill] skipped: LLM not configured ({reason})", file=sys.stderr)
-        ground(p, restamp=False)
+        finish(p, restamp=False, apply=args.apply)
         return 3
     blocks = read_transcript(p.transcript)
     if not blocks:
@@ -242,13 +257,7 @@ def main() -> int:
     named, n_open = write_back(p.speakers, result, model, args.force)
     print(f"[speakers-fill] {named} label(s) named, {n_open} open contribution(s) -> {p.speakers}",
           file=sys.stderr)
-    ground(p, restamp=False)
-    if args.apply:
-        import speakers as speakers_mod
-        mapping = speakers_mod.parse_mapping(p.speakers)
-        overrides = speakers_mod.parse_overrides(p.speakers)
-        touched = speakers_mod.apply_to_files(p.base, mapping, overrides)
-        print(f"[speakers-fill] applied {len(mapping)} name(s) to {len(touched)} file(s)", file=sys.stderr)
+    finish(p, restamp=False, apply=args.apply)
     stamp_hash(p)
     return 0
 

@@ -17,10 +17,11 @@ deterministic data-flow line (which model saw what - AK E) and writes the
 report below the stub in <base>.md.
 
   python report.py "<base or any companion>" [--language de] [--force]
-                   [--no-frames] [--max-frames 48]
+                   [--rewrite] [--no-frames] [--max-frames 48]
 
 Idempotent: a <base>.md that already carries «## Übersicht» is kept unless
---force; with --force the section from «## Übersicht» on is replaced.
+--force or --rewrite; both replace the section from «## Übersicht» on,
+--force also re-describes the frames, --rewrite reuses the cached ones.
 
 The table of «Offene Sprecherzuordnung» always comes verbatim from the
 «Open attributions» of speakers.md, so the report and the worklist show the
@@ -337,12 +338,15 @@ def main() -> int:
     ap.add_argument("base", help="<base> stem or any companion file of the recording")
     ap.add_argument("--language", default=None, help="Report language, e.g. de")
     ap.add_argument("--force", action="store_true", help="Replace an existing report (and re-describe frames)")
+    ap.add_argument("--rewrite", action="store_true",
+                    help="Replace an existing report but keep the cached frame descriptions")
     ap.add_argument("--no-frames", action="store_true", help="Skip the vision frame pass")
     ap.add_argument("--max-frames", type=int, default=48, help="Frames sent to the vision model (default 48)")
     args = cli.parse(ap)
 
     p = Paths(resolve_base(args.base))
-    if p.report.is_file() and has_report(p.report.read_text(encoding="utf-8")) and not args.force:
+    replace = args.force or args.rewrite
+    if p.report.is_file() and has_report(p.report.read_text(encoding="utf-8")) and not replace:
         text = p.report.read_text(encoding="utf-8")
         synced = sync_open_attributions(p, text)
         if synced != text:
@@ -374,7 +378,7 @@ def main() -> int:
     body = body[body.index("## Übersicht"):]
     body, n_ill = embed_illustrations(p, body)
     body = sync_open_attributions(p, body)
-    write_report(p, body, data_flow_line(p, proto), args.force)
+    write_report(p, body, data_flow_line(p, proto), replace)
     print(f"[report] {len(body)} chars, {n_ill} illustration(s) embedded -> {p.report}", file=sys.stderr)
     print(f"[report] usage: {llm.USAGE.summary()}", file=sys.stderr)
     return 0

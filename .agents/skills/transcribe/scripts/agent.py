@@ -20,21 +20,33 @@ could not settle and the report itself are listed in <base>.review.md. With
 speakers.md first; the next agent.py call continues where it stopped
 (every stage is idempotent and skips finished work).
 
+A hand correction in speakers.md needs nothing but another plain call: the
+speaker stage keeps every name you wrote, asks the model only about labels
+still empty and applies the names to transcript and vtt, and kompakt and report are rebuilt because they no
+longer match the transcript - <base>.agent.json records the transcript hash
+each was built from. A second call changes nothing.
+
+--force redoes frames, kompakt, illustrate and report but never touches the
+names in speakers.md; --refill-speakers lets the model overwrite them.
+
   python agent.py "<base or recording>" [--language de] [--force]
-         [--only speakers,kompakt,...] [--stop-at-speakers] [--no-frames]
+         [--refill-speakers] [--only speakers,kompakt,...]
+         [--stop-at-speakers] [--no-frames]
 
 Exit codes: 0 done, 3 LLM not configured, 4 stopped at a human gate.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import subprocess
 import sys
 from pathlib import Path
 
 import cli
 import llm
-from companions import Paths, input_status, read_protocol, resolve_base
+from companions import Paths, input_status, read_json, read_protocol, resolve_base
 
 HERE = Path(__file__).resolve().parent
 STAGES = ("frames", "speakers", "kompakt", "illustrate", "report")
@@ -46,6 +58,31 @@ def step(name: str, script: str, base: Path, extra: list[str]) -> int:
     if r.returncode not in (0,):
         print(f"[agent] {name} exited {r.returncode}", file=sys.stderr)
     return r.returncode
+
+
+def transcript_hash(p: Paths) -> str:
+    return hashlib.sha256(p.transcript.read_bytes()).hexdigest()[:12]
+
+
+def state_path(p: Paths) -> Path:
+    return p.base.with_name(p.base.name + ".agent.json")
+
+
+def outdated(p: Paths, state: dict, stage: str, artefact: Path) -> bool:
+    """True when `artefact` exists but was built from another transcript (new
+    names, overrides, corrections). Without a record - runs from before this
+    file existed - a transcript newer than the artefact counts as outdated."""
+    if not artefact.is_file():
+        return False
+    if stage in state:
+        return state[stage] != transcript_hash(p)
+    return p.transcript.stat().st_mtime > artefact.stat().st_mtime + 1
+
+
+def record(p: Paths, state: dict, stage: str, artefact: Path) -> None:
+    if artefact.is_file() and state.get(stage) != transcript_hash(p):
+        state[stage] = transcript_hash(p)
+        state_path(p).write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 
 
 def write_review(p: Paths) -> Path:
@@ -61,10 +98,14 @@ def main() -> int:
     ap = cli.parser(__doc__, examples=[
         'python agent.py "<base or recording>" --language de',
         'python agent.py "<base or recording>" --stop-at-speakers',
-        'python agent.py "<base or recording>" --only speakers,kompakt,report --force'])
+        'python agent.py "<base or recording>"   # after correcting speakers.md',
+        'python agent.py "<base or recording>" --only kompakt,report --force'])
     ap.add_argument("base", help="<base> stem, the recording, or any companion file")
     ap.add_argument("--language", default=None, help="Output language, e.g. de")
-    ap.add_argument("--force", action="store_true", help="Redo stages that already have output")
+    ap.add_argument("--force", action="store_true",
+                    help="Redo stages that already have output (speaker names stay as they are)")
+    ap.add_argument("--refill-speakers", action="store_true",
+                    help="Let the model overwrite the names already in speakers.md")
     ap.add_argument("--only", default=None, help=f"Comma-separated subset of {','.join(STAGES)}")
     ap.add_argument("--stop-at-speakers", action="store_true",
                     help="End after the speaker stage so a person can correct speakers.md")
@@ -99,16 +140,28 @@ def main() -> int:
         import report
         report.frame_pass(p, read_protocol(p.protocol), 48, args.language, args.force)
     if "speakers" in only and p.speakers.is_file():
-        step("speakers", "speakers_fill.py", p.base, lang + force + ["--apply"])
+        step("speakers", "speakers_fill.py", p.base,
+             lang + (["--force"] if args.refill_speakers else []) + ["--apply"])
         if args.stop_at_speakers:
             print(f"[agent] stopped at the speaker gate: {write_review(p)}", file=sys.stderr)
             return 4
+    state = read_json(state_path(p)) or {}
     if "kompakt" in only:
-        step("kompakt", "kompakt.py", p.base, lang + force)
+        redo = outdated(p, state, "kompakt", p.kompakt)
+        if redo and not args.force:
+            print("[agent] transcript changed since the compact transcript was built - rebuilding", file=sys.stderr)
+        if step("kompakt", "kompakt.py", p.base, lang + (["--force"] if args.force or redo else [])) == 0:
+            record(p, state, "kompakt", p.kompakt)
     if "illustrate" in only and has_video and not args.no_frames:
         step("illustrate", "illustrate_agent.py", p.base, lang + force + ({True: ["--redact"], False: ["--no-redact"]}.get(args.redact, [])))
     if "report" in only:
-        step("report", "report.py", p.base, lang + force + (["--no-frames"] if args.no_frames else []))
+        redo = outdated(p, state, "report", p.report)
+        if redo and not args.force:
+            print("[agent] transcript changed since the report was written - rewriting", file=sys.stderr)
+        # the frames stage above already re-described the frames on --force
+        if step("report", "report.py", p.base, lang + (["--rewrite"] if args.force or redo else [])
+                + (["--no-frames"] if args.no_frames else [])) == 0:
+            record(p, state, "report", p.report)
     review = write_review(p)
     print(f"[agent] done - human review: {review}", file=sys.stderr)
     return 0
