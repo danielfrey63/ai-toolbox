@@ -7,6 +7,8 @@ Versionierungs-System für alle Artefakte.
 
 ## Schnellstart
 
+Welcher Agent welches Ziel braucht (Claude Code, Codex, GitHub Copilot), wie man prüft und was ein Agent bei der Selbstinstallation beachten muss: [`INSTALL.md`](INSTALL.md).
+
 ```bash
 git clone https://github.com/danielfrey63/ai-toolbox.git
 cd ai-toolbox
