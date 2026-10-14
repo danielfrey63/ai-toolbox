@@ -18,7 +18,7 @@ examples/      export-ignore
 # NOTE: commands/, hooks/, and .claude-plugin/ are NOT export-ignored because
 # Claude Code's /plugin install fetches this same git archive tarball – they
 # must be in the archive for the plugin to install correctly. The claude.ai
-# .skill bundle strips them afterward via `zip -d` in scripts/build-skill.sh.
+# .skill bundle strips them afterward in scripts/build_skill.py.
 
 # CI workflows – repo-only, not needed at skill runtime
 .github/         export-ignore

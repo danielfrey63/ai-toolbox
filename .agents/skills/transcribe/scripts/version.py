@@ -12,9 +12,8 @@ plugin manifest, so the script-level `APP_VERSION` branch is unreachable for
 a skill that ships a plugin.json. A literal would silently rot from its first
 commit, which is worse than no stamp.
 
-Falls back to "unknown" when the manifest is absent: `build-skill.sh` strips
-`.claude-plugin/` from the claude.ai `.skill` bundle, so an uploaded skill
-runs without one. An honest "unknown" beats a stale number.
+Upload bundles carry a generated .build-version from the same manifest.
+Falls back to unknown only when neither version source is available.
 """
 from __future__ import annotations
 
@@ -31,7 +30,10 @@ def _read_version() -> str:
     try:
         raw = json.loads(MANIFEST_PATH.read_text(encoding="utf-8")).get("version")
     except (OSError, ValueError):
-        return UNKNOWN_VERSION
+        try:
+            return (MANIFEST_PATH.parent.parent / ".build-version").read_text(encoding="utf-8").strip() or UNKNOWN_VERSION
+        except OSError:
+            return UNKNOWN_VERSION
     return raw.strip() if isinstance(raw, str) and raw.strip() else UNKNOWN_VERSION
 
 
@@ -43,6 +45,6 @@ if __name__ == "__main__":
 
     if sys.argv[1:] and sys.argv[1] in ("-h", "--help"):
         print("usage: version.py\n\nPrints the skill version from .claude-plugin/plugin.json "
-              "(\"unknown\" without a manifest).\n\nA bare call prints the version.")
+              "(bundle version or \"unknown\" without a manifest).\n\nA bare call prints the version.")
         raise SystemExit(0)
     print(APP_VERSION)

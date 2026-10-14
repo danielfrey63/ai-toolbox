@@ -71,7 +71,8 @@ def clamp_hotwords(hotwords: str | None) -> str | None:
 
 def _env_float(name: str, default: float, lo: float, hi: float) -> float:
     """Read a clamped float from the environment; bad input keeps the default."""
-    raw = os.environ.get(name)
+    from config import get
+    raw = get(name)
     if not raw:
         return default
     try:
@@ -123,8 +124,9 @@ def main() -> int:
     # TRANSCRIBE_WHISPER_MODEL=large-v3 to go back. Do NOT reach for
     # distil-large-v3: it is English-only and silently *translates* German
     # input instead of transcribing it.
-    model_name = os.environ.get("TRANSCRIBE_WHISPER_MODEL") or "large-v3-turbo"
-    compute = os.environ.get("TRANSCRIBE_GPU_COMPUTE") or "float16"
+    from config import get
+    model_name = get("TRANSCRIBE_WHISPER_MODEL")
+    compute = get("TRANSCRIBE_GPU_COMPUTE")
     try:
         try:
             model = WhisperModel(model_name, device="cuda", compute_type=compute)

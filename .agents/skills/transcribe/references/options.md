@@ -1,118 +1,58 @@
-# run.py options, frame budgets and scene detection
+# CLI-Optionen
 
-Read this when a run needs a non-default flag, when the user asks about a specific moment or section, or when frame coverage looks wrong. SKILL.md lists the flags needed most often.
+Generiert mit `python transcribe.py config options` aus den argparse-Definitionen.
 
-## Contents
+Installation: [INSTALL.md](../INSTALL.md). Konfigurationswerte: [parameters.md](parameters.md).
 
-- All flags
-- Output locations (`--save-md`)
-- Domain glossary
-- Frame budget and auto-chunking
-- Focusing on a section
-- Scene cut detection
+`python transcribe.py run --help` zeigt den üblichen Ablauf; `--help-all` ergänzt alle Medienoptionen.
 
-## All flags
+## Ablauf und Auswertung
 
-Frames:
+| Option | Default | Bedeutung |
+|---|---|---|
+| `--language` | `auto/unset` | Language of transcript and report, e.g. de |
+| `--local` | `False` | Pin whisper-local and pyannote-local (no cloud transcription or diarization) |
+| `--rerun` | `False` | Run run.py again although a transcript exists |
+| `--stop-at-speakers` | `False` | End after the speaker stage so a person can correct speakers.md |
+| `--redact` | `auto/unset` | Black out person-name lists in the crops; on a finished run only the redaction is added (default: TRANSCRIBE_REDACT, else the state of the existing crops, else off) |
+| `--no-frames` | `False` | Skip every image call in the agent stages |
+| `--force` | `False` | Redo finished agent stages |
+| `--analysis` | `model` | Who writes the report (default model; harness produces an explicit handoff) Choices: model, harness, none |
+| `--plan` | `False` | Show stages and cache decisions without running them |
+| `--json` | `False` | Machine-readable plan or final result on stdout |
 
-- `--start T` / `--end T` – focus on a section (`SS`, `MM:SS` or `HH:MM:SS`); fps scales denser, see "Focusing on a section". The transcript is filtered to the same range.
-- `--max-frames N` – cap on regular frames per chunk (default 80, hard max 100). In single-chunk modes (focused or `--no-chunk`) this is also the global cap.
-- `--no-chunk` – disable auto-chunking; one sparse pass with up to 100 frames over the whole video.
-- `--fps F` – override auto-fps (clamped to 2 fps).
-- `--resolution W` – frame width in px (default 512; 1024 only when on-screen text must be read, roughly 4x the image tokens).
-- `--no-scene`, `--scene-threshold F`, `--scene-min-gap S` (default `2.0`), `--scene-max-frames N` (default `80`, separate from `--max-frames`), `--scene-settle-seconds S` (default `1.0`) – see "Scene cut detection".
-- `--no-ocr` – skip the on-screen reference pass. `--ocr-max-frames N` caps the frames it reads (default `60`; cuts always win, regular candidates are thinned evenly), `--ocr-min-score F` sets the RapidOCR confidence under which a reference is marked `(?)` (default `0.85`).
-- `--frame-workers N` – explicit worker count for frame extraction (normally derived from the CPU budget).
+## Medienaufbereitung
 
-Transcription:
-
-- `--whisper azure-diarize|groq|openai|whisper-local` – pin one transcription backend (no cascade, fails loudly). Default: local-first cascade whisper-local → azure-diarize → groq → openai, each failure falls through to the next configured backend.
-- `--no-whisper` – no STT at all (frames-only if no captions).
-- `--language de` – language hint for the repair pass (which scripts count as foreign, language of the re-transcription). Pass it whenever the language is known.
-- `--no-repair` – disable the repair pass, see `repair.md`.
-- `--fresh` – ignore the persisted `<base>.segments.json` / `.turns.json` and re-transcribe and re-diarize from scratch.
-
-Diarization:
-
-- `--diarize [BACKEND]` – on by default in auto mode, local first: pyannote-local (HF_TOKEN) → pyannote-api → assemblyai; silently off when nothing is configured; a failing auto backend falls through to the next configured one. An explicit backend pins it (no cascade, fails loudly). Transcript lines become `[MM:SS] [<speaker>] text`.
-  - `assemblyai` – cloud, transcription and speakers in one call (`universal-3-pro`, fallback `universal-2`, `language_detection: true`, handles mixed DE-CH/EN/FR/IT). Needs `ASSEMBLYAI_API_KEY`, optional `ASSEMBLYAI_REGION=eu`. About 0.37 USD/h.
-  - `pyannote-api` – cloud pyannote.ai, diarization only, aligned to the Whisper segments by overlap. Needs `PYANNOTE_API_KEY`.
-  - `pyannote-local` – on-device, free, right choice for confidential recordings. Runs in the managed venv (`pyannote_worker.py`), GPU auto-detected. Needs `HF_TOKEN` plus accepted licenses for both gated repos `pyannote/speaker-diarization-3.1` and `pyannote/segmentation-3.0`. The speaker count stays on auto by design: forcing `num_speakers` collapses onto the dominant voice on single-mic recordings. Surplus mini-clusters are merged or labeled afterwards by Claude in `<base>.speakers.md`.
-- `--no-diarize` – plain transcript; saves roughly a quarter of a run's energy on single-speaker recordings.
-
-Resources and run control:
-
-- `--cpu-budget SPEC` – share (`50%`), thread count (`6`) or `all`; default 50 % of the usable cores, overridable via `TRANSCRIBE_CPU_BUDGET`. See `pipeline.md`.
-- `--background` – unattended run: below-normal priority, holds a per-recording lock `<base>.transcribe.lock`. A manual run meeting such a lock boosts the background run, waits for it (`[transcribe] Lauf auf derselben Aufnahme aktiv … übernommen: warte auf Abschluss`) and continues on its cache. Treat that message as progress and keep waiting. A second background run on a locked recording exits quietly; stale locks (dead pid, older than 12 h) are removed automatically.
-- `--out-dir DIR` – keep the working files in a specific place (default: auto-generated temp dir).
-- `--version` – print the skill version and exit.
-
-## Output locations (`--save-md`)
-
-`--save-md PATH` writes companion files: PATH itself (the main file, a stub to which the report sections are appended by the chat agent or report.py), `<base>.protocol.md` (metadata, frame list, resources) and `<base>.transcript.md`, where `<base>` is PATH without `.md`. Next to them: `<base>.vtt` (WebVTT with speaker voice tags). A pre-existing foreign VTT (for example a Teams export) is preserved as `<base>.original.vtt` first; skill-generated VTTs are overwritten on re-runs. When `<base>.original.vtt` exists, `<base>.crosscheck.md` is written as well.
-
-Defaults:
-
-- **Local files** → `<stem>.md` next to the source (`videos/test.mp4` → `videos/test.{md,protocol.md,transcript.md}`).
-- **URL sources** → `./transcribe/<YYYY-MM-DD>-<slug>/<slug>.md` in the current working directory; `<slug>` is the sanitized video title (lowercase ASCII, non-alphanumeric → `-`, about 60 chars).
-- `--no-save-md` disables auto-save; frames and transcript stay only in the temp work dir.
-
-## Domain glossary
-
-No flag, file-based. Whisper mishears rare domain vocabulary (product names, people, project jargon) as similar everyday words. Put a `<name>.glossary.txt` (this recording) or `transcribe-glossary.txt` (every recording in the folder) next to the source - the first one found wins, one term per line, `#` comments - and/or maintain `~/.config/transcribe/glossary.txt`. Both are merged (recording-local first) and passed to whisper-local as faster-whisper `hotwords`; the repair pass uses them too. Cloud backends ignore the glossary.
-
-- The glossary shares the decoder's 448-token prompt budget and is truncated at 300 characters (about 20–30 terms) from the bottom. Put the most-misheard terms first and prefer bare surnames over full names.
-- An overlong glossary leaves no decoding room (`The maximum decoding length must be > 0`); the worker clamps it and, if it still trips, retries once without biasing.
-- For a recording series, seed the glossary with every term the user had to correct in the previous run.
-
-## Frame budget and auto-chunking
-
-Regular-frame budget by duration:
-
-- ≤30 s → about 1–2 fps (up to 30 frames)
-- 30 s–1 min → about 40 frames
-- 1–3 min → about 60 frames
-- 3–10 min → about 80 frames
-
-**Videos over 10 min are auto-chunked.** Without `--start`/`--end`, the video is split into `ceil(duration / 10 min)` even chunks, each with the dense focused budget. A 60-min video becomes 6 chunks × about 80 frames = about 480 regular frames plus cut frames. `--max-frames` is the per-chunk cap; lower it or pass `--no-chunk` to clamp the total. The metadata line then says `chunked mode, N chunks × ~Xs`.
-
-## Focusing on a section
-
-When the user names a moment ("around 2:30", "the last 30 seconds", "0:45 to 1:00"), or the question concerns one part of a long video, pass `--start` and/or `--end`. Focused budgets (capped at 2 fps):
-
-- ≤5 s → 2 fps (up to 10 frames)
-- 5–15 s → 2 fps (up to 30 frames)
-- 15–30 s → about 2 fps (up to 60 frames)
-- 30–60 s → about 1.3 fps (up to 80 frames)
-- 60–180 s → about 0.6 fps (100 frames, capped)
-
-Also use focused mode for a re-run when a full scan lacked detail in some region. Frame timestamps stay absolute (real timeline).
-
-```bash
-# Last 10 seconds of a 1-minute video
-python3 "${CLAUDE_SKILL_DIR}/scripts/run.py" video.mp4 --start 50 --end 60
-
-# Zoom into 2:15 → 2:45 at 3 fps (clamped to 2 fps)
-python3 "${CLAUDE_SKILL_DIR}/scripts/run.py" "$URL" --start 2:15 --end 2:45 --fps 3
-
-# From 1h12m to the end
-python3 "${CLAUDE_SKILL_DIR}/scripts/run.py" "$URL" --start 1:12:00
-```
-
-## Scene cut detection
-
-On by default. An `scdet` pass extracts one extra frame at every detected cut, and the regular sampler fills the gaps between cuts proportionally to their length instead of sampling uniformly.
-
-1. **Score** – `ffmpeg -vf scdet=threshold=0` scores every frame against the previous one; all scores are kept.
-2. **Auto-threshold** – knee-point detection on the sorted score curve picks a per-video threshold (floor `5.0`, so static videos produce no false cuts). Score distributions differ widely between talking heads and montages, which is why no static threshold is used.
-3. **De-cluster** – cuts within `--scene-min-gap` (2 s) collapse to one.
-4. **Gap-fill** – each gap between cuts gets regular frames proportional to its length; gaps shorter than half the average spacing are skipped. Without cuts (or with `--no-scene`) this is uniform sampling.
-5. **Extract** – one JPEG per timestamp via fast-seek at the same `--resolution`.
-
-stderr shows `[transcribe] N cuts detected (auto-picked X.YZ)`; the report metadata shows `scdet ≥ X.Y auto` and `(gap-filled, ~F fps avg)`.
-
-The frame list is merged chronologically and tagged `[REG]` (`frames/frame_NNNN_tNNNNNs.jpg`) or `[CUT]` (`cuts/cut_NNN_tNNNNNs.jpg`). Read both kinds.
-
-**`[CUT]` filename vs. content:** the filename carries the detected cut point, but the image is taken `--scene-settle-seconds` later (default `1.0`, clamped to `next_cut - 0.3 s`), so the picture is typically 0.5–2.5 s after its name. `[REG]` filenames match their content. Verify timestamps with `illustrate.py --extract` before using them in an illustration spec (see `report-writing.md`). `--scene-settle-seconds 0` extracts right at the cut; 2–4 s helps slow-rendering apps but risks bleeding into transient flashes.
-
-Use `--no-scene` for talking heads without real cuts, tight token budgets, or a fast first pass on a long video. Use `--scene-threshold F` when auto picked too few cuts (lower, e.g. `8`), too many (higher, e.g. `30`), or for reproducible re-runs. scdet adds about 5–10 % wall-clock; each cut frame costs the same image tokens as a regular frame.
+| Option | Default | Bedeutung |
+|---|---|---|
+| `--version` | `==SUPPRESS==` | Print the skill version and exit. |
+| `--max-frames` | `80` | Cap on frame count (default 80, hard max 100) |
+| `--resolution` | `512` | Frame width in pixels (default 512) |
+| `--fps` | `auto/unset` | Override auto-fps |
+| `--start` | `auto/unset` | Range start (SS, MM:SS, or HH:MM:SS) |
+| `--end` | `auto/unset` | Range end (SS, MM:SS, or HH:MM:SS) |
+| `--out-dir` | `auto/unset` | Working directory (default: tmp) |
+| `--no-whisper` | `False` | Disable Whisper fallback. Report frames-only if no captions available. |
+| `--whisper` | `auto/unset` | Force a specific transcription backend. Default: prefer azure-diarize (private, when configured), then Groq, then OpenAI, then whisper-local (fully on-device faster-whisper in the managed venv; no key needed, self-provisions on first use). Choices: azure-diarize, groq, openai, whisper-local |
+| `--whisper-workers` | `auto/unset` | Parallel Whisper chunk uploads (default 1 = sequential). Higher values speed up long videos but risk hitting the audio-second-per-hour rate limit on Groq Free Tier (Retry-After can be several hundred seconds). Try 2 if you have a paid tier or your video is moderate-length. |
+| `--no-scene` | `False` | Disable scdet-based cut detection. By default, an extra frame is extracted at every detected cut, in addition to the regular sampling. |
+| `--no-repair` | `False` | Disable the post-transcription repair pass. By default, passages where the decoder collapsed (repetition loops, drift into another script) are detected and re-transcribed from their own audio window with a fresh context. |
+| `--scene-threshold` | `auto/unset` | Override the auto-detected scdet threshold (default: auto via knee-point detection on the score distribution; lower = more sensitive) |
+| `--scene-min-gap` | `2.0` | Minimum seconds between consecutive cut frames (default 2.0) |
+| `--scene-max-frames` | `80` | Cap on additional cut frames extracted (default 80) |
+| `--no-ocr` | `False` | Skip the on-screen reference pass. By default the scene-cut frames and every visually changed regular frame are re-extracted at native resolution and read by RapidOCR (isolated uv env); URLs, wiki page IDs, ticket keys, hosts and share paths land in <base>.links.md with the [MM:SS] they were seen at. Cached in <base>.ocr.json (--fresh recomputes). |
+| `--ocr-max-frames` | `60` | Cap on frames the OCR pass reads (default 60; cuts win, regular candidates are thinned evenly) |
+| `--ocr-min-score` | `0.85` | RapidOCR confidence below which a reference is marked (?) in <base>.links.md (default 0.85) |
+| `--scene-settle-seconds` | `1.0` | Seconds after a detected scene cut to wait before extracting the frame (default 1.0). Lets UI transitions / dialogs / launcher windows render before capture, so cut frames don't land on loading-state / black mid-transition pixels. Capped at next_cut - 0.3s so we never bleed into the following shot. Set to 0 to revert to the old just-before-cut behavior. |
+| `--cpu-budget` | `auto/unset` | Cap the CPU the pipeline's CPU-bound stages may use together: a share ("50%%"), an absolute thread count ("6"), or "all" for no limit. Default: 75%% of the cores, or TRANSCRIBE_CPU_BUDGET from the environment / .env. Lower it if the machine gets hot or unresponsive during a run. |
+| `--frame-workers` | `auto/unset` | Thread-pool size for per-frame ffmpeg calls (default: min(8, cpu_count())). Each worker spawns one ffmpeg subprocess. Set to 1 to force sequential extraction (useful on HDDs where concurrent seeks thrash, or for benchmark comparison). Going above 8 rarely helps on consumer hardware - ffmpeg instances start contending for cache and disk bandwidth. |
+| `--no-dedup` | `False` | Disable dHash-based deduplication of near-identical regular frames (default: dedup enabled with threshold 6). Cut frames are never deduplicated regardless of this flag. |
+| `--dedup-threshold` | `auto` | Hamming-distance threshold for the dHash dedup. 'auto' (default) picks the threshold via knee-point detection on the per-video distance distribution - adapts to talking-head (cliff around 4) vs UI-demo (cliff around 10). Pass an integer to override (sensible range 3-12). Ignored when --no-dedup is set. |
+| `--save-md` | `auto/unset` | Save the markdown report to this path. Defaults to <video-stem>.md next to the source for local files; ./transcribe/<YYYY-MM-DD>-<slug>/<slug>.md for URL sources. |
+| `--no-save-md` | `False` | Disable the default auto-save for local-file sources. |
+| `--no-chunk` | `False` | Disable auto-chunking. By default, videos longer than 10 minutes without --start/--end are split into ~10-minute chunks, each processed with focused-mode frame budget, then merged. Use this flag to revert to the sparse single-pass behavior. |
+| `--diarize` | `auto` | Speaker diarization backend. DEFAULT: auto - ON whenever a backend is configured, local first (pyannote local with HF_TOKEN > pyannote.ai > AssemblyAI); silently off when nothing is configured. Explicit choices pin one backend: 'pyannote-local' (fully on-device, managed venv), 'pyannote-api' (cloud pyannote.ai), 'assemblyai' (cloud, transcription + diarization in one call - replaces Whisper). Use --no-diarize to turn diarization off. Choices: auto, assemblyai, pyannote-api, pyannote-local |
+| `--no-diarize` | `False` | Disable speaker diarization (overrides the on-by-default auto mode). |
+| `--fresh` | `False` | Ignore persisted intermediates (<base>.segments.json / .turns.json) and re-transcribe + re-diarize from scratch. By default a re-run against the same output reuses them (idempotent). |
+| `--background` | `False` | Unattended run (watcher): below-normal process priority, and a manual run on the same recording takes over instead of competing - see joblock.py. |
+| `--result-json` | `auto/unset` | Write machine-readable result metadata to this file |

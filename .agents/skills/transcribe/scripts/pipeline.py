@@ -1,29 +1,13 @@
 #!/usr/bin/env python3
-"""One command for the whole headless pipeline: check -> run.py -> agent.py.
+"""Process or resume media, then analyse via a model or the calling harness.
 
-  python pipeline.py "<recording or URL>" [--language de] [--local]
-         [--stop-at-speakers] [--redact] [--no-frames] [--force] [--rerun]
-         [any run.py option, e.g. --start 0 --end 5:00]
+Use --plan to explain reuse without running stages. --local pins audio;
+--analysis independently chooses who receives text and images.
+Media options include --start, --end, --save-md, --no-diarize and --fresh.
+Use --help-all for every advanced option.
 
-1. setup.py --check    tools and a transcription path are ready
-2. llm.py              the chat deployment for the agent stages is configured
-3. run.py              local stages: frames, OCR, Whisper, diarization
-                       and which participants / glossary files it found
-                       (for a local file skipped when <base>.transcript.md
-                       exists, unless --rerun)
-4. agent.py            speakers, compact transcript, illustrations, report,
-                       review.md - each stage skips finished work
-
---local pins the local backends (whisper-local, pyannote-local), so no audio
-leaves the machine even when cloud keys are configured. Options this script
-does not know are passed on to run.py. Re-running is safe: finished stages
-are skipped, so after correcting speakers.md the same command continues.
-A URL is downloaded by run.py on every call; for re-runs pass the
-downloaded file or the <base> path printed at the end.
-
-Exit codes: 0 done, 1 run.py failed, 2 setup incomplete, 3 chat deployment
-not configured (run.py output is there for the interactive path), 4 stopped
-at a human gate (--stop-at-speakers).
+Exit: 0 success/handoff, 1 failure, 2 configuration/usage, 3 model missing,
+4 speaker review required. Child-process failures are propagated.
 """
 from __future__ import annotations
 
@@ -31,12 +15,18 @@ import argparse
 import re
 import subprocess
 import sys
+import tempfile
+import json
+import contextlib
+import io
+import config
 from pathlib import Path
 
 import cli
 import llm
 from companions import Paths, resolve_base
 from download import is_url
+from state import read_json, write_json, media_identity, StageState, stage_key
 
 HERE = Path(__file__).resolve().parent
 PROTOCOL_RE = re.compile(r"^- \*\*Protocol file:\*\* `(.+?)`\s*$", re.M)
@@ -49,7 +39,7 @@ def call(script: str, *args: str, capture: bool = False) -> subprocess.Completed
                           text=capture, encoding="utf-8" if capture else None, errors="replace" if capture else None)
 
 
-def main() -> int:
+def build_parser():
     ap = cli.parser(__doc__, examples=[
         'python pipeline.py "20261013-1100 - Thema.mp4" --language de --local',
         'python pipeline.py "20261013-1100 - Thema.mp4" --language de --local --stop-at-speakers',
@@ -68,58 +58,179 @@ def main() -> int:
     ap.add_argument("--no-redact", dest="redact", action="store_false", help="Remove or skip redaction")
     ap.add_argument("--no-frames", action="store_true", help="Skip every image call in the agent stages")
     ap.add_argument("--force", action="store_true", help="Redo finished agent stages")
+    ap.add_argument("--analysis", choices=("model", "harness", "none"), default="model",
+                    help="Who writes the report (default model; harness produces an explicit handoff)")
+    ap.add_argument("--plan", action="store_true", help="Show stages and cache decisions without running them")
+    ap.add_argument("--json", action="store_true", help="Machine-readable plan or final result on stdout")
+    return ap
+
+
+def main() -> int:
+    ap = build_parser()
+    if "--help-all" in sys.argv[1:]:
+        ap.print_help()
+        import run
+        run.build_parser().print_help()
+        return 0
     args, run_extra = cli.parse_known(ap)
-
-    url = is_url(args.source)
-    p = None
-    if not url:
-        rec = Path(args.source).expanduser().resolve()
-        p = Paths(resolve_base(rec))
-        if not rec.is_file() and not p.transcript.is_file():  # a <base> of an earlier run is fine too
-            ap.error(f"not a local file, an earlier run's <base> or a URL: {rec}")
+    import run
     lang = ["--language", args.language] if args.language else []
-
-    if call("setup.py", "--check").returncode != 0:
-        print("[pipeline] setup incomplete - run setup.py (or setup.py --venv) and try again", file=sys.stderr)
-        return 2
-    ok, reason = llm.available()
-    if not ok:
-        print(f"[pipeline] chat deployment not configured ({reason}) - agent stages will be skipped",
-              file=sys.stderr)
-    if p and p.transcript.is_file() and not args.rerun:
-        print(f"[pipeline] transcript exists - skip run.py (use --rerun): {p.transcript.name}", file=sys.stderr)
-    else:
-        local = ["--whisper", "whisper-local", "--diarize", "pyannote-local"] if args.local else []
-        src = args.source if url else str(rec)
-        # run.py prints the protocol to stdout; it is saved next to the recording,
-        # so it is captured here only to learn where a URL source landed.
-        r = call("run.py", src, *lang, *local, *run_extra, capture=True)
-        if r.returncode != 0:
-            print("[pipeline] run.py failed", file=sys.stderr)
-            return 1
-        m = PROTOCOL_RE.search(r.stdout or "")
-        if p is None:
-            if not m:
-                print("[pipeline] run.py did not report a protocol file - cannot continue", file=sys.stderr)
+    local = ["--whisper", "whisper-local", "--diarize", "pyannote-local"] if args.local else []
+    run_args = run.build_parser().parse_args([args.source, *lang, *local, *run_extra])
+    config.snapshot()
+    if args.local and (run_args.whisper != "whisper-local" or
+                       (not run_args.no_diarize and run_args.diarize != "pyannote-local")):
+        ap.error("--local conflicts with a cloud backend override")
+    if run_args.no_save_md:
+        ap.error("The pipeline requires persisted companions; use run.py --no-save-md for ephemeral runs")
+    for name in ("max_frames", "resolution", "frame_workers", "whisper_workers"):
+        value = getattr(run_args, name, None)
+        if value is not None and value < 1:
+            ap.error(f"--{name.replace('_', '-')} must be positive")
+    url = is_url(args.source)
+    index_path = config.user_dir() / "runs.json"
+    index = read_json(index_path, {}) or {}
+    base = resolve_base(Path(run_args.save_md).expanduser().resolve()) if run_args.save_md else (
+        Path(index[args.source]) if url and args.source in index else
+        None if url else resolve_base(Path(args.source).expanduser().resolve()))
+    p = Paths(base) if base else None
+    previous = read_json(p.base.with_name(p.base.name + ".run.json"), {}) if p else {}
+    previous = previous or {}
+    # A bare base/companion of a previous run resolves back to its original media.
+    source = args.source
+    companion = not url and previous.get("source") and (not Path(source).is_file() or
+                Path(source).suffix.lower() in (".md", ".json", ".vtt", ".xml"))
+    if companion:
+        source = previous["source"]
+        resume_parser = run.build_parser()
+        resume_parser.set_defaults(**previous.get("options", {}))
+        run_args = resume_parser.parse_args([source, *lang, *local, *run_extra])
+        args.language = run_args.language
+        lang = ["--language", args.language] if args.language else []
+        url = is_url(source)
+    settings = {k: v for k, v in vars(run_args).items() if k not in ("result_json", "fresh", "background")}
+    same_source = url or (Path(source).is_file() and previous.get("source_identity") == media_identity(Path(source)))
+    reusable = bool(p and p.transcript.is_file() and p.protocol.is_file() and same_source and
+                    previous.get("options") == settings and previous.get("local_config") == local_config() and
+                    previous.get("glossary") == glossary_hash(Path(source) if not url else None))
+    needed = args.rerun or run_args.fresh or not reusable
+    if needed and not url and not Path(source).is_file():
+        ap.error(f"Source is unavailable for recomputation: {source}")
+    plan = {"schema": 1, "source": source, "base": str(base) if base else None,
+            "stages": [{"stage": "media", "status": "pending" if needed else "current",
+                        "reason": "inputs/options changed or refresh requested" if needed else "recorded inputs and outputs match"}],
+            "analysis": args.analysis}
+    if p:
+        from companions import read_protocol, read_transcript
+        has_video = bool(read_protocol(p.protocol).get("frames"))
+        for stage, output in (("frames", p.frames_json), ("speakers", p.speakers), ("kompakt", p.kompakt), ("illustrate", p.manifest), ("report", p.report)):
+            options = {"language": args.language}
+            options.update({"no_frames": args.no_frames, "max_frames": 48} if stage == "report" else
+                           {"max_frames": 48} if stage == "frames" else {"max": 12, "rounds": 2} if stage == "illustrate" else {})
+            current = not needed and not args.force and StageState(p.base).current(stage, stage_key(p, stage, options), [output])
+            skip = args.analysis != "model" or (stage in ("frames", "illustrate") and args.no_frames)
+            if not needed:
+                skip |= stage in ("frames", "illustrate") and not has_video
+                skip |= stage == "speakers" and not p.speakers.is_file()
+                skip |= stage == "kompakt" and not any(b.label for b in read_transcript(p.transcript))
+            if stage == "illustrate" and args.redact is not None:
+                import illustrate_agent
+                current &= illustrate_agent.spec_redaction(read_json(p.spec, []) or []) == args.redact
+            plan["stages"].append({"stage": stage, "status": "skipped" if skip else "current" if current else "pending"})
+    if args.plan:
+        emit_result(plan, args.json)
+        return 0
+    from joblock import workflow_lock
+    # URL output paths are discovered during acquisition; serialize by URL until then.
+    from state import digest
+    lock_base = base or config.user_dir() / ("url-" + digest(source)[:16])
+    with workflow_lock(lock_base):
+        if needed:
+            import setup
+            required = ["ffmpeg", "ffprobe"] + (["yt-dlp"] if url else [])
+            missing = [name for name in required if setup.find_tool(name) is None]
+            if missing:
+                print(f"[pipeline] tools missing: {', '.join(missing)}; run transcribe install", file=sys.stderr)
+                return 2
+            with tempfile.TemporaryDirectory(prefix="transcribe-result-") as tmp:
+                result_path = Path(tmp) / "result.json"
+                r = call("run.py", source, *media_arguments(run_args), "--result-json", str(result_path), capture=True)
+                if r.returncode:
+                    return r.returncode
+                result = read_json(result_path, {}) or {}
+            if not result.get("base") or not result.get("protocol"):
+                print("[pipeline] media stage returned no structured output", file=sys.stderr)
                 return 1
-            p = Paths(resolve_base(Path(m.group(1))))
-        print(f"[pipeline] local stages done: {p.protocol}", file=sys.stderr)
-    if not ok:
-        print(f"[pipeline] configure AZURE_LLM_* in ~/.config/transcribe/.env or let the chat agent do the rest "
-              f"from {p.protocol}", file=sys.stderr)
-        return 3
+            p = Paths(Path(result["base"]))
+            if url:
+                index[source] = str(p.base)
+                write_json(index_path, index)
+        if args.analysis == "model":
+            agent_args = [*lang]
+            for flag in ("stop_at_speakers", "no_frames", "force"):
+                if getattr(args, flag):
+                    agent_args.append("--" + flag.replace("_", "-"))
+            if args.redact is not None:
+                agent_args.append("--redact" if args.redact else "--no-redact")
+            analysed = call("agent.py", str(p.base), *agent_args, capture=True)
+            if getattr(analysed, "stdout", None):
+                print(analysed.stdout, file=sys.stderr, end="")
+            rc = analysed.returncode
+        else:
+            rc = 0
+        result = {"schema": 1, "status": "review_required" if rc in (4, 5) else "failed" if rc else
+                  "handoff" if args.analysis == "harness" else "complete", "exit_code": rc,
+                  "base": str(p.base), "protocol": str(p.protocol), "transcript": str(p.transcript),
+                  "report": str(p.report), "review": str(p.base.with_name(p.base.name + ".review.md"))}
+        if args.analysis == "harness":
+            from companions import read_protocol
+            from report import select_frames
+            result["frames"] = select_frames(read_protocol(p.protocol).get("frames", [])) if not args.no_frames else []
+        emit_result(result, args.json)
+        return rc
 
-    agent = [*lang]
-    for flag in ("stop_at_speakers", "no_frames", "force"):
-        if getattr(args, flag):
-            agent.append("--" + flag.replace("_", "-"))
-    if args.redact is not None:
-        agent.append("--redact" if args.redact else "--no-redact")
-    rc = call("agent.py", str(p.base), *agent).returncode
-    if rc == 0:
-        print(f"[pipeline] done. Report: {p.report}\n[pipeline] Review list: "
-              f"{p.base.with_name(p.base.name + '.review.md')}", file=sys.stderr)
-    return rc
+
+def local_config() -> dict:
+    return {name: config.get(name) for name in config.PARAMETERS
+            if name.startswith(("TRANSCRIBE_CPU_", "TRANSCRIBE_GPU_", "TRANSCRIBE_WHISPER_", "TRANSCRIBE_OCR_", "AZURE_TRANSCRIBE_", "ASSEMBLYAI_")) and not config.PARAMETERS[name].secret}
+
+
+def media_arguments(args) -> list[str]:
+    """Serialize effective media options, including defaults inherited on resume."""
+    import run
+    result = []
+    for action in run.build_parser()._actions:
+        if not action.option_strings or action.dest in ("help", "result_json"):
+            continue
+        value = getattr(args, action.dest, None)
+        if value is None or value == action.default:
+            continue
+        if isinstance(action, argparse._StoreTrueAction):
+            if value:
+                result.append(action.option_strings[0])
+        elif isinstance(action, argparse._StoreFalseAction):
+            if not value:
+                result.append(action.option_strings[0])
+        else:
+            result.extend([action.option_strings[0], str(value)])
+    return result
+
+
+def glossary_hash(source: Path | None) -> str:
+    from stt import load_hotwords
+    from state import digest
+    with contextlib.redirect_stderr(io.StringIO()):
+        return digest(load_hotwords(source))
+
+
+def emit_result(result: dict, structured: bool) -> None:
+    if structured:
+        print(json.dumps(result, ensure_ascii=False))
+    else:
+        for stage in result.get("stages", []):
+            print(f"{stage['stage']}: {stage['status']} {stage.get('reason', '')}")
+        if result.get("status"):
+            print(f"[pipeline] {result['status']}: {result.get('report')}")
 
 
 if __name__ == "__main__":

@@ -81,54 +81,21 @@ CHUNK_OVERLAP_SECONDS = 20.0
 # ~quadratically with chunk length (a 600 s chunk measured ~150 s of API
 # time, a 1400 s chunk blew past a 900 s timeout). Many small chunks finish
 # faster overall and never time out - 600 s is the proven-fast size.
-AZURE_CHUNK_SECONDS_DEFAULT = 600.0
-AZURE_OVERLAP_SECONDS_DEFAULT = 20.0
-AZURE_TIMEOUT_DEFAULT = 900.0
+from config import PARAMETERS
+AZURE_CHUNK_SECONDS_DEFAULT = float(PARAMETERS["AZURE_TRANSCRIBE_CHUNK_SECONDS"].default)
+AZURE_OVERLAP_SECONDS_DEFAULT = float(PARAMETERS["AZURE_TRANSCRIBE_OVERLAP_SECONDS"].default)
+AZURE_TIMEOUT_DEFAULT = float(PARAMETERS["AZURE_TRANSCRIBE_TIMEOUT"].default)
 
 def _get_config(name: str) -> str | None:
-    """Look up a config value: `$NAME` first, then ~/.config/transcribe/.env, then
-    ./.env. Surrounding quotes on .env values are stripped. None if unset.
-
-    The single config reader for the whole STT module - Whisper keys, the
-    Azure endpoint/key pairs and the tuning knobs all come through here.
-    """
-    value = os.environ.get(name)
-    if value and value.strip():
-        return value.strip()
-    for path in (Path.home() / ".config" / "transcribe" / ".env", Path.cwd() / ".env"):
-        if not path.exists():
-            continue
-        try:
-            for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, _, raw = line.partition("=")
-                if key.strip() != name:
-                    continue
-                raw = raw.strip()
-                if len(raw) >= 2 and raw[0] in ('"', "'") and raw[-1] == raw[0]:
-                    raw = raw[1:-1]
-                return raw or None
-        except OSError:
-            return None
-    return None
+    """Compatibility accessor for the shared configuration contract."""
+    from config import get
+    return get(name)
 
 
 def _get_config_float(name: str, default: float) -> float:
-    """`_get_config` coerced to float, falling back to `default` on an unset
-    or unparseable value."""
-    raw = _get_config(name)
-    if raw is None:
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        print(
-            f"[transcribe] WARNING: {name}={raw!r} is not a number - using {default}",
-            file=sys.stderr,
-        )
-        return default
+    """Compatibility numeric accessor; invalid configured values fail early."""
+    from config import number
+    return number(name, default)
 
 
 def load_api_key(preferred: str | None = None) -> tuple[str, str] | tuple[None, None]:
@@ -500,7 +467,8 @@ def _read_error_body(exc: urllib.error.HTTPError) -> str:
     if not body:
         return ""
     try:
-        return f" - {body.decode('utf-8', errors='replace')[:400]}"
+        from config import redact
+        return f" - {redact(body.decode('utf-8', errors='replace'))[:400]}"
     except Exception:
         return ""
 
@@ -749,6 +717,7 @@ class STTBackend:
     # load_hotwords(). Backends that can bias decoding toward these terms use
     # it; the rest ignore it silently.
     hotwords: str | None = None
+    language: str | None = None
 
     def available(self) -> tuple[bool, str]:
         """Return (configured, reason). `reason` is a human hint when the
@@ -880,6 +849,8 @@ class WhisperLocalBackend(STTBackend):
         from setup import run_venv_worker
 
         worker_args = [str(audio_path)]
+        if self.language:
+            worker_args.append(self.language)
         if self.hotwords:
             worker_args += ["--hotwords", self.hotwords]
         stdout = run_venv_worker("whisper_local_worker.py", worker_args)
@@ -1187,6 +1158,7 @@ def transcribe_video(
     api_key: str | None = None,
     parallel_uploads: int | None = None,
     hotwords: str | None = None,
+    language: str | None = None,
 ) -> tuple[list[dict], str]:
     """Extract audio from a video, then transcribe it.
 
@@ -1212,6 +1184,7 @@ def transcribe_video(
         )
 
     stt.hotwords = hotwords
+    stt.language = language
     print(f"[transcribe] extracting audio for transcription ({stt.name})...", file=sys.stderr)
     audio_path = extract_audio(video_path, audio_out)
     segments = transcribe_audio(

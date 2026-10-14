@@ -1,0 +1,19 @@
+name: Transcribe contracts
+on: [push, pull_request]
+jobs:
+  contracts:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.10', '3.13']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -X utf8 -B -m unittest discover -s tests -v
+      - run: python -X utf8 -B scripts/transcribe.py --selftest
+      - run: python -X utf8 -B scripts/repair.py --selftest
+      - run: python -X utf8 -B transcribe.py run --help-all
+      - run: python -X utf8 -B scripts/build_skill.py

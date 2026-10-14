@@ -67,29 +67,9 @@ def _assemblyai_base() -> str:
 
 
 def _load_env_value(name: str) -> str | None:
-    """Look up an env value from $name or `~/.config/transcribe/.env` / `./.env`."""
-    value = os.environ.get(name)
-    if value:
-        return value.strip()
-    for path in (Path.home() / ".config" / "transcribe" / ".env", Path.cwd() / ".env"):
-        if not path.exists():
-            continue
-        try:
-            for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, _, v = line.partition("=")
-                if k.strip() != name:
-                    continue
-                v = v.strip()
-                if len(v) >= 2 and v[0] in ('"', "'") and v[-1] == v[0]:
-                    v = v[1:-1]
-                if v:
-                    return v
-        except OSError:
-            continue
-    return None
+    """Compatibility alias for the shared configuration resolver."""
+    from config import get
+    return get(name)
 
 
 def pick_backend(preferred: str | None) -> str | None:
@@ -275,7 +255,8 @@ def _assemblyai_http_error(stage: str, exc: urllib.error.HTTPError) -> str:
         )
     elif exc.code == 429:
         hint = " - Rate limited. Retry after a few seconds or check your plan limits."
-    return f"AssemblyAI {stage} HTTP {exc.code}: {body}{hint}"
+    from config import redact
+    return f"AssemblyAI {stage} HTTP {exc.code}: {redact(body)}{hint}"
 
 
 def _assemblyai_parse(result: dict) -> list[dict]:

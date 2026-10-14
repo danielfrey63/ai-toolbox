@@ -1,191 +1,70 @@
 ---
 name: transcribe
 description: "Transcribes and watches video or audio files (URL or local path): downloads with yt-dlp, extracts frames and scene cuts, transcribes via native captions or on-device Whisper with speaker diarization, and writes a persistent Markdown report (overview, summary, analysis, transcript, speaker mapping). Use when the user shares a video or audio URL or file (YouTube, Vimeo, meeting recording, voice memo, screen recording) and wants it transcribed, summarized, or asks what is said or shown in it. Trigger: «transkribiere», «Video zusammenfassen», «Meeting-Aufnahme auswerten», «was wird im Video gesagt»."
-argument-hint: "<video-url-or-path> [question]"
 allowed-tools: Bash, Read, Write, Edit, AskUserQuestion, SendUserFile
-homepage: https://github.com/danielfrey63/ai-toolbox
-repository: https://github.com/danielfrey63/ai-toolbox
 license: MIT
-user-invocable: true
+metadata:
+  homepage: https://github.com/danielfrey63/ai-toolbox
+  repository: https://github.com/danielfrey63/ai-toolbox
 ---
 
-# /transcribe – watch and transcribe a video or audio file
+# Transcribe
 
-Claude has no video input; this skill provides one. `scripts/run.py` downloads the media, extracts frames as JPEGs, produces a timestamped (and by default speaker-labeled) transcript and writes companion files. Claude then `Read`s the frames and the transcript, writes the report and answers the user.
+Transcribe audio or video and produce a report grounded in the transcript and, for video, selected frames. The same runtime works in any harness and on the CLI.
 
-**Python interpreter:** commands use `python3` (macOS/Linux). On Windows use `python`; `python3` there is the Microsoft Store stub.
+## Installation and discovery
 
-**Skill directory:** `${CLAUDE_SKILL_DIR}` below is the folder holding this `SKILL.md`. Claude Code substitutes it; under GitHub Copilot, Codex or any other agent use the absolute path of this folder instead. Nothing in `scripts/` depends on the agent.
+**Read [INSTALL.md](INSTALL.md) before the first run or whenever setup is incomplete.** It is the single installation contract for humans and harnesses: prerequisites, noninteractive installation, verification, profiles, configuration and exit codes. `<skill>` is the absolute directory containing this file and `transcribe.py`; it works in both the toolbox and the split repository. Windows uses `python`; macOS/Linux usually use `python3`.
 
-## Two ways to do the agent work
-
-Steps 3–5 (reading frames, naming speakers, compact transcript, illustrations, report) need judgement. Either the chat agent running this skill does them as described below, or a configured cloud model does them headless:
-
-```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/llm.py"                       # configured? which deployments?
-python3 "${CLAUDE_SKILL_DIR}/scripts/pipeline.py" "<source>" --language de [--local]
+```text
+python "<skill>/transcribe.py" doctor --profile local --json
+python "<skill>/transcribe.py" install --profile local --non-interactive
+python "<skill>/transcribe.py" doctor --profile local --json
 ```
 
-`pipeline.py` chains `setup.py --check`, `run.py` and `agent.py` for a local file or a URL (a URL is downloaded again on every call; re-run on the downloaded file or the printed `<base>`). `agent.py` runs `speakers_fill.py`, `kompakt.py`, `illustrate_agent.py` and `report.py` against the model set in `~/.config/transcribe/.env` (`AZURE_LLM_ENDPOINT`, `AZURE_LLM_KEY`, `AZURE_LLM_MODEL`; see `.env.example`). It writes the same companion files as the interactive path plus `<base>.review.md`, the list of human gates (speaker attributions, illustrations, report review). Every stage is idempotent; `--force` redoes (speaker names stay, `--refill-speakers` lets the model overwrite them), `--only` picks stages, `--stop-at-speakers` ends at the speaker gate. After a hand correction in speakers.md a plain `agent.py "<base>"` is all it takes: it applies the names, and rebuilds kompakt and report because they no longer match the transcript (`<base>.agent.json` records the transcript hash each was built from). The report's `Datenfluss` line names the model and what it received.
+Only install when the required profile is missing. Recheck after installation. Local transcription needs no cloud key. Local speaker separation additionally needs Hugging Face model access; use `--no-diarize` when it is not needed or unavailable.
 
-**Review gate and publishing:** `<base>.review.md` (written by `review.py`, refreshed by `agent.py` and `publish.py`) has one box per artefact with its hash; a person ticks them. `publish.py "<base>" [--parent ID] [--dry-run]` uploads page, crops and transcripts to Confluence only when every box is ticked. Never tick boxes on the user's behalf.
+## Choose the analysis path
 
-**Choose headless when** an agent other than Claude runs the skill (Copilot, Codex), the run is unattended, or data must stay on an approved tenant deployment. **Choose interactive when** no model is configured or the user wants to steer the report. When `llm.py` reports a configured provider and the user did not ask for the interactive path, prefer `pipeline.py` (or `agent.py` after an existing `run.py` pass), then answer from the files it wrote (Step 5 reply format).
+- `--analysis model`: a configured model writes the report. Use when sending text and images to that endpoint is appropriate. The installation profile is `headless`.
+- `--analysis harness`: the calling harness reads the companions and writes the report. Follow [references/interactive.md](references/interactive.md) and read [references/report-writing.md](references/report-writing.md) before writing.
+- `--analysis none`: media processing and transcript output without model analysis.
 
-## When to use
+`--local` pins audio transcription and speaker separation to local backends. It does not make cloud model analysis local. Without this flag, configured cloud audio backends can be reached after local failure. Honour explicit data-flow requirements for both audio and analysis.
 
-- A video URL (YouTube, Vimeo, X, TikTok, Twitch clip, most yt-dlp-supported sites) or a local video file (`.mp4`, `.mov`, `.mkv`, `.webm`) with a request to transcribe, summarize or answer questions about it.
-- A local **audio** file (`.m4a`, `.mp3`, `.wav`, voice memo, meeting recording). Frame stages are skipped automatically; transcription and diarization run fully on-device by default, so confidential recordings need no extra flags.
-- `/transcribe <url-or-path> [question]`.
+## Run and resume
 
-## Reference files
-
-Load only what the current situation needs:
-
-- `references/report-writing.md` – **mandatory before writing the report** (Step 4).
-- `references/setup.md` – preflight exit codes, installer, managed venv, cloud keys.
-- `references/options.md` – all `run.py` flags, frame budgets, focused mode, scene detection, glossary, output locations.
-- `references/repair.md` – decoder-collapse repair pass, `**Repaired passages:**`.
-- `references/pipeline.md` – transcript sources, cache resume, blocking, caption cross-check, version stamp, CPU/GPU, security, script list.
-
-## Step 0 – Setup preflight (silent on success)
-
-```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py" --check
+```text
+python "<skill>/transcribe.py" run "<source>" --local --language de --analysis harness --plan --json
+python "<skill>/transcribe.py" run "<source>" --local --language de --analysis harness --json
 ```
 
-Exit 0: proceed without comment; do not announce "setup complete". Within a session, skip this step after the first exit 0.
+Read the JSON result for `base`, `protocol`, `transcript`, `report`, `review` and `status`. Progress appears on stderr. `handoff` means media processing succeeded and the harness still needs to write the report. Nonzero codes are not success; 4 and 5 identify review gates.
 
-| Exit | Meaning | Action |
-|------|---------|--------|
-| `2` | Missing `ffmpeg` / `ffprobe` / `yt-dlp` | Run `python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py"` |
-| `3` | No transcription path | Run `python3 "${CLAUDE_SKILL_DIR}/scripts/setup.py" --venv` |
-| `4` | Both missing | Run the installer (it also provisions the venv) |
+- Pass a known language and requested range (`--start`, `--end`). Audio-only sources skip frame stages.
+- Optional inputs: `<base>.participants.txt` and `<base>.glossary.txt`; folder defaults are `transcribe-participants.txt` and `transcribe-glossary.txt`. Recording-specific inputs win.
+- Reruns check dependencies and reuse completed work. `--rerun` repeats media preparation, `--fresh` recomputes speech and speaker separation, `--force` repeats model stages. `run --plan` explains the decision.
+- Correct speaker names and block overrides in `<base>.speakers.md`, then rerun. Stable labels are retained separately so later corrections work.
+- Failed batches and chapters remain incomplete. Do not present incomplete output as a complete analysis.
 
-**Local first: never ask the user for a cloud key.** The default path is on-device whisper-local in a managed venv (no key, nothing leaves the machine). Mention cloud keys only if the user explicitly asks for cloud transcription or `--json` reports `venv_buildable: false`. Advisory warnings on exit 0 (stale yt-dlp, missing deno) matter only when a download fails; then see `references/setup.md`.
+Do not rename source recordings merely to satisfy a convention. A consistent base is useful for new recordings; honour existing names and user preferences.
 
-## Step 1 – Parse the input
+## Report and review
 
-Separate the source (URL or path) from any question: `/transcribe https://youtu.be/abc what language is this in?` → source `https://youtu.be/abc`, question `what language is this in?`.
+When analysis is requested, write Übersicht, Summary and Analysis using [references/report-writing.md](references/report-writing.md). Answer any specific question in addition, with timestamps. For model analysis, read and use the generated files instead of duplicating the model stages.
 
-**Local recordings: harmonize the base name first.** Every report family follows `YYYYMMDD-hhmm - <Thema>` (e.g. `20260824-1405 - ACA-DFR - Meeting.m4a`). If the source file does not match (Teams default names, `YYYY-MM-DD-hh-mm-ss - …` prefixes), rename it before the run so all companions inherit the base. Start time from ffprobe `creation_time`, or file mtime minus duration, rounded to the minute.
+Speaker assignments, illustrations and uncertain passages must remain traceable to evidence. Unresolved names retain their labels. Degradation to captions-only or audio-only must be visible in the report. Use `illustrate.py` and its spec/manifest for reproducible crops.
 
-## Step 2 – Run the script
+Refresh reviews with `python "<skill>/transcribe.py" review "<base>"`. A person checks artefacts and publication target; never tick boxes on their behalf. Publication is a separate, explicitly requested action through `transcribe.py publish`. Changes to transcript, crop bytes, report or publication configuration invalidate the corresponding review.
 
-```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/run.py" "<source>"
-```
+Reply with key statements, clickable companion links supported by the client, and the answer to the user's question. Do not repeat the full report. Retain frames for expected follow-ups; remove only the specific run's work directory when no longer needed.
 
-Pass the source verbatim with normal quoting. Defaults are right for most runs. Common flags (full list in `references/options.md`):
+## References
 
-- `--start T` / `--end T` – the user names a moment or section ("around 2:30", "the last 30 seconds"), or only one part of a long video matters. Denser frames, transcript filtered to the range.
-- `--language de` – pass whenever the language is known (used by the repair pass).
-- `--resolution 1024` – only when on-screen text must be read (about 4× image tokens).
-- `--no-scene` – talking heads without cuts; `--no-chunk` – one sparse pass instead of 10-min chunks.
-- `--no-diarize` / `--diarize <backend>` – diarization is on by default (local first: pyannote-local → pyannote-api → assemblyai; silently off when none is configured). An explicit backend pins it.
-- `--whisper <backend>` – pin one STT backend (default cascade: whisper-local → azure-diarize → groq → openai). `--no-whisper` – frames only when there are no captions.
-- `--fresh` – ignore the cached `<base>.segments.json` / `.turns.json` and recompute.
-- `--save-md PATH` / `--no-save-md` – override or disable the report location (default: next to local files; `./transcribe/<YYYY-MM-DD>-<slug>/` for URLs).
-- `--background` – unattended run with a per-recording lock. A manual run that meets such a lock prints `[transcribe] Lauf auf derselben Aufnahme aktiv … übernommen: warte auf Abschluss`; that is progress, keep waiting.
-
-**Transcript source decision (automatic):** native captions in the video's own language win for URLs; otherwise, and for local files, the on-device STT cascade runs. A cached transcript from a previous run outranks captions. The protocol header names the source. Details: `references/pipeline.md`.
-
-**Domain glossary:** for recordings with rare names or jargon, put a `<name>.glossary.txt` (this recording) or `transcribe-glossary.txt` (every recording in the folder) next to the source; the first one found wins (one term per line, most-misheard first, max about 300 characters). Feed every term the user corrects back into it. Details: `references/options.md`.
-
-**Cast list:** a `<name>.participants.txt` or `transcribe-participants.txt` next to the recording (`Name - role` per line, first one found wins; run.py and agent.py report at the start which file they found) is the cheapest way to give the speaker mapping its candidates.
-
-## Step 3 – Read frames and transcript
-
-In one message with parallel tool calls:
-
-- `Read` every frame path under `## Frames`. Entries carry `t=MM:SS` and are tagged `[REG]` (regular, gap-filled) or `[CUT]` (scene cut); read both. A `[CUT]` image is taken about 0.5–2.5 s after the timestamp in its filename.
-- `Read` the transcript file from the `**Transcript file:**` header line (it is not printed to stdout). Skip only if the header says `Transcript: none available`.
-
-Long videos are auto-chunked (about 80 frames per 10-min chunk); read them all, but suggest `--start`/`--end` if the user only cares about one part. In a follow-up question on a video already watched this session, do not re-run the script; answer from context.
-
-## Step 4 – Write the report
-
-Evidence streams:
-
-- **Frames** – what is on screen. Frames are ground truth for names and labels; the transcript is noisy.
-- **Transcript** – what is said, with `[MM:SS]` and speaker labels when diarized.
-- **Resources** – `## Resources` in the protocol aggregates every `https://` URL from the description, the transcript and the screen, grouped by category with its origin.
-- **On-screen references** – `<base>.links.md` lists URLs, wiki page IDs, ticket keys, hosts and UNC paths read by OCR from cut and changed frames, each with `[MM:SS]`. Rows marked `(?)` are below the confidence threshold: `Read` the named frame and confirm or correct the row before citing it. Raw OCR text (also name plates for speaker evidence) is cached in `<base>.ocr.json`; `python3 "${CLAUDE_SKILL_DIR}/scripts/ocr.py" --render <base>.ocr.json` re-renders `links.md`.
-- **Repaired passages** – if the protocol lists `**Repaired passages:**`, those spans were re-transcribed after a decoder collapse; treat them as reviewed but not verified (`references/repair.md`).
-- **Cross-check** – if `<base>.crosscheck.md` exists, it lists windows where Whisper and the platform captions diverge; work through them in the Konsistenz-Check.
-
-**Always write the full report when companion files are persisted** (the default). A user question comes on top, never instead: write the report, then answer the question in chat with timestamps. Skip the report only with `--no-save-md`.
-
-**Before writing, `Read` `${CLAUDE_SKILL_DIR}/references/report-writing.md`.** It defines the mandatory pre-stage (Inventar, Konsistenz-Check, date identification), the key-illustration extraction via `illustrate.py`, the three sections `## Übersicht`, `## Summary`, `## Analysis` and the exact layout. Do not write the report from memory.
-
-## Step 5 – Persist and reply
-
-**Append the report to the main file.** The header lines `**Protocol file:**`, `**Transcript file:**` and `**Analysis target:**` name the companions. `<base>.md` contains a stub with cross-links; append (do not overwrite) the full three-section report in the layout from `report-writing.md`. For URL sources with `--no-save-md`, just answer in chat.
-
-**Embed key illustrations** if `<base>.illustrations/manifest.json` lists any. Illustrations exist only as output of `illustrate.py` from `<base>.illustrations.spec.json`, never as hand-cropped frames. Place each image once where it carries the most weight (usually its Summary `### <Thema>` group), with a relative path and the manifest's caption and timestamp:
-
-```markdown
-![Zielarchitektur DfA-GIS](<base>.illustrations/ill_01_t00734_zielarchitektur-dfa-gis.png)
-*Abb. – Zielarchitektur DfA-GIS [12:14]*
-```
-
-Wrap paths containing spaces in angle brackets: `![…](<my video.illustrations/ill_01….png>)`.
-
-**Speaker mapping (diarized runs only).** The script pre-fills `<base>.speakers.md` once: one row per label with talk time, turn count and active window, the participants found (OCR name plates, `<v Name>` tags of a platform VTT, the participants file), address hits («Simon, …») with the labels speaking before and after, self-introductions and caption-voice overlap (pre-filled `high` at ≥ 60 %). Do the identification **in that file**:
-
-- Fill **Name** (canonical first name; `Andrea B` / `Andrea T` on collision), **Confidence** and **Evidence** for every label the evidence carries.
-- Frame (or caption-voice) evidence AND address-pattern evidence = high. One of the two = medium, write the name with `(?)`. Neither = leave Name empty.
-- Audio-only sources: consistent role/content evidence (a label owns a known person's responsibilities) plus at least one address hit counts as high.
-- A shared room microphone files several people under one label: attribute single blocks via the **Overrides** table (`| Zeit | Name | Wortmeldung |`). `Zeit` may be any time inside the block, so the time of an «Open attributions» row can be copied as is; the override then covers its whole block. Two labels given the same name merge.
-- Every uncertainty must be checkable by ear: after editing speakers.md run `python3 "${CLAUDE_SKILL_DIR}/scripts/grounding.py" "<base>"`. It replaces each «Open attributions» quote with the verbatim transcript sentence and its start time, and writes «Hörproben» (verbatim quotes with times) for every label that is unnamed, `(?)` or not high. Rows whose block the Overrides table already names leave «Open attributions» (their quote fills the override's empty Wortmeldung cell); `report.py "<base>"` then syncs the report's table. `speakers_fill.py` runs it automatically.
-
-Then substitute the names deterministically:
-
-```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/speakers.py" --apply "<base>"
-```
-
-This rewrites `[SPEAKER_00]` → `[Urs]` in `<base>.transcript.md` and `<v SPEAKER_00>` → `<v Urs>` in `<base>.vtt` for every named label; `(?)` names and empty rows stay bare labels. Later `run.py` re-runs read the same file, so user corrections survive. The file is never overwritten; delete it to have it pre-filled again. The report's Inventar *Personen & Stimmen* summarizes this file, and labels left without a name become rows of `### Offene Sprecherzuordnung`. Non-diarized transcripts have no speakers file; skip this.
-
-**Compact transcript (diarized runs only).** Write `<base>.transcript-kompakt.md`, an editorially condensed rendition:
-
-- One block per substantive statement: `**[MM:SS] <Name>:** <polished text>`, timestamp = start of the turn.
-- Fix misrecognitions resolved in the Konsistenz-Check, normalize dialect garbles into standard language, fold fillers and bare acknowledgements ("Ja.", "Genau.") into the flow.
-- Group blocks under `## <Thema>` headings in chronological order.
-- Header: source, duration, participants, a note that the file is condensed, and a pointer to `<base>.transcript.md` as the verbatim reference.
-- Attribute leftover unsure labels by context where the speaker is obvious; otherwise keep the bare label. Statements inside mixed blocks get their attribution here.
-
-**Chat reply: Kernaussagen and file links only.** Echo only the `### Kernaussagen` block (3–6 bullets), then the files as `file://` links built from the absolute header paths:
-
-```
-<### Kernaussagen block – 3–6 bullets, nothing else>
-
-**Files**
-- Protocol: [`<base>.protocol.md`](file:///absolute/path/to/<base>.protocol.md) – metadata + frame list
-- Transcript: [`<base>.transcript.md`](file:///absolute/path/to/<base>.transcript.md) – full transcript
-- Kompakt: [`<base>.transcript-kompakt.md`](file:///absolute/path/to/<base>.transcript-kompakt.md) – condensed transcript (only when diarized)
-- Speakers: [`<base>.speakers.md`](file:///absolute/path/to/<base>.speakers.md) – label-to-name mapping, N open (only when diarized)
-- Links: [`<base>.links.md`](file:///absolute/path/to/<base>.links.md) – references read off the screen (video only)
-- Analysis: [`<base>.md`](file:///absolute/path/to/<base>.md) – Übersicht + Summary + full Analysis
-```
-
-Do not echo Chapter-Struktur, Summary or Analysis into chat. A specific user question is answered in addition to the Kernaussagen block. If the manifest lists illustrations, send them with **`SendUserFile`** (status `normal`, all crop paths in one call, short caption such as `"Schlüssel-Illustrationen aus dem Video"`), because `file://` PNG links do not render in the desktop and mobile apps.
-
-## Step 6 – Clean up
-
-The script prints a working directory. If no follow-ups are expected, delete it (`rm -rf <dir>`). Companion files (`<base>.md`, `.protocol.md`, `.transcript.md`, `.speakers.md`, `.links.md`, `.ocr.json`, `.segments.json`, `.turns.json`, `.vtt`, `.illustrations/`, `.illustrations.spec.json`) live outside the work dir and are preserved. The native OCR frames referenced from `links.md` are inside the work dir: resolve any `(?)` rows before deleting it. If the user might follow up, keep the work dir.
-
-## Failure modes
-
-- **Preflight failed** → run the installer (Step 0). Do not ask for a cloud key; only `venv_buildable: false` makes a key the fallback.
-- **No transcript available** → no captions and every STT backend failed. The script prints a hint; proceed frames-only and tell the user.
-- **Gated YouTube streams (SABR / PO token)** → `download.py` escalates on its own: normal 720p pull, then player clients without PO token (`tv,web_embedded,android_vr`, often 360p, enough for 512 px frames), then audio only (`**Degraded run:** audio-only`, transcript and diarization without frames). DRM-protected content is out of scope.
-- **Download fails but captions landed** → the run degrades to **captions-only** (no frames, no STT, no diarization; `**Degraded run:**` line in the protocol). Analyze normally and state in the Summary that on-screen content is not covered. If the preflight reported a stale yt-dlp, refresh it once (`setup.py --install-binaries --force`) and re-run.
-- **Download fails without captions** → the script exits with yt-dlp's classified reason (403, PO token, DRM, login, region lock). Tell the user plainly; do not retry in a loop. For 403/PO token suggest the yt-dlp refresh once.
-- **Cloud STT request fails** → error on stderr (invalid key, rate limit, network). The cascade falls through; with a pinned backend, retry with another `--whisper` backend.
-- **Transcript shows loops or foreign script despite the repair pass** → see `references/repair.md` (standalone `repair.py`, `--language`).
-- **Protocol says the transcript was resumed from a cache written by another version** → re-run with `--fresh` if transcript quality matters.
-
-## Token efficiency
-
-Frames dominate the cost: 80 frames at 512 px are roughly 50–80k image tokens; the transcript of a 10-minute video is a few thousand. `--resolution 1024` roughly quadruples image tokens per frame. Prefer a focused `--start`/`--end` re-run over a denser full pass.
+- [INSTALL.md](INSTALL.md): bootstrap, profiles, keys, CLI and harness integration.
+- [references/parameters.md](references/parameters.md): generated types, defaults and precedence.
+- [references/options.md](references/options.md): advanced media options; `run --help-all` lists available flags.
+- [references/interactive.md](references/interactive.md): harness-led evidence reading and persistence.
+- [references/report-writing.md](references/report-writing.md): report methodology and illustrations.
+- [references/repair.md](references/repair.md): suspect speech passages and targeted repair.
+- [references/maintenance.md](references/maintenance.md): cache contracts, tests and release packaging.

@@ -23,8 +23,8 @@ speakers.md first; the next agent.py call continues where it stopped
 A hand correction in speakers.md needs nothing but another plain call: the
 speaker stage keeps every name you wrote, asks the model only about labels
 still empty and applies the names to transcript and vtt, and kompakt and report are rebuilt because they no
-longer match the transcript - <base>.agent.json records the transcript hash
-each was built from. A second call changes nothing.
+longer match the inputs recorded in <base>.state.json. A second call reuses
+completed stages.
 
 --force redoes frames, kompakt, illustrate and report but never touches the
 names in speakers.md; --refill-speakers lets the model overwrite them.
@@ -38,8 +38,6 @@ Exit codes: 0 done, 3 LLM not configured, 4 stopped at a human gate.
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -47,6 +45,7 @@ from pathlib import Path
 import cli
 import llm
 from companions import Paths, input_status, read_json, read_protocol, resolve_base
+from state import StageState, stage_key
 
 HERE = Path(__file__).resolve().parent
 STAGES = ("frames", "speakers", "kompakt", "illustrate", "report")
@@ -60,29 +59,20 @@ def step(name: str, script: str, base: Path, extra: list[str]) -> int:
     return r.returncode
 
 
-def transcript_hash(p: Paths) -> str:
-    return hashlib.sha256(p.transcript.read_bytes()).hexdigest()[:12]
 
 
-def state_path(p: Paths) -> Path:
-    return p.base.with_name(p.base.name + ".agent.json")
 
 
-def outdated(p: Paths, state: dict, stage: str, artefact: Path) -> bool:
+def outdated(p: Paths, state: dict, stage: str, artefact: Path, options=None) -> bool:
     """True when `artefact` exists but was built from another transcript (new
     names, overrides, corrections). Without a record - runs from before this
     file existed - a transcript newer than the artefact counts as outdated."""
-    if not artefact.is_file():
-        return False
-    if stage in state:
-        return state[stage] != transcript_hash(p)
-    return p.transcript.stat().st_mtime > artefact.stat().st_mtime + 1
+    return not StageState(p.base).current(stage, stage_key(p, stage, options), [artefact])
 
 
-def record(p: Paths, state: dict, stage: str, artefact: Path) -> None:
-    if artefact.is_file() and state.get(stage) != transcript_hash(p):
-        state[stage] = transcript_hash(p)
-        state_path(p).write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+def record(p: Paths, state: dict, stage: str, artefact: Path, options=None) -> None:
+    StageState(p.base).record(stage, stage_key(p, stage, options), [artefact],
+                              "complete" if artefact.is_file() else "skipped")
 
 
 def write_review(p: Paths) -> Path:
@@ -120,15 +110,16 @@ def main() -> int:
     if not p.transcript.is_file():
         print(f"[agent] no transcript {p.transcript} - run run.py first", file=sys.stderr)
         return 2
-    ok, reason = llm.available()
-    if not ok:
-        print(f"[agent] LLM not configured ({reason}). Set AZURE_LLM_ENDPOINT/_KEY in "
-              f"~/.config/transcribe/.env or let the chat assistant do these steps.", file=sys.stderr)
-        return 3
     only = set((args.only or ",".join(STAGES)).split(","))
     unknown = only - set(STAGES)
     if unknown:
         ap.error(f"unknown stage(s): {', '.join(sorted(unknown))}")
+    from joblock import workflow_lock
+    with workflow_lock(p.base):
+        return run_stages(args, p, only)
+
+
+def run_stages(args, p: Paths, only: set[str]) -> int:
     lang = ["--language", args.language] if args.language else []
     force = ["--force"] if args.force else []
     has_video = bool(read_protocol(p.protocol).get("frames"))
@@ -138,30 +129,50 @@ def main() -> int:
 
     if "frames" in only and has_video and not args.no_frames:
         import report
-        report.frame_pass(p, read_protocol(p.protocol), 48, args.language, args.force)
+        frame_options = {"language": args.language, "max_frames": 48}
+        try:
+            report.frame_pass(p, read_protocol(p.protocol), 48, args.language, args.force)
+        except (RuntimeError, ValueError):
+            StageState(p.base).record("frames", stage_key(p, "frames", frame_options), status="failed")
+            raise
+        record(p, {}, "frames", p.frames_json, frame_options)
     if "speakers" in only and p.speakers.is_file():
-        step("speakers", "speakers_fill.py", p.base,
+        rc = step("speakers", "speakers_fill.py", p.base,
              lang + (["--force"] if args.refill_speakers else []) + ["--apply"])
+        if rc:
+            StageState(p.base).record("speakers", stage_key(p, "speakers", {"language": args.language}), status="failed")
+            return rc
+        record(p, {}, "speakers", p.speakers, {"language": args.language})
         if args.stop_at_speakers:
             print(f"[agent] stopped at the speaker gate: {write_review(p)}", file=sys.stderr)
             return 4
-    state = read_json(state_path(p)) or {}
+    state = {}
+    options = {"language": args.language}
     if "kompakt" in only:
-        redo = outdated(p, state, "kompakt", p.kompakt)
+        redo = outdated(p, state, "kompakt", p.kompakt, options)
         if redo and not args.force:
             print("[agent] transcript changed since the compact transcript was built - rebuilding", file=sys.stderr)
-        if step("kompakt", "kompakt.py", p.base, lang + (["--force"] if args.force or redo else [])) == 0:
-            record(p, state, "kompakt", p.kompakt)
+        rc = step("kompakt", "kompakt.py", p.base, lang + (["--force"] if args.force else []))
+        if rc:
+            StageState(p.base).record("kompakt", stage_key(p, "kompakt", options), status="failed")
+            return rc
+        record(p, state, "kompakt", p.kompakt, options)
     if "illustrate" in only and has_video and not args.no_frames:
-        step("illustrate", "illustrate_agent.py", p.base, lang + force + ({True: ["--redact"], False: ["--no-redact"]}.get(args.redact, [])))
+        rc = step("illustrate", "illustrate_agent.py", p.base, lang + force + ({True: ["--redact"], False: ["--no-redact"]}.get(args.redact, [])))
+        if rc:
+            return rc
     if "report" in only:
-        redo = outdated(p, state, "report", p.report)
+        report_options = {**options, "no_frames": args.no_frames, "max_frames": 48}
+        redo = outdated(p, state, "report", p.report, report_options)
         if redo and not args.force:
             print("[agent] transcript changed since the report was written - rewriting", file=sys.stderr)
         # the frames stage above already re-described the frames on --force
-        if step("report", "report.py", p.base, lang + (["--rewrite"] if args.force or redo else [])
-                + (["--no-frames"] if args.no_frames else [])) == 0:
-            record(p, state, "report", p.report)
+        rc = step("report", "report.py", p.base, lang + (["--rewrite"] if args.force or redo else [])
+                + (["--no-frames"] if args.no_frames else []))
+        if rc:
+            StageState(p.base).record("report", stage_key(p, "report", report_options), status="failed")
+            return rc
+        record(p, state, "report", p.report, report_options)
     review = write_review(p)
     print(f"[agent] done - human review: {review}", file=sys.stderr)
     return 0

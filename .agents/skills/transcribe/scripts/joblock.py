@@ -8,7 +8,7 @@ must not compete for the GPU. The lock next to the output settles it:
 - manual run finds a live BACKGROUND run -> boosts that process tree to normal
   priority and waits for it, then continues with the cached intermediates
   ("taken-over"); nothing is computed twice
-- stale lock (dead pid or older than 12 h) -> removed, run proceeds
+- process death releases the OS lock; age never overrides a live owner
 
 Windows-first (ctypes, no psutil); POSIX gets the same semantics minus
 boosting foreign processes (needs root to lower a nice value).
@@ -16,14 +16,33 @@ boosting foreign processes (needs root to lower a nice value).
 from __future__ import annotations
 
 import atexit
+from contextlib import contextmanager
 import json
 import os
 import sys
 import time
 from pathlib import Path
 
-STALE_HOURS = 12.0
 POLL_SECONDS = 5.0
+
+
+@contextmanager
+def workflow_lock(base: Path):
+    """Subprocesses of one pipeline share its lock; unrelated entrypoints wait."""
+    name = str(base.resolve())
+    previous = os.environ.get("TRANSCRIBE_WORKFLOW_LOCK")
+    if previous == name:
+        yield
+        return
+    with JobLock(base.with_name(base.name + ".workflow.lock")):
+        os.environ["TRANSCRIBE_WORKFLOW_LOCK"] = name
+        try:
+            yield
+        finally:
+            if previous is None:
+                os.environ.pop("TRANSCRIBE_WORKFLOW_LOCK", None)
+            else:
+                os.environ["TRANSCRIBE_WORKFLOW_LOCK"] = previous
 
 _WIN = os.name == "nt"
 if _WIN:
@@ -140,6 +159,7 @@ class JobLock:
         self.path = Path(path)
         self.background = background
         self.owned = False
+        self._handle = None
 
     # -- state --------------------------------------------------------
     def read(self) -> dict | None:
@@ -147,19 +167,6 @@ class JobLock:
             return json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
-
-    def _live(self) -> dict | None:
-        info = self.read()
-        if not info:
-            if self.path.exists():
-                self._remove()  # unreadable -> treat as stale
-            return None
-        age_h = (time.time() - float(info.get("started", 0))) / 3600
-        if not pid_alive(int(info.get("pid", 0))) or age_h > STALE_HOURS:
-            print(f"[transcribe] verwaisten Lock entfernt ({self.path.name})", file=sys.stderr)
-            self._remove()
-            return None
-        return info
 
     def _remove(self) -> None:
         try:
@@ -169,38 +176,52 @@ class JobLock:
 
     # -- lifecycle ----------------------------------------------------
     def acquire(self) -> str:
-        """'acquired' | 'taken-over' | 'busy' (background run, someone else is on it)."""
-        other = self._live()
-        if other:
-            pid = int(other["pid"])
-            if self.background:
-                print(f"[transcribe] läuft bereits (PID {pid}) - übersprungen", file=sys.stderr)
-                return "busy"
-            n = boost_tree(pid) if other.get("background") else 0
-            how = f"auf normale Priorität gehoben ({n} Prozesse)" if n else "normale Priorität"
-            print(f"[transcribe] Lauf auf derselben Aufnahme aktiv (PID {pid}, {how}) - "
-                  f"übernommen: warte auf Abschluss, Zwischenstände werden wiederverwendet", file=sys.stderr)
-            self._wait(pid)
-            outcome = "taken-over"
-        else:
-            outcome = "acquired"
-        self.path.write_text(json.dumps({
-            "pid": os.getpid(), "started": time.time(), "background": self.background,
-            "argv": sys.argv[1:],
-        }), encoding="utf-8")
+        """Hold an OS lock until release; process death releases it automatically.
+
+        The guard file is never removed: unlinking it would allow two live inodes
+        to be locked independently. JSON metadata is informational only.
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        guard = self.path.with_name(self.path.name + ".guard")
+        self._handle = guard.open("a+b")
+        if guard.stat().st_size == 0:
+            self._handle.write(b"0")
+            self._handle.flush()
+        waited = False
+        while True:
+            try:
+                self._handle.seek(0)
+                if _WIN:
+                    import msvcrt
+                    msvcrt.locking(self._handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if self.background:
+                    self._handle.close()
+                    self._handle = None
+                    return "busy"
+                if not waited:
+                    other = self.read() or {}
+                    if other.get("background"):
+                        boost_tree(int(other.get("pid", 0)))
+                    print("[transcribe] recording busy; waiting for the active run", file=sys.stderr)
+                waited = True
+                time.sleep(POLL_SECONDS)
+        from state import write_json
+        try:
+            write_json(self.path, {"pid": os.getpid(), "started": time.time(), "background": self.background})
+        except BaseException:
+            self._handle.close()
+            self._handle = None
+            raise
         self.owned = True
         atexit.register(self.release)
         if self.background:
             lower_own_priority()
-        return outcome
-
-    def _wait(self, pid: int) -> None:
-        t0 = time.time()
-        while pid_alive(pid) and self.read():
-            time.sleep(POLL_SECONDS)
-            if int((time.time() - t0) % 60) < POLL_SECONDS:
-                print(f"[transcribe] ... warte ({int((time.time() - t0) / 60)} min)", file=sys.stderr)
-        self._remove()
+        return "taken-over" if waited else "acquired"
 
     def release(self) -> None:
         if not self.owned:
@@ -208,4 +229,21 @@ class JobLock:
         info = self.read()
         if info and int(info.get("pid", 0)) == os.getpid():
             self._remove()
+        if self._handle:
+            self._handle.seek(0)
+            if _WIN:
+                import msvcrt
+                msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+            self._handle.close()
+            self._handle = None
         self.owned = False
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self.release()

@@ -415,6 +415,28 @@ def apply_to_files(base: Path, mapping: dict[str, str], overrides: dict[str, str
     then rename the blocks the Overrides table names (transcript lines by
     their timestamp, VTT cues by falling inside that block's time span)."""
     overrides = overrides or {}
+    from state import read_json, write_json, write
+    source_path = base.with_name(base.name + ".speaker-source.json")
+    source = read_json(source_path, {}) or {}
+    # Preserve raw labels separately from the editable rendered text. For old
+    # runs reconstruct labels by timeline from their segment/turn caches.
+    raw = {}
+    raw_segments = []
+    seg_path = base.with_name(base.name + ".segments.json")
+    turns_path = base.with_name(base.name + ".turns.json")
+    segs = read_json(seg_path, {}) or {}
+    if isinstance(segs, dict) and segs.get("segments"):
+        from diarize import align_speakers
+        from transcribe import format_transcript
+        segments = segs["segments"]
+        turns = read_json(turns_path)
+        if isinstance(turns, list):
+            segments = align_speakers(segments, turns)
+        raw_segments = segments
+        for line in format_transcript(segments).splitlines():
+            m = BLOCK_RE.match(line)
+            if m:
+                raw[m.group(1)] = m.group(2)
     touched: list[Path] = []
     tp = base.with_name(base.name + ".transcript.md")
     spans: list[tuple[float, float, str]] = []
@@ -426,7 +448,9 @@ def apply_to_files(base: Path, mapping: dict[str, str], overrides: dict[str, str
         for k, (i, ts) in enumerate(starts):
             m = BLOCK_RE.match(lines[i])
             label = m.group(2)
-            name = overrides.get(ts) or mapping.get(label)
+            original = raw.get(ts) or source.get("labels", {}).get(ts) or label
+            source.setdefault("labels", {})[ts] = original
+            name = overrides.get(ts) or mapping.get(original) or original
             if name and name != label:
                 new_lines[i] = lines[i].replace(f"[{label}]", f"[{name}]", 1)
             if ts in overrides:
@@ -440,6 +464,31 @@ def apply_to_files(base: Path, mapping: dict[str, str], overrides: dict[str, str
     if vp.is_file():
         text = vp.read_text(encoding="utf-8")
         new = text
+        # Exact cue labels are retained on the first application; this supports
+        # two labels that used to have the same display name being split again.
+        cue_labels = source.get("vtt_labels", [])
+        cue_index = 0
+        cue_start = None
+        restored = []
+        for line in new.splitlines():
+            if "-->" in line:
+                time_match = VTT_TS_RE.search(line)
+                cue_start = _vtt_seconds(time_match) if time_match else None
+            match = VOICE_TAG_RE.search(line)
+            if match:
+                shown = match.group(0)[3:-1]
+                from_cache = next((s.get("speaker") for s in raw_segments
+                                   if cue_start is not None and s["start"] <= cue_start < s["end"]), None)
+                original = from_cache or (cue_labels[cue_index] if cue_index < len(cue_labels) else shown)
+                if cue_index >= len(cue_labels):
+                    cue_labels.append(original)
+                else:
+                    cue_labels[cue_index] = original
+                line = VOICE_TAG_RE.sub(lambda _: f"<v {original}>", line, count=1)
+                cue_index += 1
+            restored.append(line)
+        source["vtt_labels"] = cue_labels
+        new = "\n".join(restored) + ("\n" if new.endswith("\n") else "")
         for label, name in mapping.items():
             new = new.replace(f"<v {label}>", f"<v {name}>")
         if spans:
@@ -457,6 +506,8 @@ def apply_to_files(base: Path, mapping: dict[str, str], overrides: dict[str, str
         if new != text:
             vp.write_text(new, encoding="utf-8")
             touched.append(vp)
+    source["mapping"] = mapping
+    write_json(source_path, source)
     return touched
 
 

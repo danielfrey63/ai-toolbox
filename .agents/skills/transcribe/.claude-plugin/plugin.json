@@ -1,7 +1,7 @@
 {
   "name": "transcribe",
-  "version": "1.78.413",
-  "description": "Transcribe any video or audio file (.m4a/.mp3 voice memos and meeting recordings skip the frame stages automatically); for video, Claude also sees the frames. Downloads with yt-dlp, extracts gap-filled frames + scdet scene cuts with ffmpeg, auto-chunks long sources, and transcribes via captions or a local-first cascade (on-device faster-whisper by default, cloud backends as fallback) with speaker diarization on by default (on-device pyannote, Claude-driven speaker naming). Self-installs ffmpeg/yt-dlp and a managed ML venv on first run. Produces a persistent report (protocol + transcript + analysis, plus a condensed transcript when diarized) with clickable file:// links.",
+  "version": "1.79.414",
+  "description": "Transcribe audio or video from a URL or local file. Portable CLI with verified installation, resumable processing, speaker mapping and analysis through a configured model or the calling harness. Local audio processing is explicitly selectable. Persistent reports and reproducible illustrations; human review gates optional Confluence publication.",
   "author": {
     "name": "Bradley Bonanno"
   },

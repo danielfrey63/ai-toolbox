@@ -57,51 +57,6 @@ def _dedup_threshold_arg(value: str) -> "int | str":
     return i
 
 
-def _reap_old_work_dirs(prefix: str = "transcribe-", max_age_hours: float = 24.0) -> None:
-    """Delete leftover working directories from prior crashed/killed runs.
-
-    On normal completion, Step 6 of SKILL.md instructs Claude to `rm -rf` the
-    work dir, and on Ctrl+C `finally` blocks tidy up the small bits. But
-    nothing cleans up after SIGKILL / power loss / Claude-Code-tab-closed:
-    the `mkdtemp` dir is not wrapped in a context manager because we want it
-    to survive past the script for follow-up reads. Net result: long-running
-    users accumulate gigabytes of dead work dirs in `/tmp` (or %TEMP%).
-
-    Strategy: at startup, scan the system temp root for `transcribe-*` directories
-    whose mtime is older than `max_age_hours`, and delete them. We use mtime
-    (not ctime / atime) because ffmpeg keeps touching files in the active
-    work dir, so mtime stays fresh during a real run. Anything older than
-    24 h is definitionally dead - even the slowest URL download finishes
-    inside that window.
-    """
-    tmp_root = Path(tempfile.gettempdir())
-    cutoff = time.time() - max_age_hours * 3600
-    reaped: list[str] = []
-    for d in tmp_root.glob(f"{prefix}*"):
-        if not d.is_dir():
-            continue
-        try:
-            mtime = d.stat().st_mtime
-        except OSError:
-            continue
-        if mtime >= cutoff:
-            continue
-        try:
-            shutil.rmtree(d, ignore_errors=True)
-        except OSError:
-            continue
-        if not d.exists():
-            reaped.append(d.name)
-    if reaped:
-        preview = ", ".join(reaped[:3])
-        suffix = f" (+{len(reaped) - 3} more)" if len(reaped) > 3 else ""
-        print(
-            f"[transcribe] reaped {len(reaped)} old work dir(s) older than "
-            f"{max_age_hours:.0f}h: {preview}{suffix}",
-            file=sys.stderr,
-        )
-
-
 SCRIPT_DIR = Path(__file__).parent.resolve()
 sys.path.insert(0, str(SCRIPT_DIR))
 
@@ -238,7 +193,7 @@ import cpu  # noqa: E402
 ANALYSIS_MARKERS = ("## Übersicht", "## Summary", "## Analysis")
 
 
-def main() -> int:
+def build_parser():
     ap = cli.parser(__doc__, exit_codes={0: "done", 1: "error (message on stderr)", 2: "usage error"},
                     examples=['python run.py "<recording.mp4>" --language de --whisper whisper-local',
                               'python run.py "<recording.mp4>" --start 0 --end 5:00 --no-diarize',
@@ -448,7 +403,25 @@ def main() -> int:
              "manual run on the same recording takes over instead of "
              "competing - see joblock.py.",
     )
+    ap.add_argument("--result-json", help="Write machine-readable result metadata to this file")
+    return ap
+
+
+def main() -> int:
+    ap = build_parser()
     args = cli.parse(ap)
+    for name in ("max_frames", "resolution", "frame_workers", "whisper_workers"):
+        value = getattr(args, name, None)
+        if value is not None and value < 1:
+            ap.error(f"--{name.replace('_', '-')} must be positive")
+    import config
+    from state import media_identity, digest, write_json, write, StageState
+    # Validate the complete configuration before allocating work or downloading.
+    config.snapshot()
+    requested_options = {k: v for k, v in vars(args).items() if k not in ("result_json", "fresh", "background")}
+    from pipeline import local_config, glossary_hash
+    requested_config = local_config()
+    requested_glossary = glossary_hash(Path(args.source) if not is_url(args.source) else None)
 
     if args.no_diarize:
         args.diarize = None
@@ -494,9 +467,6 @@ def main() -> int:
     if args.out_dir:
         work = Path(args.out_dir).expanduser().resolve()
     else:
-        # Reap before mkdtemp so the new dir we're about to create is never
-        # a candidate for deletion (its mtime is fresh by the time we scan).
-        _reap_old_work_dirs()
         work = Path(tempfile.mkdtemp(prefix="transcribe-"))
     work.mkdir(parents=True, exist_ok=True)
     print(f"[transcribe] working dir: {work}", file=sys.stderr)
@@ -603,6 +573,18 @@ def main() -> int:
         ocr_store = save_md_path.parent / f"{base}.ocr.json"
         links_path = save_md_path.parent / f"{base}.links.md"
         speakers_path = save_md_path.parent / f"{base}.speakers.md"
+        save_md_path.parent.mkdir(parents=True, exist_ok=True)
+
+    identity = media_identity(Path(video_path)) if has_media else {"url": args.source}
+    stt_key = digest({"source": identity, "backend": args.whisper, "diarize": args.diarize, "language": args.language,
+                      "glossary": hotwords, "model": config.get("TRANSCRIBE_WHISPER_MODEL")})
+    cache_meta = (seg_store or work / "segments.json").with_suffix(".meta.json")
+    from state import read_json as read_state
+    prior_meta = read_state(cache_meta, {}) or {}
+    # Legacy caches are retained once when the source identity is not yet known.
+    # Subsequent replacements, backend/model changes and glossary edits invalidate them.
+    if prior_meta and prior_meta.get("stt") != stt_key:
+        args.fresh = True
 
     if has_media:
         meta = get_metadata(video_path)
@@ -970,7 +952,7 @@ def main() -> int:
             stt_cascade = select_backends(args.whisper or None)
         except SystemExit as exc:
             # --whisper X was set explicitly but X is not configured.
-            print(f"[transcribe] {exc}", file=sys.stderr)
+            raise RuntimeError(config.redact(str(exc))) from None
         if not stt_cascade and args.whisper is None:
             setup_py = SCRIPT_DIR / "setup.py"
             print(
@@ -989,6 +971,7 @@ def main() -> int:
                     backend=stt_backend.name,
                     parallel_uploads=args.whisper_workers,
                     hotwords=hotwords,
+                    language=args.language,
                 )
                 seg_cache.parent.mkdir(parents=True, exist_ok=True)
                 seg_cache.write_text(
@@ -1013,6 +996,8 @@ def main() -> int:
                         file=sys.stderr,
                     )
                 else:
+                    if args.whisper:
+                        raise RuntimeError(config.redact(f"Requested transcription backend failed: {exc}")) from None
                     print(f"[transcribe] transcription failed: {exc}", file=sys.stderr)
 
     # Repair pass: Whisper's condition_on_previous_text carries each window's
@@ -1165,6 +1150,8 @@ def main() -> int:
             tag = f"{diarize_backend} ({len(speakers)} speakers)"
             transcript_source = f"{transcript_source} + {tag}" if transcript_source else tag
         except SystemExit as exc:
+            if args.diarize:
+                raise RuntimeError(config.redact(f"Requested diarization backend failed: {exc}")) from None
             print(
                 f"[transcribe] {diarize_backend} diarization failed ({exc}) - "
                 f"transcript kept without speaker labels",
@@ -1232,7 +1219,7 @@ def main() -> int:
 
         def _write_best_effort(path: "Path", content: str, label: str) -> None:
             try:
-                path.write_text(content + "\n", encoding="utf-8")
+                write(path, content + "\n")
                 sys.stderr.write(f"[transcribe] {label:11s} -> {path}\n")
             except OSError as exc:
                 sys.stderr.write(
@@ -1528,7 +1515,7 @@ def main() -> int:
     for frame in all_frames:
         kind = frame.get("kind", "regular")
         tag = "[CUT]" if kind == "cut" else "[REG]"
-        suffix = f" {tag}" if cut_frames else ""
+        suffix = f" {tag}"
         emit(f"- `{frame['path']}` (t={format_time(frame['timestamp_seconds'])}){suffix}")
 
     emit_t()
@@ -1572,6 +1559,26 @@ def main() -> int:
     # Happy path saved successfully - deregister the atexit hook so it
     # doesn't fire a second time during interpreter shutdown.
     atexit.unregister(_persist_report)
+    if save_md_path:
+        for path, lines in ((protocol_path, protocol_lines), (transcript_path, transcript_lines)):
+            if not path.is_file() or path.read_text(encoding="utf-8") != "\n".join(lines) + "\n":
+                raise RuntimeError(f"Required output was not persisted: {path}")
+    if transcript_segments:
+        write_json(cache_meta, {"stt": stt_key, "source": identity})
+    result = {"schema": 1, "status": "complete", "source": args.source,
+              "base": str(save_md_path.parent / base) if save_md_path else None,
+              "protocol": str(protocol_path) if protocol_path else None,
+              "transcript": str(transcript_path) if transcript_path else None,
+              "report": str(save_md_path) if save_md_path else None,
+              "work_dir": str(work), "source_identity": identity,
+              "options": requested_options, "local_config": requested_config, "glossary": requested_glossary}
+    if save_md_path:
+        write_json(save_md_path.parent / f"{base}.run.json", result)
+        from state import StageState
+        StageState(Path(result["base"])).record("media", digest({"options": requested_options, "source": identity,
+            "settings": requested_config, "glossary": requested_glossary}), [protocol_path, transcript_path])
+    if args.result_json:
+        write_json(Path(args.result_json), result)
     return 0
 
 

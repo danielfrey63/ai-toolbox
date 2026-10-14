@@ -43,13 +43,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from stt import _get_config, _get_config_float
+from config import get as _get_config, number as _get_config_float, PARAMETERS
 
-DEFAULT_AZURE_MODEL = "gpt-6.1-sol"
-DEFAULT_AZURE_API_VERSION = "2024-10-21"
-DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-7"
-DEFAULT_MAX_TOKENS = 4096
-DEFAULT_TIMEOUT = 300.0
+DEFAULT_AZURE_MODEL = PARAMETERS["AZURE_LLM_MODEL"].default
+DEFAULT_AZURE_API_VERSION = PARAMETERS["AZURE_LLM_API_VERSION"].default
+DEFAULT_ANTHROPIC_MODEL = PARAMETERS["AZURE_CLAUDE_MODEL"].default
+DEFAULT_MAX_TOKENS = int(PARAMETERS["AZURE_LLM_MAX_TOKENS"].default)
+DEFAULT_TIMEOUT = float(PARAMETERS["AZURE_LLM_TIMEOUT"].default)
 RETRY_STATUSES = {408, 429, 500, 502, 503, 504}
 MAX_ATTEMPTS = 4
 
@@ -68,7 +68,7 @@ def log(msg: str) -> None:
 class Config:
     provider: str                      # azure | anthropic | none
     endpoint: str = ""
-    key: str = ""
+    key: str = field(default="", repr=False)
     api_version: str = DEFAULT_AZURE_API_VERSION
     models: dict = field(default_factory=dict)   # role -> deployment/model
     max_tokens: int = DEFAULT_MAX_TOKENS
@@ -189,8 +189,16 @@ class Reply:
     seconds: float = 0.0
     raw: dict | None = None
 
+    @property
+    def complete(self) -> bool:
+        data = self.raw or {}
+        reason = (data.get("choices") or [{}])[0].get("finish_reason")
+        return reason not in ("length", "content_filter") and data.get("stop_reason") not in ("max_tokens", "refusal")
+
     def json(self) -> dict:
         """The first JSON object in the reply (fence-tolerant)."""
+        if not self.complete:
+            raise ValueError("Model reply was truncated or filtered")
         text = self.text.strip()
         if text.startswith("```"):
             text = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", text, flags=re.S)
@@ -288,7 +296,8 @@ def chat(messages: list[dict], *, role: str = "text", max_tokens: int | None = N
             log(f"{label or role}: {model} {p_tok} in / {c_tok} out"
                 + (f", {n_images} image(s)" if n_images else "") + f", {dt:.1f}s")
             return Reply(text, model, p_tok, c_tok, dt, data)
-        last = f"HTTP {status}: {body[:300]}"
+        from config import redact
+        last = f"HTTP {status}: {redact(body)[:300]}"
         if status in RETRY_STATUSES and attempt < MAX_ATTEMPTS:
             wait = delay
             try:
@@ -342,6 +351,7 @@ def _probe(image: Path | None) -> int:
         return 2
     print(f"provider: {cfg.describe()}")
     seen = set()
+    failed = False
     for role in ROLES:
         model = cfg.model(role)
         if model in seen:
@@ -353,6 +363,7 @@ def _probe(image: Path | None) -> int:
             print(f"  {role:6} {model}: text ok {r.seconds:.1f}s -> {r.text.strip()!r}")
         except RuntimeError as exc:
             print(f"  {role:6} {model}: text FAIL {exc}")
+            failed = True
             continue
         if image:
             try:
@@ -362,8 +373,9 @@ def _probe(image: Path | None) -> int:
                 print(f"  {role:6} {model}: image ok {r.seconds:.1f}s -> {r.text.strip()[:160]!r}")
             except RuntimeError as exc:
                 print(f"  {role:6} {model}: image FAIL {exc}")
+                failed = True
     print(f"usage: {USAGE.summary()}")
-    return 0
+    return 1 if failed else 0
 
 
 def main() -> int:

@@ -15,7 +15,7 @@ from pathlib import Path
 
 BLOCK_RE = re.compile(r"^\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s+(?:\[([^\]]+)\]\s+)?(.*)$")
 META_RE = re.compile(r"^- \*\*(.+?):\*\*\s*(.*)$")
-FRAME_RE = re.compile(r"^- `(.+?)` \(t=(\d{1,2}:\d{2}(?::\d{2})?)\) \[(REG|CUT)\]")
+FRAME_RE = re.compile(r"^- `(.+?)` \(t=(\d{1,2}:\d{2}(?::\d{2})?)\)(?: \[(REG|CUT)\])?")
 
 # Placeholder line run.py writes into the report stub; whoever writes the report
 # (chat agent or report.py) replaces it with the sections it names.
@@ -29,12 +29,12 @@ def resolve_base(arg: str | Path) -> Path:
     suffixes so `x.transcript.md`, `x.md`, `x.mp4` and `x` all map to `x`."""
     p = Path(arg).expanduser()
     name = p.name
-    for suffix in (".transcript-kompakt.md", ".transcript.md", ".protocol.md", ".speakers.md",
+    for suffix in (".review.md", ".state.json", ".agent.json", ".run.json", ".publish.json", ".publish-preview.xml", ".speaker-source.json", ".transcript-kompakt.md", ".transcript.md", ".protocol.md", ".speakers.md",
                    ".links.md", ".crosscheck.md", ".analysis.json", ".frames.json",
-                   ".illustrations.spec.json", ".segments.json", ".turns.json", ".ocr.json",
+                   ".illustrations.spec.json", ".segments.meta.json", ".kompakt.json", ".segments.json", ".turns.json", ".ocr.json",
                    ".original.vtt", ".vtt", ".md", ".mp4", ".mkv", ".mov", ".webm", ".m4a", ".mp3",
-                   ".wav"):
-        if name.endswith(suffix):
+                   ".wav", ".flac", ".ogg", ".aac", ".opus"):
+        if name.lower().endswith(suffix):
             name = name[: -len(suffix)]
             break
     return p.with_name(name)
@@ -178,7 +178,7 @@ def read_protocol(path: Path) -> dict:
             out.setdefault(m.group(1), m.group(2))
         f = FRAME_RE.match(raw.strip())
         if f:
-            out["frames"].append({"path": f.group(1), "ts": f.group(2), "kind": f.group(3)})
+            out["frames"].append({"path": f.group(1), "ts": f.group(2), "kind": f.group(3) or "REG"})
     if "## Resources" in text:
         out["resources"] = text.split("## Resources", 1)[1].split("\n---", 1)[0].strip()
     return out
@@ -311,7 +311,8 @@ def read_json(path: Path) -> dict | list | None:
 
 
 def write_json(path: Path, obj) -> None:
-    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    from state import write_json as atomic_json
+    atomic_json(path, obj)
 
 
 def language_rules(lang: str | None) -> str:

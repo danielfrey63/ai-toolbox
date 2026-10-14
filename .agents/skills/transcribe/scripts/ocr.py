@@ -236,7 +236,8 @@ def pick_accel() -> str:
     it needs no driver setup and read a 1080p frame in 1.5 s against 5.9 s
     on CPU, and stays on CPU elsewhere - CUDA needs matching cuDNN
     libraries and is opt-in until it has been seen working."""
-    want = (os.environ.get("TRANSCRIBE_OCR_ACCEL") or "auto").strip().lower()
+    from config import get
+    want = (get("TRANSCRIBE_OCR_ACCEL") or "auto").strip().lower()
     if want in ("cpu", "dml", "cuda"):
         return want
     return "dml" if sys.platform == "win32" else "cpu"

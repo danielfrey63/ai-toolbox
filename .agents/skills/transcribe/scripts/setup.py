@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import datetime
 import functools
+import getpass
 import json
 import os
 import platform
@@ -33,10 +34,12 @@ import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
+import config
+from state import write as atomic_write
 
 
 REQUIRED_BINARIES = ["ffmpeg", "ffprobe", "yt-dlp"]
-CONFIG_DIR = Path.home() / ".config" / "transcribe"
+CONFIG_DIR = config.user_dir()
 CONFIG_FILE = CONFIG_DIR / ".env"
 
 # Single source of truth for Windows-platform branches. Anywhere else in the
@@ -47,7 +50,7 @@ IS_WINDOWS = platform.system() == "Windows"
 # Standalone-binary install location. Lives outside .config because these are
 # binaries (chmod +x on Unix, .exe on Windows), not config. Same directory on
 # both platforms so the path scripts hand to subprocess is trivially portable.
-TRANSCRIBE_BIN_DIR = Path.home() / ".transcribe" / "bin"
+TRANSCRIBE_BIN_DIR = config.bin_dir()
 
 # yt-dlp ages badly: sites change their extraction surface constantly, and a
 # build older than a couple of months reliably starts failing on YouTube
@@ -139,26 +142,8 @@ DENO_URLS = {
     "macos-amd64": DENO_BASE + "deno-x86_64-apple-darwin.zip",
     "macos-arm64": DENO_BASE + "deno-aarch64-apple-darwin.zip",
 }
-# The .env template is a real file at the repo / skill root, not an embedded
-# string - one canonical source, browsable in the repo, shipped in the skill
-# bundle via `git archive`. scripts/ is one level below the root.
-ENV_EXAMPLE_PATH = Path(__file__).resolve().parent.parent / ".env.example"
 
 
-def _env_template() -> str:
-    """Return the .env scaffold text, read from .env.example.
-
-    Raises SystemExit with an actionable message if the file is missing -
-    that only happens on a broken/partial install, and a stale embedded
-    fallback would just mask it.
-    """
-    try:
-        return ENV_EXAMPLE_PATH.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise SystemExit(
-            f"[setup] template not found: {ENV_EXAMPLE_PATH} ({exc}). "
-            "The skill install looks incomplete - reinstall it."
-        )
 
 
 def _exe_suffix() -> str:
@@ -668,30 +653,15 @@ def _check_file_permissions(path: Path) -> None:
 
 
 def _read_env_key(name: str) -> str | None:
-    value = os.environ.get(name)
-    if value and value.strip():
-        return value.strip()
-    if not CONFIG_FILE.exists():
-        return None
     _check_file_permissions(CONFIG_FILE)
-    try:
-        for line in CONFIG_FILE.read_text(encoding="utf-8", errors="ignore").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, raw = line.partition("=")
-            if key.strip() != name:
-                continue
-            raw = raw.strip()
-            if len(raw) >= 2 and raw[0] in ('"', "'") and raw[-1] == raw[0]:
-                raw = raw[1:-1]
-            return raw or None
-    except OSError:
-        return None
-    return None
+    return config.get(name)
 
 
 def _have_api_key() -> tuple[bool, str | None]:
+    if _read_env_key("AZURE_TRANSCRIBE_DIARIZE_URL") and _read_env_key("AZURE_TRANSCRIBE_DIARIZE_KEY"):
+        return True, "azure-diarize"
+    if _read_env_key("ASSEMBLYAI_API_KEY"):
+        return True, "assemblyai"
     if _read_env_key("GROQ_API_KEY"):
         return True, "groq"
     if _read_env_key("OPENAI_API_KEY"):
@@ -717,7 +687,7 @@ def _upsert_env_value(name: str, value: str) -> None:
             break
     if not found:
         lines.append(f"{name}={value}")
-    CONFIG_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    atomic_write(CONFIG_FILE, "\n".join(lines) + "\n", secret=True)
     try:
         CONFIG_FILE.chmod(0o600)
     except OSError:
@@ -730,7 +700,7 @@ def _prompt_for_key(name: str, label: str, signup_url: str) -> str | None:
     print(f"    {label}")
     print(f"    sign up: {signup_url}")
     try:
-        value = input("    paste key (or Enter to skip): ").strip()
+        value = getpass.getpass("    paste key (or Enter to skip): ").strip()
     except (EOFError, KeyboardInterrupt):
         print("")
         return None
@@ -849,7 +819,7 @@ def _scaffold_env() -> bool:
     if CONFIG_FILE.exists():
         return False
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(_env_template(), encoding="utf-8")
+    atomic_write(CONFIG_FILE, config.template(), secret=True)
     try:
         CONFIG_FILE.chmod(0o600)
     except OSError:
@@ -857,30 +827,6 @@ def _scaffold_env() -> bool:
     return True
 
 
-def _write_setup_complete() -> None:
-    """Idempotently append SETUP_COMPLETE=true to .env.
-
-    Used only after a fully successful install (deps + key). Future sessions
-    detect this marker to skip wizard-style UI and stay silent.
-    """
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    existing = ""
-    if CONFIG_FILE.exists():
-        existing = CONFIG_FILE.read_text(encoding="utf-8", errors="ignore")
-        for line in existing.splitlines():
-            if line.strip().startswith("SETUP_COMPLETE="):
-                return
-        if existing and not existing.endswith("\n"):
-            existing += "\n"
-        CONFIG_FILE.write_text(existing + "SETUP_COMPLETE=true\n", encoding="utf-8")
-    else:
-        CONFIG_FILE.write_text(
-            _env_template() + "\nSETUP_COMPLETE=true\n", encoding="utf-8"
-        )
-    try:
-        CONFIG_FILE.chmod(0o600)
-    except OSError:
-        pass
 
 
 def _brew_pkg(missing: list[str]) -> list[str]:
@@ -1219,6 +1165,7 @@ def run_venv_worker(script_name: str, args: list[str],
     """
     worker = Path(__file__).resolve().parent / script_name
     env = dict(os.environ)
+    env.update(config.worker_env())
     if env_extra:
         env.update(env_extra)
     result = subprocess.run(
@@ -1468,7 +1415,7 @@ def _auto_provision_local_venv() -> None:
         )
 
 
-def cmd_install() -> int:
+def cmd_install(non_interactive: bool = False) -> int:
     missing = _check_binaries()
     installed_deps = False
     if missing:
@@ -1535,13 +1482,13 @@ def cmd_install() -> int:
 
     # Interactive prompt path - TTY users get input() prompts; CI/non-TTY
     # users fall through silently to the existing "edit the file" hint below.
-    _interactive_keys_prompt()
+    if not non_interactive:
+        _interactive_keys_prompt()
 
     has_key, backend = _have_api_key()
     # Local-first: transcription always works via whisper-local once the
     # binaries are present (the managed venv self-provisions on first use),
     # so setup is "ready" with no cloud key. Cloud keys are optional upgrades.
-    _write_setup_complete()
     if has_key:
         print(f"[setup] ready. transcription: {backend} (cloud) + whisper-local on-device fallback.")
     else:
@@ -1552,13 +1499,16 @@ def cmd_install() -> int:
             print("[setup] ready. on-device whisper-local provisioned - no key "
                   "needed, nothing leaves the machine.")
         else:
-            print("[setup] ready. transcription runs on-device via whisper-local - "
-                  "the managed venv self-provisions on the first /transcribe run.")
+            print("[setup] local environment is not ready; run setup.py --venv", file=sys.stderr)
+            return 3
         print(f"  Optional cloud upgrades - edit {CONFIG_FILE}:")
         print("    GROQ_API_KEY / OPENAI_API_KEY   (faster Whisper via cloud)")
     if installed_deps:
         print("[setup] installed dependencies; /transcribe is fully set up.")
     _print_diarize_status()
+    if _check_binaries() or not (_have_api_key()[0] or venv_status()["ready"]):
+        return 3
+    _upsert_env_value("SETUP_COMPLETE", "true")
     return 0
 
 
@@ -1629,6 +1579,7 @@ Commands (one at a time; no command = the interactive installer):
   --skip-diarize      stop --check from suggesting diarization keys
 
 Flags:
+  --non-interactive   never prompt for keys; report missing prerequisites
   --force             with --install-binaries / --venv: redo the install even
                       when the target already resolves (the escape hatch for a
                       stale or broken copy on PATH)
@@ -1667,8 +1618,10 @@ def main() -> int:
     """
     args = sys.argv[1:]
     if "-h" in args or "--help" in args:
-        sys.stderr.write(USAGE)
+        print(USAGE)
         return 0
+    non_interactive = "--non-interactive" in args
+    args = [a for a in args if a != "--non-interactive"]
     force = "--force" in args
     commands = [a for a in args if a != "--force"]
     unknown = [a for a in commands if a not in COMMANDS]
@@ -1689,7 +1642,7 @@ def main() -> int:
             "[setup] --force applies to --install-binaries / --venv; the "
             "interactive installer has nothing to force. Running it normally.\n"
         )
-    return cmd_install()
+    return cmd_install(non_interactive=non_interactive)
 
 
 if __name__ == "__main__":

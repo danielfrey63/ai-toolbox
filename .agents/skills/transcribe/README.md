@@ -1,316 +1,67 @@
-# /transcribe
+# Transcribe
 
-**Give Claude the ability to transcribe – and watch – any video or audio file.**
+Transcribe verarbeitet Audio- und Videoaufnahmen, erkennt Sprecher und erstellt Berichte mit Zeitstempeln und optionalen Bildausschnitten. Die lokale Medienverarbeitung funktioniert ohne Cloud-Key; eine Harness oder ein konfiguriertes Modell übernimmt die Auswertung.
 
-`/transcribe` is a skill + Claude Code plugin maintained as part of the [AI-Toolbox](https://github.com/danielfrey63/ai-toolbox), at `.agents/skills/transcribe/`. See [Install](#install) below for Claude Code, Codex and claude.ai (web).
+**Installation für Menschen und Harnesses: [INSTALL.md](INSTALL.md).** Die Anleitung gilt im eigenständigen Repository, im Toolbox-Unterordner und im Skill-Bundle. Der Skill-Ordner enthält immer `transcribe.py` und `SKILL.md`.
 
-Zero config to start – `yt-dlp` and `ffmpeg` install on first run via `brew` on macOS (Linux/Windows auto-download standalone binaries). Captions cover most public videos for free. When a video has no captions, transcription runs **fully on-device by default** (faster-whisper in a managed venv, GPU auto-detected) – no API key required, nothing leaves your machine. Cloud backends are an optional upgrade, not a prerequisite.
+## Schnellstart
 
----
+Im Skill-Ordner; unter macOS/Linux gegebenenfalls `python3` verwenden:
 
-Claude can read a webpage, run a script, browse a repo. What it can't do, out of the box, is *watch a video*. You paste a YouTube link and it has to either guess from the title or pull a transcript that's missing 90% of what's on screen.
-
-With `/transcribe` you can paste a URL or a local path, ask a question, and Claude downloads the video, extracts frames at an auto-scaled rate, pulls a timestamped transcript (free captions when available, Whisper API as fallback), and `Read`s every frame as an image. By the time it answers, it has *seen* the video and *heard* the audio.
-
-```
-/transcribe https://youtu.be/dQw4w9WgXcQ what happens at the 30 second mark?
+```text
+python transcribe.py install --profile local --non-interactive
+python transcribe.py doctor --profile local --json
+python transcribe.py run "aufnahme.m4a" --local --no-diarize --analysis harness --json
 ```
 
-## Why this exists
+`--analysis harness` liefert Begleitdateien zur Auswertung durch den aufrufenden Agenten. `--analysis none` endet nach der Medienaufbereitung. Für automatische Berichtserstellung einen geeigneten Modell-Endpunkt konfigurieren, Profil `headless` prüfen und `--analysis model` verwenden.
 
-I built this because I'm constantly using video to keep up with content. If I see a YouTube video that's blowing up, I want to know how the creator structured the hook – what's on screen in the first 3 seconds, what they said, why it worked. That used to mean watching it myself with a notepad. Now I just paste the URL and ask.
+## CLI
 
-The other half is summarization. Most YouTube videos don't deserve 20 minutes of my attention. I hand the URL to Claude, it pulls the transcript, and tells me what actually happened. If the visual matters, frames come along too. If it's a podcast or a talking head, transcript is enough.
+| Befehl | Zweck |
+|---|---|
+| `install --profile … --non-interactive` | Gewünschte Laufzeit herstellen und nachprüfen |
+| `doctor --profile … --json` | Voraussetzungen ohne Installation prüfen |
+| `config show --explain` | Effektive Werte und Herkunft; Keys nur gesetzt/nicht gesetzt |
+| `run <source> --plan --json` | Berechnung und Wiederverwendung erklären |
+| `run <source> --json` | Verarbeiten oder fortsetzen |
+| `status <base> --json` | Gespeicherte Stufenergebnisse lesen |
+| `review <base> --check` | Menschliche Freigaben prüfen |
+| `publish <base> --dry-run` | Confluence-Änderungen planen und lokale Vorschau schreiben |
+| `cleanup` | Den Launcher dieses Checkouts entfernen |
 
-Claude is great at reading and synthesizing – but until now, video was the one input I couldn't hand it. Pasting a YouTube link got you nothing useful. `/transcribe` closes that gap.
+`--help` zeigt die Befehle. `run --help-all` enthält fortgeschrittene Medienoptionen. Bestehende Aufrufe der Fachskripte bleiben möglich.
 
-## What people actually use it for
+## Konfiguration und Datenfluss
 
-**Analyze someone else's content.** `/transcribe https://youtu.be/<viral-video> what hook did they open with?` Claude looks at the first frames, reads the opening transcript, breaks down the structure. Same for ad creative, competitor launches, podcast intros, anything where the *how* matters as much as the *what*.
+[Alle Parameter](references/parameters.md) und `.env.example` werden aus `scripts/config.py` erzeugt. Benutzerkonfiguration: `~/.config/transcribe/.env`; eine andere Datei wird mit `--config` ausdrücklich gewählt. Prozessvariablen haben Vorrang. Das Arbeitsverzeichnis wird nicht nach Keys durchsucht. ML und optionale Publikation verwenden isolierte Umgebungen; der Host-Interpreter bleibt unverändert.
 
-**Diagnose a bug from a video.** Someone sends you a screen recording of something broken. `/transcribe bug-repro.mov what's going wrong?` Claude watches the recording, finds the frame where the issue appears, describes what's on screen, often catches the cause without you ever opening the file.
+`--local` bindet Transkription und Sprechertrennung an lokale Backends. Ohne dieses Flag können konfigurierte Cloud-Anbieter als Fallback verwendet werden. `--analysis model` sendet Text und gegebenenfalls Bilder an das Analysemodell, auch bei lokaler Transkription. `--redact` schwärzt fertige Ausschnitte; Quellbilder werden für die Modellauswertung verwendet.
 
-**Summarize a video.** `/transcribe https://youtu.be/<long-thing> summarize this` does the obvious thing – pulls the structure, the key moments, what was actually said and shown. Faster than watching at 2x.
+## Ergebnisse und Korrekturen
 
-**Transcribe a meeting recording or voice memo.** `/transcribe meeting.m4a` works on pure audio – the frame stages skip automatically, and the default pipeline (local Whisper + local speaker diarization) turns a 41-minute recording into a speaker-labeled, timestamped transcript plus a condensed editorial version, without a single byte leaving your machine. Built for confidential recordings.
+Die JSON-Ausgabe nennt die tatsächlichen Pfade für Transkript, Protokoll, Bericht und Review. Je nach Inhalt kommen Sprecherdatei, Kompaktfassung, OCR-Referenzen und Illustrationen dazu. URL-Ergebnisse liegen unter `./transcribe/`; ein Index ermöglicht Wiederaufnahme.
 
-## How it works
+Sprecher und Wortmeldungen in `.speakers.md` korrigieren und denselben Befehl erneut ausführen. `--fresh` erneuert STT und Sprechertrennung, `--rerun` die Medienaufbereitung, `--force` die Modell-Stufen. Fehlgeschlagene Bild-Batches und Kapitel werden separat fortgesetzt. Vor einer Publikation prüft ein Mensch `.review.md`; geänderte Artefakte setzen Freigaben zurück.
 
-Five stages. The visual stage is skipped automatically for audio-only sources; everything else runs the same.
+## Harness und Plugin
 
-| Stage | What happens |
-|-------|--------------|
-| **1. Input** | You hand it a source (video/audio, URL or local path) and an optional question. |
-| **2. Acquire** | yt-dlp downloads URLs (or local files are probed in place); audio-only sources skip the visual stage. |
-| **3. See** *(video only)* | Scene-cut detection + gap-filled frame sampling, auto-chunked for long videos. |
-| **4. Hear** | Transcription → diarization → turn-merge → speaker-naming – four distinct sub-steps. |
-| **5. Answer & persist** | Claude reads frames + transcript + resources, answers grounded in them, and saves a reusable report. |
+Harnesses laden [SKILL.md](SKILL.md) und finden dort direkt die Installationsanleitung. Die CLI ist unabhängig vom Skill-Client. Claude Code kann den Skill-Ordner als Marketplace registrieren:
 
-### 1. Input
-
-- A **source**: a URL (anything yt-dlp supports – YouTube, Loom, TikTok, X, Instagram, plus a few hundred more) or a local path – video (`.mp4`, `.mov`, `.mkv`, `.webm`) or **pure audio** (`.m4a`, `.mp3`, `.wav`). For audio, stage 3 is skipped automatically.
-- An optional **question**. With one, Claude tailors the answer to it; without one, you get a structured Summary + Analysis.
-
-### 2. Acquire
-
-- **URLs** – `yt-dlp` downloads into a temp working directory and grabs the description (for the resource scan) plus native captions when the platform has them.
-- **Local files** – no download; probed in place with `ffprobe`. The presence of a video stream (`has_video`) decides whether stage 3 runs at all.
-
-### 3. See – frames *(video only)*
-
-- **Scene cuts** – an `scdet` pass scores every frame's pixel-difference; a knee-point heuristic picks a per-video threshold (no static cut-off). Each cut becomes one frame after a settle-delay (default 1.0 s) so transitions / dialogs finish rendering. `--no-scene`, `--scene-threshold F`.
-- **Gap-filled sampling** – a duration-aware budget (≤30s → ~30 frames … 3-10min → ~80) is distributed into the gaps *between* cuts rather than at uniform intervals, so cut-dense regions don't waste budget and long uncovered spans get coverage. 512px JPEGs; `--resolution 1024` for on-screen text.
-- **Auto-chunk** – videos > 10 min split into ~10-min chunks, each with the dense focused budget. `--no-chunk` reverts to sparse single-pass; `--start`/`--end` zeroes in on one section.
-- **On-screen references** – cut frames and visually changed regular frames are re-extracted at native resolution and read by RapidOCR (isolated `uv` env). URLs, wiki page IDs, ticket keys, hosts and share paths are written to `<base>.links.md` with the `[MM:SS]` they were seen at; low-confidence rows are marked `(?)` for a targeted look at the frame. Raw OCR text is cached in `<base>.ocr.json`. `--no-ocr`, `--ocr-max-frames N`, `--ocr-min-score F`.
-
-### 4. Hear – transcript
-
-Four separate sub-steps, in order:
-
-- **Transcription** – native captions first (`yt-dlp`, free, covers most public videos). Otherwise a **local-first STT cascade** over the extracted mono 16 kHz audio, each failure falling through to the next: **whisper-local** (DEFAULT – faster-whisper `large-v3` on CUDA / `medium` int8 on CPU, in the managed venv; no key, on-device) → **Azure `gpt-4o-transcribe-diarize`** (private tenant) → Groq `whisper-large-v3` → OpenAI `whisper-1`. `--whisper <backend>` pins one (no cascade). Long cloud audio auto-splits + stitches onto one timeline; whisper-local streams arbitrary length natively.
-- **Diarization** ("who spoke when") – **ON by default**, local first: pyannote.audio in the managed venv (HF token) → pyannote.ai → AssemblyAI; failures cascade between the configured pyannote variants. pyannote emits speaker **turns** (time ranges) that the next step aligns to the transcript; AssemblyAI and Azure instead deliver speakers *inline* with the transcription. `--no-diarize` turns it off; `--diarize <backend>` pins one.
-- **Turn-merge** (readability, pure Python – *not* the same thing as diarization) – consecutive segments by the *same* speaker collapse into one block, so the transcript reads `[MM:SS] [Speaker] <the whole turn>` instead of one line per ~2-second segment. Non-diarized transcripts keep their per-segment granularity (the frame-to-transcript alignment relies on it).
-- **Speaker-naming** (Claude, during analysis – the one LLM step here) – anonymous labels (`[A]`, `[SPEAKER_00]`) are substituted with canonical first names (`[A]` → `[Urs]`) from address-pattern + frame-avatar evidence; for audio-only sources, role/content evidence takes the place of frames. Labels that can't be pinned with confidence stay as bare letters.
-
-### 5. Answer & persist
-
-- **Resources** – every `https://` link in the description + transcript is deduped, normalized (tracking params stripped), and grouped (Projects / Docs / Articles / Videos / Social / Other), each annotated with its origin (`description` or `transcript@MM:SS`).
-- **Hand-off & answer** – frames (tagged `[REG]` gap-filled / `[CUT]` scene-cut) + transcript + resources go to Claude; it `Read`s every frame as an image and answers grounded in what's actually on screen and in the audio – not the title or description.
-- **Report** – three companion files next to local sources (`test.mp4` → `test.{md,protocol.md,transcript.md}`) or under `./transcribe/<YYYY-MM-DD>-<slug>/` for URLs; the `.md` carries Summary + Analysis, `.protocol.md` the metadata + frame list, `.transcript.md` the timestamped (and speaker-labeled) transcript. Diarized runs get a fourth `transcript-kompakt.md` – editorially condensed: one polished block per statement, STT garbles fixed, fillers dropped, grouped by topic – and a `speakers.md`: the label-to-name mapping, pre-filled by the script (talk time per label, participants seen on screen / in captions / in `<name>.participants.txt` or `transcribe-participants.txt`, address hits, caption-voice alignment), completed by the model, corrected by the user, and read by every re-run (`speakers.py --apply <base>` substitutes the names into transcript + VTT without a re-run). `--save-md PATH`, `--no-save-md`.
-- **Key illustrations** (Claude picks, `scripts/illustrate.py` cuts) – for video sources, Claude flags the frames that *are* the content (architecture diagrams, charts, data-flow slides) with a region box; the script re-extracts those moments at native resolution, crops to the region, trims the surrounding slide chrome (Pillow margin-detect via `uv run --with pillow`, graceful fallback), dedups repeated slides, and writes `<base>.illustrations/*.png` + `manifest.json`. The crops get embedded inline in the report and surfaced as images in chat. Skipped for audio-only / talking-head sources.
-- **Idempotent intermediates** – raw STT segments + diarization turns persist as `<base>.segments.json` / `.turns.json`; reprocessing the same source resumes in ~1 s (skips stage 4's STT + diarization). `--fresh` forces a clean re-run.
-- **Cleanup** – the temp work_dir is removed; the saved companions (report + intermediates) persist.
-
-## Frame budget – why it matters
-
-Token cost is dominated by frames. Every frame is an image; image tokens add up fast. The script's auto-fps logic exists so you don't blow your context budget on a sparse scan of a 30-minute video that would have been better answered by a focused 30-second window.
-
-| Duration | Default frame budget | What you get |
-|----------|---------------------|--------------|
-| ≤30 s | ~30 frames | Dense – basically every key moment |
-| 30 s - 1 min | ~40 frames | Still dense |
-| 1 - 3 min | ~60 frames | Comfortable |
-| 3 - 10 min | ~80 frames | Sparse but workable |
-| > 10 min | **auto-chunked**: `ceil(duration/10min)` × ~80 frames each | Dense per-chunk coverage |
-
-A 60-min video becomes 6 chunks × 80 frames = ~480 regular frames (plus scene-cut frames on top). More image tokens than a single sparse pass, but per-chunk coverage comparable to dedicated focused runs. Pass `--no-chunk` to revert to single-pass sparse (100 frames spread thinly), or `--start`/`--end` to zero in on one section.
-
-This budget is the **regular sampling** target per chunk. With scene detection enabled (default), the regular frames are gap-filled around cut timestamps rather than placed at uniform intervals – same total budget, redistributed into the spans not already covered by cut frames. Cut frames are extracted on top with their own cap (`--scene-max-frames`, default 80, global).
-
-When the user names a moment ("around 2:30", "the last 30 seconds", "from 0:45 to 1:00"), pass `--start` / `--end`. Focused mode gets denser per-second budgets, capped at 2 fps. Far more useful than a sparse pass over the whole thing.
-
-## Install
-
-**Windows / VS Code Copilot / team rollout:** The [installation and operations guide](./references/windows-team-rollout.md) (German) covers cloning an approved version, linking it into a project, runtime setup, the chat deployment for `agent.py`, the acceptance test, data protection, updates and rollback. Adapt the SBB-specific operating rules to your own team.
-
-`/transcribe` lives in the [AI-Toolbox](https://github.com/danielfrey63/ai-toolbox) at `.agents/skills/transcribe/`. Clone the toolbox first:
-
-```bash
-git clone https://github.com/danielfrey63/ai-toolbox.git
-```
-
-`<ai-toolbox>` below is the absolute path to that clone.
-
-| Surface | Install |
-|---------|---------|
-| **Claude Code** | `/plugin marketplace add <ai-toolbox>/.agents/skills/transcribe` then `/plugin install transcribe@transcribe` |
-| **Codex** | Symlink the skill into `~/.codex/skills/transcribe` (see below) |
-| **claude.ai** (web) | Build `dist/transcribe.skill` with `scripts/build-skill.sh`, upload it under Settings → Capabilities → Skills |
-| **Other skill clients** | The skill sits on the cross-client `.agents/skills/` path – point the client at it or symlink it |
-| **Command line, GitHub Copilot, cron** | No skill client needed – Python plus a configured chat deployment, see [Command line (headless)](#command-line-headless) |
-
-### Claude Code
-
-`transcribe/` is its own single-plugin marketplace. Register it as a local marketplace and install:
-
-```
-/plugin marketplace add <ai-toolbox>/.agents/skills/transcribe
+```text
+/plugin marketplace add <absolute-skill-directory>
 /plugin install transcribe@transcribe
 ```
 
-After editing the skill, refresh the installed copy with `/plugin marketplace update transcribe` then `/plugin update transcribe@transcribe`.
+Andere Clients installieren oder verknüpfen denselben Ordner in ihren unterstützten Skill-Pfad. Für claude.ai erzeugt `python scripts/build_skill.py` aus dem committeten Stand `dist/transcribe.skill`.
 
-### Codex
+## Weiterführend
 
-Codex discovers skills under `~/.codex/skills/`. Symlink the toolbox copy so it stays in sync:
+- [Installation](INSTALL.md)
+- [Parameterreferenz](references/parameters.md)
+- [Medienoptionen](references/options.md)
+- [Report-Anweisung](references/report-writing.md)
+- [Tests, Caches und Spiegelung](references/maintenance.md)
+- [Windows-Team-Rollout](references/windows-team-rollout.md)
 
-```bash
-ln -s <ai-toolbox>/.agents/skills/transcribe ~/.codex/skills/transcribe
-```
-
-### claude.ai (web)
-
-1. Build the upload bundle: `bash scripts/build-skill.sh` → `dist/transcribe.skill`.
-2. Go to Settings → Capabilities → Skills.
-3. Click `+` and drop the file in.
-
-Enable "Code execution and file creation" under Capabilities first – the skill shells out to `ffmpeg` and `yt-dlp`, so it won't run without it.
-
-### Command line (headless)
-
-The whole pipeline runs without Claude or any other chat agent. `run.py` does the local stages (frames, OCR, Whisper, diarization); `agent.py` does the judgement stages – speaker naming, compact transcript, illustrations, report – on a chat deployment you configure. This is the path for GitHub Copilot, Codex, scheduled jobs and tenants where only an approved model may see the data.
-
-1. Add the chat deployment to `~/.config/transcribe/.env` (endpoint is the resource base, the model is the deployment name; all keys in `.env.example`):
-
-   ```
-   AZURE_LLM_ENDPOINT=https://<resource>.openai.azure.com
-   AZURE_LLM_KEY=<key>
-   AZURE_LLM_MODEL=gpt-6.1-sol
-   ```
-
-2. Probe the deployment once, then run the pipeline (Windows: `python`, macOS/Linux: `python3`; `$skill` is `<ai-toolbox>/.agents/skills/transcribe`):
-
-   ```bash
-   python "$skill/scripts/llm.py" --probe --image some.png             # deployment answers text and images?
-   python "$skill/scripts/pipeline.py" "<recording.mp4>" --language de --local
-   ```
-
-   `pipeline.py` runs `setup.py --check`, `run.py` (local stages) and `agent.py` (agent stages) in one go. `--local` pins whisper-local and pyannote-local, so no audio leaves the machine. Options it does not know go to `run.py`. A URL works too. A second call skips everything already done, so after correcting `speakers.md` the same command continues. Exit codes: 0 done, 1 `run.py` failed, 2 setup incomplete, 3 no chat deployment, 4 stopped at the speaker gate.
-
-3. Read the results next to the recording: `<base>.md` (report with a `Datenfluss` line naming the model and what it received), `<base>.transcript-kompakt.md`, `<base>.speakers.md`, `<base>.illustrations/`, and `<base>.review.md` – the list of points a person checks before anything is published.
-
-`pipeline.py` and `agent.py` options: `--stop-at-speakers` ends after the speaker stage so `speakers.md` can be corrected first (the next call continues), `--only speakers,kompakt,illustrate,report` runs a subset (`agent.py` only), `--force` redoes finished stages but keeps the names in `speakers.md` (`--refill-speakers` lets the model overwrite them, `agent.py` only), a plain call after correcting `speakers.md` applies the names and rebuilds kompakt and report (`<base>.agent.json` records the transcript they were built from), `--redact` blacks out person-name lists in the crops (off by default; `TRANSCRIBE_REDACT=1` makes it the default; on a finished run it only adds the redaction boxes and re-renders the crops, selection and captions stay), `--no-redact` removes it again, `--no-frames` skips every image call. Each stage is idempotent and can also be called on its own (`speakers_fill.py`, `kompakt.py`, `illustrate_agent.py`, `report.py`). Every script prints its full help with options, examples and exit codes for `-h`, `--help` or a call without arguments; only `setup.py` (installer) and `llm.py` (configuration status) give the bare call its own meaning.
-
-4. Publish after the review (optional): tick the boxes in `<base>.review.md`, then `publish.py "<base>" --dry-run` and `publish.py "<base>"`. Each box carries the hash of the artefact it releases; a changed report, crop or `speakers.md` re-opens its box. The target page comes from `--parent ID` or `parent:` in `transcribe-publish.txt` (folder) / `<name>.publish.txt` (recording), the connection from `CONFLUENCE_URL`, `CONFLUENCE_TOKEN` and `CONFLUENCE_VERIFY_TLS` in `~/.config/transcribe/.env`.
-
-For a quick first test take a few minutes of a recording: `pipeline.py "<recording.mp4>" --start 0 --end 5:00`. A full 40-minute meeting takes about ten minutes for the agent stages.
-
-## First run
-
-On the first `/transcribe` call, the skill runs `scripts/setup.py --check`. If `ffmpeg` / `yt-dlp` aren't on your PATH, or no Whisper API key is set, it walks you through fixing it:
-
-- **macOS** – auto-runs `brew install ffmpeg yt-dlp`.
-- **Linux** – prints the exact `apt` / `dnf` / `pipx` commands.
-- **Windows** – prints the `winget` / `pip` commands.
-- **API keys** – scaffolds `~/.config/transcribe/.env` (mode `0600`) from `.env.example` with commented placeholders for every backend: `GROQ_API_KEY` / `OPENAI_API_KEY`, the private Azure `gpt-4o-transcribe-diarize` endpoint, the chat deployment for the headless agent stages, and the speaker-diarization backends. **None of these are required** – the local backends carry transcription (and, with a free `HF_TOKEN`, diarization) on their own.
-- **Managed ML venv** – the local backends (whisper-local, pyannote-local) run as worker subprocesses inside a pinned venv at `~/.config/transcribe/venv/`, provisioned automatically on first use (or explicitly via `setup.py --venv`). GPU is auto-detected (CUDA wheels); your own Python environments are never touched. The pin set lives in `setup.py` (`VENV_PINS`) and the venv self-heals when it changes.
-
-After setup, preflight is silent and `/transcribe` just works. The check is a sub-100ms lookup, so it doesn't slow you down on subsequent runs.
-
-## Bring your own keys
-
-Captions cover the majority of public videos for free. The STT fallback only kicks in when a source genuinely has no caption track – typically local files, TikToks, some Vimeos, and the occasional caption-less YouTube upload – and it works **without any key**: the default is the on-device whisper-local backend. Cloud keys buy you the cascade levels behind it.
-
-| Capability | What you need | Cost |
-|------------|---------------|------|
-| Download + native captions | `yt-dlp` + `ffmpeg` | Free |
-| **Transcription, local (DEFAULT)** | Nothing – managed venv self-provisions on first use (`setup.py --venv` to pre-provision; GPU auto-detected) | Free, fully on-device |
-| Whisper cloud (cascade level 3) | [Groq API key](https://console.groq.com/keys) – `whisper-large-v3` | Cheap, fast |
-| Whisper cloud (cascade level 4) | [OpenAI API key](https://platform.openai.com/api-keys) – `whisper-1` | Standard pricing |
-| Transcription + diarization, private tenant (cascade level 2) | Azure `gpt-4o-transcribe-diarize` deployment URL + key | Your Azure tenant – audio never leaves it |
-| Headless agent stages + speaker reconciliation for long private audio | Azure chat deployment (`AZURE_LLM_ENDPOINT`, `_KEY`, `_MODEL`), or the Anthropic passthrough `AZURE_CLAUDE_URL` + key | Your Azure tenant |
-| Disable transcription entirely | `--no-whisper` | Free, frames-only when no captions |
-| **Speaker diarization, local (DEFAULT)** | [HF_TOKEN](https://huggingface.co/settings/tokens) + license accept on [speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) *and* [segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) – model runs in the managed venv | Free; ~90 s for 41 min audio on GPU |
-| Speaker diarization – pyannote.ai (cascade level 2) | [pyannote.ai key](https://www.pyannote.ai/) – cloud diarization, aligned to the transcript | Cheaper than AssemblyAI, two API calls |
-| Speaker diarization – AssemblyAI (cascade level 3) | [AssemblyAI key](https://www.assemblyai.com/dashboard/api-keys) – `universal-3-pro` + speaker labels | ~$0.37/h, replaces the transcription |
-| Disable diarization | `--no-diarize` | – |
-
-## Usage
-
-```
-/transcribe https://youtu.be/dQw4w9WgXcQ what happens at the 30 second mark?
-/transcribe https://www.tiktok.com/@user/video/123 summarize this
-/transcribe ~/Movies/screen-recording.mp4 when does the UI break?
-/transcribe https://vimeo.com/123 what tools does she mention?
-```
-
-Focused on a specific section – denser frame budget, lower token cost:
-```
-/transcribe https://youtu.be/abc --start 2:15 --end 2:45
-/transcribe video.mp4 --start 50 --end 60
-/transcribe "$URL" --start 1:12:00            # from 1h12m to end
-```
-
-Speaker diarization (who said what) – **on by default** when a backend is configured, local first:
-```
-/transcribe meeting.mp4                           # default: pyannote local > pyannote.ai > AssemblyAI
-/transcribe meeting.m4a                           # audio-only works the same – fully on-device
-/transcribe meeting.mp4 --no-diarize              # plain transcript, no speaker labels
-/transcribe meeting.mp4 --diarize assemblyai      # pin one backend (no cascade, fails loudly)
-```
-
-Other knobs (passed to `scripts/run.py`):
-
-- `--max-frames N` – cap on regular frames per chunk (default 80, hard max 100). In single-chunk modes (focused or `--no-chunk`) this is also the global cap.
-- `--no-chunk` – disable auto-chunking for long videos; one sparse pass instead (100 frames spread thinly).
-- `--diarize [BACKEND]` – speaker diarization, **on by default** (auto mode, local first: `pyannote-local` with HF_TOKEN → `pyannote-api` → `assemblyai`; silently off when nothing is configured; failures cascade to the next configured backend). Explicit backend pins it (no cascade). Output transcript gets `[12:34] [<speaker>] text` lines; Claude then substitutes anonymous labels with canonical first names.
-- `--no-diarize` – disable speaker diarization.
-- `--resolution W` – bump frame width to 1024 px when Claude needs to read on-screen text (slides, terminals, code).
-- `--fps F` – override the auto-fps calculation (still capped at 2 fps).
-- `--no-scene` – disable scene cut detection; falls back to uniform sampling.
-- `--scene-threshold F` – override the auto-tuned scdet threshold (default: knee-point on the score distribution).
-- `--scene-min-gap S` – minimum seconds between consecutive cut frames (default 2.0; de-clusters animation/B-roll bursts).
-- `--scene-max-frames N` – cap on additional cut frames (default 80, applied separately from `--max-frames`).
-- `--no-ocr` – skip the on-screen reference pass; `--ocr-max-frames N` (default 60) caps the frames it reads, `--ocr-min-score F` (default 0.85) sets the confidence under which a reference is marked `(?)` in `<base>.links.md`.
-- `--scene-settle-seconds S` – seconds after a detected cut to wait before extracting (default 1.0). Lets UI transitions render so cut frames don't land on loading-state pixels. Set to 0 to extract right at the cut.
-- `--whisper azure-diarize|groq|openai|whisper-local` – pin a specific transcription backend (no cascade). Default: local-first cascade `whisper-local` → `azure-diarize` → `groq` → `openai`, each failure falling through to the next configured backend.
-- `--no-whisper` – disable transcription entirely; frames only.
-- `--fresh` – ignore persisted `<base>.segments.json` / `.turns.json` and re-transcribe + re-diarize from scratch. The default reuses them, so reprocessing the same source (e.g. to re-clean a transcript or re-render after a tweak) resumes in ~1 s instead of re-running STT + diarization.
-- `--out-dir DIR` – keep working files somewhere specific (default: auto-generated tmp dir). The persisted intermediates live next to the saved report; this flag only affects the ephemeral work dir.
-- `--save-md PATH` – override the auto-save location (defaults: `<video-stem>.md` next to local sources; `./transcribe/<YYYY-MM-DD>-<slug>/<slug>.md` for URL sources).
-- `--no-save-md` – disable auto-save entirely (frames + transcript only in temp work_dir).
-
-## Limits
-
-- **Best per-second accuracy: under 10 minutes.** For longer videos, auto-chunking gives you per-chunk dense coverage (~80 frames each), but image-token cost grows proportionally. Pass `--start`/`--end` to focus on a section, or `--no-chunk` to fall back to sparse single-pass.
-- **Per-chunk cap: 2 fps, 100 frames.** Frame count drives token cost; the script enforces this even when the auto-fps math would imply higher.
-- **Transcription length limits: handled internally.** Long audio auto-splits transparently – Whisper by file size (20 MB chunks), the Azure backend by duration (~600 s chunks; the model caps a single call at ~1500 s) – both with 20 s overlap, stitched back onto one timeline.
-- **AssemblyAI upload limit: 5 GB / 10 h per file.** Effectively unlimited for normal use.
-- **No private platforms.** This skill doesn't log into anything. Public URLs and local files only. If yt-dlp can't reach it without auth, neither can `/transcribe`.
-
-## Structure
-
-```
-.
-├── SKILL.md                 # skill contract – loaded by all three surfaces
-├── scripts/
-│   ├── run.py             # entry point – orchestrates download → frames → transcript → diarize
-│   ├── download.py          # yt-dlp wrapper
-│   ├── frames.py            # ffmpeg frame extraction + scdet + auto-fps + auto-chunk
-│   ├── illustrate.py        # crop key illustrations out of frames (native-res re-extract + margin-trim + dedup)
-│   ├── transcribe.py        # VTT parsing + dedupe + segment formatting
-│   ├── stt.py               # speech-to-text – pluggable backends (whisper-local, Azure transcribe-diarize, Groq/OpenAI Whisper), local-first cascade, auto-split + stitch + speaker reconcile
-│   ├── diarize.py           # pyannote local / pyannote.ai / AssemblyAI backends + transcript alignment
-│   ├── pyannote_worker.py   # diarization worker – runs INSIDE the managed venv
-│   ├── whisper_local_worker.py  # faster-whisper worker – runs INSIDE the managed venv
-│   ├── resources.py         # URL extraction from description + transcript, categorized
-│   ├── setup.py             # preflight + installer + .env scaffolding + managed-venv provisioning
-│   ├── llm.py               # chat client for the agent stages (Azure OpenAI / Anthropic passthrough), --probe
-│   ├── pipeline.py          # one command: setup check → run.py → agent.py
-│   ├── review.py            # review gate: one box per artefact, reset when the artefact changes
-│   ├── publish.py           # Confluence page + attachments + hub row, only through the review gate
-│   ├── cli.py               # shared help convention: -h, --help or no arguments print the full help
-│   ├── agent.py             # headless orchestrator: speakers → kompakt → illustrations → report → review.md
-│   ├── speakers_fill.py     # fills speakers.md, lists contributions filed under another label
-│   ├── grounding.py         # verbatim quote + sentence time per speaker uncertainty, «Hörproben» in speakers.md
-│   ├── kompakt.py           # compact transcript, chapters first, then per-chapter condensing
-│   ├── illustrate_agent.py  # picks frames, sets crop + caption, visual check of the crops
-│   ├── report.py            # frame descriptions + report (Übersicht, Summary, Analysis, Datenfluss)
-│   ├── companions.py        # shared readers for the companion files
-│   └── build-skill.sh       # build dist/transcribe.skill for claude.ai upload
-├── hooks/                   # SessionStart status hook (Claude Code only)
-├── .claude-plugin/          # plugin.json + marketplace.json (Claude Code)
-├── .codex-plugin/           # codex packaging
-└── .github/workflows/       # release.yml – auto-builds transcribe.skill on tag push
-```
-
-## Develop
-
-```bash
-# Build the claude.ai upload bundle:
-bash scripts/build-skill.sh      # → dist/transcribe.skill
-```
-
-Versioning is handled by the AI-Toolbox: `plugin.json`'s `version` is the source of truth, bumped automatically by the toolbox's per-edit and pre-commit hooks. See `git log` for history.
-
-## Credits & license
-
-MIT license.
-
-`/transcribe` began as [**claude-video**](https://github.com/bradautomates/claude-video) by **Bradley Bonanno** ([bradautomates](https://github.com/bradautomates)) – full credit and thanks for the original work. It is now maintained as a fork inside the AI-Toolbox.
-
-Built on `yt-dlp`, `ffmpeg`, and Claude's multimodal `Read` tool. On-device transcription via [faster-whisper](https://github.com/SYSTRAN/faster-whisper), on-device diarization via [pyannote.audio](https://github.com/pyannote/pyannote-audio); cloud cascade via Azure, [Groq](https://groq.com), [OpenAI](https://openai.com), [pyannote.ai](https://www.pyannote.ai/), [AssemblyAI](https://www.assemblyai.com/).
-
----
-
-Part of [github.com/danielfrey63/ai-toolbox](https://github.com/danielfrey63/ai-toolbox) · [LICENSE](LICENSE)
+Lizenz: [MIT](LICENSE).

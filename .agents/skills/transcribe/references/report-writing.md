@@ -2,7 +2,7 @@
 
 Read this file BEFORE writing the report – also when the user asked a specific question, because the full report is always written. It defines the mandatory pre-stage (inventory + consistency check + date identification), the key-illustration extraction, the three report sections, and the exact markdown layout to append to `<base>.md`.
 
-Write everything in the **user's language** (German user → German headers and body; English user → English). The deutsche Begriffe below are anchors for the meaning of each section – translate them, don't transliterate.
+Write the content and subsection titles in the **user's language**. Keep the three machine-readable top-level headings `## Übersicht`, `## Summary`, `## Analysis` unchanged in every language.
 
 The reader uses Summary as the standalone takeaway and Analysis as the deeper synthesis. **Don't duplicate** – Summary is comprehensive-but-flat (thematic bullets covering every named entity and concrete fact); Analysis is selective-and-judgmental (top claims, opinions, audit). A reader who only reads Summary should know everything that was said; a reader who reads both gets the editorial layer on top.
 
@@ -29,6 +29,8 @@ Narrative writing reliably drops entities that the video mentioned only in passi
   - **Frame evidence**: an avatar / participant-list / on-screen name plate confirms the person, AND
   - **Address-pattern evidence**: at least one direct address (`"Andrea, hast du eine Frage?"`) where the previous or next speaker change goes to / comes from this label.
 
+  For audio-only sources, consistent role/content evidence plus at least one direct address also qualifies as high. Caption voice tags may replace frame evidence. The canonical mapping policy is in [interactive.md](interactive.md).
+
   If only one of the two holds, the mapping is **medium-confidence**; if only weak / circumstantial evidence (a single off-hand name, no avatar), it's **low-confidence** – keep the bare letter in the transcript later. Mark medium / low explicitly with `(?)` in the entry so the post-analysis step can tell which labels to leave alone.
 
   **The decision is made in `<base>.speakers.md`, not here.** The script pre-filled that file with talk time per label, the participants it could see (screen name plates, caption voices, `<name>.participants.txt` or `transcribe-participants.txt`), the address hits with the labels around them and any caption-voice alignment. Fill its Name / Confidence / Evidence columns first (see the speaker-mapping step in SKILL.md), then write this Inventar category as a one-line-per-label summary of it. The user corrects the file, not the report – a re-run renders the corrected names everywhere.
@@ -39,7 +41,7 @@ Narrative writing reliably drops entities that the video mentioned only in passi
   - Default: **first name only** (`Andrea`, `Urs`, `Maurice`).
   - On collision (two speakers with the same first name): append the shortest unique surname prefix that disambiguates, with a single space – `Andrea B` vs `Andrea T`. If the first letters also collide, extend by one letter at a time until unique (`Andrea Br` vs `Andrea Bo`). Never include the full surname – first names are what people actually use in conversation; the surname prefix is just a disambiguator.
 
-  Entry format: `[A] = Urs Daschinger – Architekt, Hauptpresenter (Frame cut_001 + Anrede "Urs" [12:34])`. Skip this category entirely if there are no speaker labels in the transcript.
+  Entry format: `[A] = Urs – Architekt, Hauptpresenter (Frame cut_001 + Anrede "Urs" [12:34])`. Skip this category entirely if there are no speaker labels in the transcript.
 - **Fachbereiche / Listen-Aufzählungen** – every "X, Y, Z, ..." enumeration the speaker uses verbatim (these get dropped by narrative summaries; capture them as lists)
 - **Prozesse / Rhythmen** – release cadences, batch cycles, retention intervals with their numbers (`3 grosse Releases pro TFI-Zyklus + monatliche Modelländerungen`)
 - **Akronyme** – every three/four-letter code with its resolution if stated (`RGS – Railway GIS (vermutet, [06:00])`)
@@ -76,14 +78,14 @@ Some frames *are* the content – an architecture diagram, a chart with the key 
 
 **Skip this step entirely when:** the source is audio-only (no frames), `--no-save-md` was used (no persistent dir to write into), or the video is pure talking-head with no diagrams/charts/slides worth extracting. Zero illustrations is a valid outcome – don't manufacture them.
 
-**The spec is the only way an illustration comes into being.** Never crop frames by hand with ffmpeg or Pillow, however quick it looks: a hand-made PNG has no spec, no manifest, no dedup, no SUSPECT check and no way to be regenerated – and it skips the QS list below, which is how a whole set of screen-share crops once shipped with the browser tab bar and the Windows taskbar still on them. If a crop needs something the script cannot do, extend the script (as `redact` was added for user lists) rather than stepping around it.
+**Video crops are always generated from a spec.** Unmodified user-supplied screenshots are the explicit exception described below. Never crop frames by hand with ffmpeg or Pillow, however quick it looks: a hand-made PNG has no spec, no manifest, no dedup, no SUSPECT check and no way to be regenerated – and it skips the QS list below, which is how a whole set of screen-share crops once shipped with the browser tab bar and the Windows taskbar still on them. If a crop needs something the script cannot do, extend the script (as `redact` was added for user lists) rather than stepping around it.
 
 **Screen-share recordings: the content is the app window, never the screen.** A Teams/Zoom share of a browser or desktop app carries chrome that is not content and must stay outside the bbox: the browser's tab bar and address bar (top ~12–14 % of a 1080p frame), the OS taskbar (bottom ~5 %), the meeting client's participant strip or camera tiles (right or bottom ~13 %), window title bars and the meeting toolbar. Start the bbox at the app's content area and let the margin-trim take only uniform borders from there – it will not remove chrome for you. Confluence pages, SQL clients, Delphi masks and Omada dialogs all follow the same rule: page body, editor pane, dialog body.
 
 **Audio-only with user-supplied screenshots.** Meeting recordings are often audio-only, while the user drops screenshots of the shared screen (participant tiles, slides, Confluence pages, chat messages) into the same directory. They replace the missing frame evidence, so treat them like illustrations:
 
-1. **Read every image** in the directory and match it to the transcript window it belongs to (file mtime vs. recording start helps order them).
-2. **Rename to `<base> - <Inhalt>.png`** with `git mv` when tracked (e.g. `20260828-0900 - PM Diskussion - Kandidatenliste.png`). Generic names (`screenshot-01.png`, `image1.png`, `<date> - screenshot-NN.png`) are never kept – the name must say what the picture shows.
+1. **Read the images the user supplied for this recording** and match them to transcript windows. Do not treat every unrelated image in the folder as a source. File mtime alone does not prove a timestamp.
+2. **Keep source filenames.** Use descriptive captions and relative links. Rename only when the user requests it; these images are unmodified source material, not generated crops.
 3. **Embed each image once** where it carries the most weight (Setting und Teilnehmer for participant tiles, the matching Summary `### <Thema>` group otherwise), as `![<Alt>](<<file>>)` plus an italic `*Abb. – <caption>*` line.
 4. **Reference by content, not by number**, in Inventar, Details, Abdeckung and Resources («Rollentabelle-Screenshot», not «Screenshot-03»).
 
@@ -97,7 +99,7 @@ Otherwise, from the frames already read:
 
    So before writing the spec, re-extract your candidates and look at them:
    ```bash
-   python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" --video "<Video file from header>" \
+   python3 "<skill>/scripts/illustrate.py" --video "<Video file from header>" \
      --extract 42 162 218 326 --out-dir "<scratch>/scout"
    ```
    `Read` those PNGs and take the timestamp from the one that actually shows the content. For a region you are still hunting, sweep it with `--extract-range <start> <end> --step 6`. This costs seconds and removes an entire class of re-run loops – it is the regular path for every video with substantive screens, not a fallback.
@@ -110,7 +112,7 @@ Otherwise, from the frames already read:
    `timestamp` is in seconds (the absolute `t=` of the frame). `<base>` is the report base (the `.md` stem from the header's saved-files lines). An optional `"redact": [[x, y, w, h], …]` (same normalized frame coordinates as `bbox`) blacks out regions **before** the crop – user lists with real names, IDs, e-mail addresses in a permissions mask. Say in the caption that the list is redacted. This keeps personal data out of the repo without a hand-edited PNG.
 6. **Run the cropper**, passing the `**Video file:**` path from the report header verbatim:
    ```bash
-   python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" \
+   python3 "<skill>/scripts/illustrate.py" \
      --video "<Video file from header>" \
      --spec "<base>.illustrations.spec.json" \
      --out-dir "<base>.illustrations"
@@ -132,15 +134,15 @@ When the report already exists but has no illustrations (older run, or the step 
 
 ```bash
 # 1. Contact sheets: 1 frame per 30s, tiled 6x5 – find the slide moments
-python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" --video "<video>" --sheet --out-dir "<scratch>/sheets"
+python3 "<skill>/scripts/illustrate.py" --video "<video>" --sheet --out-dir "<scratch>/sheets"
 # prints the tile→timestamp formula; Read the sheets, note candidate times
 
 # 2. Native-res frames at the candidate times – estimate precise bboxes
-python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" --video "<video>" --extract 270 560 840 --out-dir "<scratch>/frames"
+python3 "<skill>/scripts/illustrate.py" --video "<video>" --extract 270 560 840 --out-dir "<scratch>/frames"
 
 # 3. Transcript says minutes 4:46-8:16 discuss topic X but no candidate found?
 #    Sample that window densely and pick the frame where X is fully on screen
-python3 "${CLAUDE_SKILL_DIR}/scripts/illustrate.py" --video "<video>" --extract-range 286 496 --step 10 --out-dir "<scratch>/topic-x"
+python3 "<skill>/scripts/illustrate.py" --video "<video>" --extract-range 286 496 --step 10 --out-dir "<scratch>/topic-x"
 ```
 
 Then continue with the spec + crop steps above. (Do NOT use ffmpeg `drawtext` for timestamp overlays – fontconfig-less builds segfault on it; the printed mapping formula replaces it.)

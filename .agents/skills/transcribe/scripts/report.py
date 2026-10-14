@@ -42,6 +42,7 @@ import llm
 from companions import (REPORT_STUB_NOTE, Paths, fmt_ts, language_rules, read_glossary, read_json, read_protocol, read_speakers,
                         read_transcript, references_from_links, resolve_base, ts_seconds, write_json)
 from version import APP_VERSION
+from state import StageState, stage_key, signature
 
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 METHOD = SKILL_ROOT / "references" / "report-writing.md"
@@ -79,15 +80,25 @@ Constraints that override the methodology where they differ:
 def _thin(items: list, n: int) -> list:
     if len(items) <= n:
         return items
-    step = len(items) / n
-    return [items[int(i * step)] for i in range(n)]
+    if n <= 0:
+        return []
+    if n == 1:
+        return [items[len(items) // 2]]
+    return [items[round(i * (len(items) - 1) / (n - 1))] for i in range(n)]
+
+
+def select_frames(frames: list[dict], limit: int = 48) -> list[dict]:
+    if limit < 1:
+        raise ValueError("Frame limit must be positive")
+    cuts = [f for f in frames if f["kind"] == "CUT"]
+    regs = [f for f in frames if f["kind"] == "REG"]
+    pick = _thin(cuts, limit if not regs else max(1, limit * 2 // 3))
+    pick += _thin(regs, limit - len(pick))
+    return sorted(pick, key=lambda f: ts_seconds(f["ts"]))
 
 
 def frame_pass(p: Paths, proto: dict, max_frames: int, language: str | None, force: bool) -> list[dict]:
     cached = read_json(p.frames_json)
-    if isinstance(cached, dict) and cached.get("frames") and not force:
-        print(f"[report] frame descriptions cached ({len(cached['frames'])}) - reuse", file=sys.stderr)
-        return cached["frames"]
     frames = [f for f in proto.get("frames", []) if Path(f["path"]).is_file()]
     native = native_frames(p)
     if native and (not read_transcript(p.transcript) or len(frames) == 0):
@@ -97,16 +108,16 @@ def frame_pass(p: Paths, proto: dict, max_frames: int, language: str | None, for
               file=sys.stderr)
         frames = native
     if not frames:
+        if isinstance(cached, dict) and cached.get("complete") and not force:
+            return cached.get("frames", [])
         print("[report] no frame files on disk (work dir gone or audio-only) - frame pass skipped",
               file=sys.stderr)
         return []
-    cuts = [f for f in frames if f["kind"] == "CUT"]
-    regs = [f for f in frames if f["kind"] == "REG"]
-    pick = cuts[:max_frames]
-    if len(pick) < max_frames:
-        pick += _thin(regs, max_frames - len(pick))
-    pick.sort(key=lambda f: ts_seconds(f["ts"]))
+    pick = select_frames(frames, max_frames)
     out: list[dict] = []
+    cached_batches = cached.get("batches", {}) if isinstance(cached, dict) and not force else {}
+    batches = {}
+    failed = []
     # Native frames carry far more legible text; fewer per call keeps the reply
     # inside the completion budget (a truncated JSON reply loses the whole batch).
     is_native = bool(pick) and "ocr_t" in Path(pick[0]["path"]).name
@@ -117,6 +128,14 @@ def frame_pass(p: Paths, proto: dict, max_frames: int, language: str | None, for
         prompt = (f"{language_rules(language)}\nThe images are attached in this order:\n{listing}\n"
                   "Describe every frame, keep the ts values as given. Keep «content» under 120 words per "
                   "frame: names, titles, identifiers and key values verbatim, no full code listings.")
+        cfg = llm.load_config()
+        key = signature([Path(f["path"]) for f in batch],
+                        {"prompt": prompt, "system": FRAME_SYSTEM, "model": cfg.model("vision"),
+                         "provider": cfg.provider, "endpoint": cfg.endpoint, "api_version": cfg.api_version})
+        if key in cached_batches:
+            batches[key] = cached_batches[key]
+            out += batches[key]
+            continue
         try:
             reply = llm.ask(prompt, system=FRAME_SYSTEM, images=[f["path"] for f in batch], role="vision",
                             max_tokens=8000, json_mode=True, label=f"frames {i + 1}-{i + len(batch)}")
@@ -124,17 +143,24 @@ def frame_pass(p: Paths, proto: dict, max_frames: int, language: str | None, for
             if finish == "length":
                 raise ValueError("reply truncated at the completion limit")
             got = reply.json().get("frames", [])
-            if not got:
-                raise ValueError(f"no frames in reply: {reply.text[:160]!r}")
-            out += [dict(d, kind=next((f["kind"] for f in batch if f["ts"] == d.get("ts")), "")) for d in got]
+            if len(got) != len(batch) or {d.get("ts") for d in got} != {f["ts"] for f in batch}:
+                raise ValueError("frame reply does not cover every requested timestamp")
+            batches[key] = [dict(d, kind=next(f["kind"] for f in batch if f["ts"] == d["ts"])) for d in got]
+            out += batches[key]
+            write_json(p.frames_json, {"complete": False, "frames": out, "batches": {**cached_batches, **batches}})
         except (RuntimeError, ValueError, AttributeError) as exc:
             print(f"[report] WARNING: frame batch {i + 1}-{i + len(batch)} lost: {exc}", file=sys.stderr)
+            failed.append(str(i))
     if pick and not out:
         print("[report] WARNING: frame pass returned no descriptions - the report relies on transcript and OCR",
               file=sys.stderr)
-    write_json(p.frames_json, {"generated": _dt.datetime.now().isoformat(timespec="seconds"),
+    unchanged = isinstance(cached, dict) and cached.get("complete") and cached.get("batches") == batches and not failed
+    write_json(p.frames_json, {"generated": cached.get("generated") if unchanged else _dt.datetime.now().isoformat(timespec="seconds"),
                                "model": llm.load_config().model("vision"), "images_sent": len(pick),
-                               "frames": out})
+                               "frames": out, "batches": batches, "complete": not failed,
+                               "failed_batches": failed})
+    if failed:
+        raise RuntimeError(f"{len(failed)} frame batch(es) failed; successful batches saved for resume")
     print(f"[report] {len(out)} frame description(s) -> {p.frames_json}", file=sys.stderr)
     return out
 
@@ -314,7 +340,8 @@ def sync_open_attributions(p: Paths, md: str) -> str:
 
 
 def has_report(text: str) -> bool:
-    return bool(SECTION_RE.search(text))
+    return all(re.search(rf"^{re.escape(heading)}\s*\n\s*\S", text, re.M)
+               for heading in ("## Übersicht", "## Summary", "## Analysis"))
 
 
 def write_report(p: Paths, body: str, flow: str, force: bool) -> None:
@@ -327,7 +354,8 @@ def write_report(p: Paths, body: str, flow: str, force: bool) -> None:
     # The written report replaces the stub's placeholder; the data-flow line joins the header bullets.
     head = re.sub(r"^- \*\*Datenfluss:\*\*.*\n?", "", text, flags=re.M)
     head = head.replace(REPORT_STUB_NOTE, "").strip("\n")
-    p.report.write_text(f"{head}\n{flow}\n\n{body.strip()}\n", encoding="utf-8")
+    from state import write
+    write(p.report, f"{head}\n{flow}\n\n{body.strip()}\n")
 
 
 def main() -> int:
@@ -345,8 +373,13 @@ def main() -> int:
     args = cli.parse(ap)
 
     p = Paths(resolve_base(args.base))
+    state = StageState(p.base)
+    if args.max_frames < 1:
+        ap.error("--max-frames must be positive")
+    options = {"language": args.language, "no_frames": args.no_frames, "max_frames": args.max_frames}
+    key = stage_key(p, "report", options)
     replace = args.force or args.rewrite
-    if p.report.is_file() and has_report(p.report.read_text(encoding="utf-8")) and not replace:
+    if p.report.is_file() and has_report(p.report.read_text(encoding="utf-8")) and not replace and state.current("report", key, [p.report]):
         text = p.report.read_text(encoding="utf-8")
         synced = sync_open_attributions(p, text)
         if synced != text:
@@ -370,15 +403,18 @@ def main() -> int:
     model = llm.load_config().model("text")
     print(f"[report] writing report via {model}...", file=sys.stderr)
     reply = llm.ask(prompt, system=method, role="text", max_tokens=16000, label="report")
+    if not reply.complete:
+        raise RuntimeError("Report reply was truncated or filtered; previous report preserved")
     body = reply.text.strip()
     if body.startswith("```"):
         body = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", body, flags=re.S)
-    if "## Übersicht" not in body:
-        raise SystemExit(f"[report] reply has no «## Übersicht» section: {body[:300]!r}")
+    if not has_report(body):
+        raise RuntimeError("Report reply is missing required sections; previous report preserved")
     body = body[body.index("## Übersicht"):]
     body, n_ill = embed_illustrations(p, body)
     body = sync_open_attributions(p, body)
-    write_report(p, body, data_flow_line(p, proto), replace)
+    write_report(p, body, data_flow_line(p, proto), True)
+    state.record("report", stage_key(p, "report", options), [p.report])
     print(f"[report] {len(body)} chars, {n_ill} illustration(s) embedded -> {p.report}", file=sys.stderr)
     print(f"[report] usage: {llm.USAGE.summary()}", file=sys.stderr)
     return 0

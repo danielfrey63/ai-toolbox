@@ -107,7 +107,7 @@ class Confluence:
     def __init__(self, url: str, token: str, verify: bool):
         self.url = url.rstrip("/")
         self.headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-        self.ctx = None if verify else ssl._create_unverified_context()
+        self.ctx = ssl.create_default_context(cafile=_setting("CONFLUENCE_CA_BUNDLE")) if verify else ssl._create_unverified_context()
 
     def _req(self, method: str, path: str, body: bytes | None = None, headers: dict | None = None,
              params: dict | None = None, raw: bool = False):
@@ -117,7 +117,8 @@ class Confluence:
             with urllib.request.urlopen(req, context=self.ctx, timeout=300) as r:
                 data = r.read()
         except urllib.error.HTTPError as e:
-            raise SystemExit(f"[publish] {method} {path}: HTTP {e.code} {e.read()[:500]!r}")
+            from config import redact
+            raise SystemExit(f"[publish] {method} {path}: HTTP {e.code} {redact(e.read().decode(errors='replace'))[:500]}")
         except urllib.error.URLError as e:
             raise SystemExit(f"[publish] cannot reach {self.url} ({e.reason}) - is the server or tunnel up?")
         if raw:
@@ -259,6 +260,14 @@ def sha(data: bytes | str) -> str:
     return hashlib.sha256(data.encode("utf-8") if isinstance(data, str) else data).hexdigest()[:16]
 
 
+def attachment_state(client, remote: dict, previous) -> dict:
+    """Reuse a hash only while the same remote attachment version still exists."""
+    identity = {"id": remote["id"], "version": remote.get("version", {}).get("number")}
+    if isinstance(previous, dict) and identity["version"] is not None and all(previous.get(k) == v for k, v in identity.items()):
+        return previous
+    return {**identity, "sha": sha(client.download(remote["_links"]["download"]))}
+
+
 def state_path(p: Paths) -> Path:
     return p.base.with_name(p.base.name + ".publish.json")
 
@@ -272,7 +281,7 @@ def main() -> int:
                               'python publish.py "<base>" --no-hub'])
     ap.add_argument("base", help="<base> stem, the recording, or any companion file")
     ap.add_argument("--parent", default=None, help="Parent page ID (overrides the publish files)")
-    ap.add_argument("--dry-run", action="store_true", help="Show what would change, write nothing")
+    ap.add_argument("--dry-run", action="store_true", help="Read remote state and write a local preview; no remote changes")
     ap.add_argument("--no-hub", action="store_true", help="Leave the hub table alone")
     args = cli.parse(ap)
 
@@ -298,7 +307,7 @@ def main() -> int:
         if not args.dry_run:
             print(f"[publish] gate open - tick the boxes in {path}, then run again", file=sys.stderr)
             return 5
-        print("[publish] gate open - dry run continues without writing", file=sys.stderr)
+        print("[publish] gate open - dry run continues without remote changes", file=sys.stderr)
 
     if _markdown() is None:
         print("[publish] Python package `markdown` missing: pip install markdown "
@@ -340,15 +349,14 @@ def main() -> int:
     remote_att = {}
     if page:
         remote_att = {a["title"]: a for a in
-                      c.get(f"/rest/api/content/{page['id']}/child/attachment", limit=500)["results"]}
+                      c.get(f"/rest/api/content/{page['id']}/child/attachment", limit=500, expand="version")["results"]}
     att_state = dict(state.get("attachments", {})) if state.get("page_id") == (page or {}).get("id") else {}
     plan: list[tuple[Path, str | None]] = []
     for f in files:
         local = sha(f.read_bytes())
         if f.name in remote_att:
-            if f.name not in att_state:  # first run without state: hash the remote copy once
-                att_state[f.name] = sha(c.download(remote_att[f.name]["_links"]["download"]))
-            if att_state[f.name] == local:
+            att_state[f.name] = attachment_state(c, remote_att[f.name], att_state.get(f.name))
+            if att_state[f.name]["sha"] == local:
                 continue
             plan.append((f, remote_att[f.name]["id"]))
         else:
@@ -382,7 +390,7 @@ def main() -> int:
     if args.dry_run:
         out = p.base.with_name(p.base.name + ".publish-preview.xml")
         out.write_text(body, encoding="utf-8")
-        print(f"[publish] dry run - nothing written; page body preview: {out}", file=sys.stderr)
+        print(f"[publish] dry run - no remote changes; local page body preview: {out}", file=sys.stderr)
         return 0
 
     # write
@@ -396,8 +404,9 @@ def main() -> int:
                            "body": {"storage": {"value": body, "representation": "storage"}},
                            "version": {"number": page["version"]["number"] + 1, "minorEdit": True}})
     for f, aid in plan:
-        c.upload(page["id"], f, aid)
-        att_state[f.name] = sha(f.read_bytes())
+        uploaded = c.upload(page["id"], f, aid)
+        remote = (uploaded.get("results") or [uploaded])[0]
+        att_state[f.name] = {"id": remote.get("id"), "version": remote.get("version", {}).get("number"), "sha": sha(f.read_bytes())}
     if hub_new is not None:
         c.put_json(f"/rest/api/content/{cfg['hub']}",
                    {"id": cfg["hub"], "type": "page", "title": hub_page["title"], "space": {"key": space},

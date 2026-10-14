@@ -17,6 +17,9 @@ import argparse
 import datetime as _dt
 import sys
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from state import StageState, stage_key, digest, write
+import config
 
 import cli
 import llm
@@ -50,7 +53,7 @@ def chapters_from_llm(blocks: list[Block], language: str | None) -> list[dict]:
 def condense(chapter: dict, blocks: list[Block], glossary: list[str], canonical: list[str],
              open_rows: list[dict], language: str | None) -> list[dict]:
     start, end = ts_seconds(chapter["start"]), ts_seconds(chapter["end"])
-    window = [b for b in blocks if start <= b.seconds < end] or [b for b in blocks if b.seconds >= start][:1]
+    window = [b for b in blocks if start <= b.seconds < end or (b is blocks[-1] and b.seconds == end)]
     if not window:
         return []
     open_in = [r for r in open_rows if start <= ts_seconds(r.get("Zeit", "[0:00]").strip("`[]")) < end]
@@ -66,6 +69,16 @@ def condense(chapter: dict, blocks: list[Block], glossary: list[str], canonical:
     obj = llm.ask_json(prompt, system=CONDENSE_SYSTEM, role="text", max_tokens=6000,
                        label=f"kompakt:{chapter['start']}")
     return [s for s in obj.get("statements", []) if s.get("text")]
+
+
+def normalize_chapters(chapters: list[dict], blocks: list[Block]) -> list[dict]:
+    """Own the interval boundaries deterministically; every block belongs once."""
+    starts = {ts_seconds(c["start"]): str(c["title"]) for c in chapters
+              if c.get("start") and c.get("title") and blocks[0].seconds <= ts_seconds(c["start"]) <= blocks[-1].seconds}
+    starts.setdefault(blocks[0].seconds, "Gespräch")
+    times = sorted(starts)
+    return [{"start": fmt_ts(t), "end": fmt_ts(times[i + 1] if i + 1 < len(times) else blocks[-1].seconds + 1),
+             "title": starts[t]} for i, t in enumerate(times)]
 
 
 def render(p: Paths, title: str, chapters: list[dict], statements: dict[int, list[dict]],
@@ -103,7 +116,9 @@ def main() -> int:
     args = cli.parse(ap)
 
     p = Paths(resolve_base(args.base))
-    if p.kompakt.is_file() and not args.force:
+    state = StageState(p.base)
+    key = stage_key(p, "kompakt", {"language": args.language})
+    if state.current("kompakt", key, [p.kompakt]) and not args.force:
         print(f"[kompakt] exists - skip (use --force): {p.kompakt}", file=sys.stderr)
         return 0
     ok, reason = llm.available()
@@ -124,7 +139,7 @@ def main() -> int:
     analysis = read_json(p.analysis) or {}
     canonical = [e.get("name") for e in (analysis.get("inventory") or {}).get("entities", []) if e.get("name")] \
         if isinstance(analysis, dict) else []
-    chapters = analysis.get("chapters") if isinstance(analysis, dict) else None
+    chapters = analysis.get("chapters") if isinstance(analysis, dict) and analysis.get("input") == key and not args.force else None
     model = llm.load_config().model("text")
     if not chapters:
         print(f"[kompakt] asking {model} for chapters ({len(blocks)} blocks)...", file=sys.stderr)
@@ -133,14 +148,44 @@ def main() -> int:
             chapters = [{"start": blocks[0].ts, "end": fmt_ts(blocks[-1].seconds + 1), "title": "Gespräch"}]
         if isinstance(analysis, dict):
             analysis["chapters"] = chapters
+            analysis["input"] = key
             write_json(p.analysis, analysis)
+    chapters = normalize_chapters(chapters, blocks)
     print(f"[kompakt] condensing {len(chapters)} chapter(s) via {model}...", file=sys.stderr)
     statements: dict[int, list[dict]] = {}
-    for i, ch in enumerate(chapters):
-        statements[i] = condense(ch, blocks, glossary, canonical, sp.get("open", []), args.language)
+    cache_path = p.base.with_name(p.base.name + ".kompakt.json")
+    cache = read_json(cache_path) or {}
+    cached = cache.get("chapters", {}) if not args.force else {}
+    jobs = {}
+    failures = []
+    with ThreadPoolExecutor(max_workers=int(config.get("TRANSCRIBE_LLM_WORKERS"))) as pool:
+        for i, ch in enumerate(chapters):
+            from state import signature
+            cfg = llm.load_config()
+            chapter_key = signature([Path(__file__)], {"chapter": ch,
+                "blocks": [b.line() for b in blocks if ts_seconds(ch["start"]) <= b.seconds < ts_seconds(ch["end"])],
+                "glossary": glossary, "canonical": canonical, "open": sp.get("open", []),
+                "language": args.language, "model": model, "endpoint": cfg.endpoint, "provider": cfg.provider})
+            if chapter_key in cached:
+                statements[i] = cached[chapter_key]
+            else:
+                jobs[pool.submit(condense, ch, blocks, glossary, canonical, sp.get("open", []), args.language)] = (i, chapter_key)
+        for future in as_completed(jobs):
+            i, chapter_key = jobs[future]
+            try:
+                statements[i] = future.result()
+                if not statements[i]:
+                    raise RuntimeError(f"Empty compact chapter: {chapters[i]['title']}")
+            except (RuntimeError, ValueError) as exc:
+                failures.append(str(exc))
+                continue
+            cached[chapter_key] = statements[i]
+            write_json(cache_path, {"input": key, "chapters": cached})
+    if failures:
+        raise RuntimeError(f"{len(failures)} compact chapter(s) failed; successful chapters saved: " + config.redact(failures[0]))
     title = p.base.name.split(" - ", 1)[1] if " - " in p.base.name else p.base.name
-    p.kompakt.write_text(render(p, title, chapters, statements, sp.get("participants", []), model),
-                         encoding="utf-8")
+    write(p.kompakt, render(p, title, chapters, statements, sp.get("participants", []), model))
+    state.record("kompakt", key, [p.kompakt])
     n = sum(len(v) for v in statements.values())
     print(f"[kompakt] {n} statement(s) in {len(chapters)} chapter(s) -> {p.kompakt}", file=sys.stderr)
     return 0

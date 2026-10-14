@@ -79,15 +79,8 @@ def parse_spec(spec: str) -> int | None:
 
 
 def _from_env() -> int | None:
-    value = os.environ.get(ENV_VAR)
-    if not value:
-        # Same .env lookup the rest of the skill uses; imported lazily so this
-        # module stays dependency-free for the venv workers.
-        try:
-            from diarize import _load_env_value
-        except Exception:  # noqa: BLE001 - worker context without diarize.py
-            return None
-        value = _load_env_value(ENV_VAR)
+    from config import get
+    value = get(ENV_VAR)
     return parse_spec(value) if value else None
 
 
@@ -105,6 +98,8 @@ def set_budget(spec: str | None) -> int:
     """Pin the budget for this process *and* its children. Returns the value."""
     global _override
     if spec:
+        from config import validate
+        validate(ENV_VAR, spec)
         parsed = parse_spec(spec)
         if parsed is not None:
             _override = parsed

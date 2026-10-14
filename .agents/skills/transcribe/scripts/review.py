@@ -81,19 +81,27 @@ def items(p: Paths, target: str | None) -> list[tuple[str, str, str, list[str]]]
         red = f"Schwärzung in {k} von {n} Bildern" if k else "keine Schwärzung"
         text = (f"Illustrationen in `{p.illustrations.name}/` angesehen: {n} Ausschnitte, Bildunterschriften "
                 f"stimmen, {red} passt zum Empfängerkreis")
-        out.append(("illustrations", text, _hash(p.spec, p.manifest),
+        crops = sorted(p.illustrations.glob("ill_*.png")) if p.illustrations.is_dir() else []
+        out.append(("illustrations", text, _hash(p.spec, p.manifest, *crops),
                     ["Schwärzung ändern: `pipeline.py <base> --redact` bzw. `--no-redact`",
                      f"Ausschnitt oder Bildunterschrift ändern: `{p.spec.name}` bearbeiten, dann "
                      f"`illustrate.py --video <aufnahme> --spec … --out-dir …`"]))
     if p.kompakt.is_file():
         out.append(("kompakt", f"Kompaktfassung `{p.kompakt.name}` stichprobenweise gegen das Transkript geprüft",
                     _hash(p.kompakt), []))
+    if p.transcript.is_file():
+        out.append(("transcript", f"Volltranskript `{p.transcript.name}` für die Weitergabe geprüft",
+                    _hash(p.transcript), []))
     if p.report.is_file():
         out.append(("report", f"Bericht `{p.report.name}` geprüft: Kernaussagen, Entscheide, Namen und Zahlen "
                               f"gegen die Aufnahme", _hash(p.report), []))
     if target:
+        import publish
+        cfg = publish.load_config(p, None)
+        from config import get
+        publication = _hash(get("CONFLUENCE_URL"), *publish.config_files(p))
         out.append(("release", f"Publikation freigegeben: {target}",
-                    _hash(target, *[h for _, _, h, _ in out]), []))
+                    _hash(target, publication, *[h for _, _, h, _ in out]), []))
     else:
         out.append(("release", "Publikation freigegeben: Ziel noch nicht festgelegt",
                     _hash("no target"), ["Ziel festlegen: `parent:` in `transcribe-publish.txt` bzw. "
@@ -120,7 +128,8 @@ def refresh(p: Paths, target: str | None = None, note: str = "") -> tuple[Path, 
             reset.append(key)
         lines.append(f"- [{'x' if keep else ' '}] {text} <!-- {key}:{h} -->")
         lines += [f"  - {d}" for d in details]
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    from state import write
+    write(path, "\n".join(lines) + "\n")
     return path, reset
 
 

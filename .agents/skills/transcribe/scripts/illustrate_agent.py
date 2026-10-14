@@ -129,7 +129,7 @@ def boxes(frames: dict[float, Path], drafts: dict[float, str], language: str | N
 def render(video: Path, p: Paths) -> list[dict]:
     r = _run(["--video", str(video), "--spec", str(p.spec), "--out-dir", str(p.illustrations)])
     if r.returncode != 0:
-        print(r.stdout[-1500:], r.stderr[-1500:], file=sys.stderr)
+        raise RuntimeError("Illustration renderer failed: " + (r.stderr or r.stdout)[-1500:])
     m = read_json(p.manifest) or {}
     return m.get("illustrations", []) if isinstance(m, dict) else []
 
@@ -317,13 +317,24 @@ def main() -> int:
     args = cli.parse(ap)
 
     p = Paths(resolve_base(args.base))
+    from state import StageState, stage_key, file_hash
+    state = StageState(p.base)
+    if args.max < 1 or args.rounds < 1:
+        ap.error("--max and --rounds must be positive")
+    options = {"language": args.language, "max": args.max, "rounds": args.rounds}
+    key = stage_key(p, "illustrate", options)
+    old = state.entries().get("illustrate", {})
     existing = read_json(p.spec) if p.spec.is_file() and not args.force else None
+    if old and old.get("input") != key and old.get("detail") == file_hash(p.spec):
+        existing = None
     setting = redact_setting(args.redact)
     if isinstance(existing, list) and existing:
         redact = spec_redaction(existing) if setting is None else setting
     else:
         redact = bool(setting)
-    if isinstance(existing, list) and existing and spec_redaction(existing) == redact:
+    manifest_data = read_json(p.manifest) or {}
+    outputs = [p.spec, p.manifest] + [p.illustrations / i["path"] for i in manifest_data.get("illustrations", [])]
+    if isinstance(existing, list) and spec_redaction(existing) == redact and state.current("illustrate", key, outputs) and old.get("detail") == file_hash(p.spec):
         print(f"[illustrate-agent] spec exists, redaction {'on' if redact else 'off'} - skip (use --force): "
               f"{p.spec}", file=sys.stderr)
         return 0
@@ -339,8 +350,10 @@ def main() -> int:
     if isinstance(existing, list) and existing:
         print(f"[illustrate-agent] spec exists - switching redaction {'on' if redact else 'off'} "
               f"(selection, boxes and captions unchanged)", file=sys.stderr)
-        set_redaction(existing, video, p, redact)
+        if spec_redaction(existing) != redact:
+            set_redaction(existing, video, p, redact)
         manifest = render(video, p)
+        state.record("illustrate", key, [p.spec, p.manifest] + [p.illustrations / i["path"] for i in manifest], detail=file_hash(p.spec))
         n = sum(1 for e in existing if e.get("redact"))
         print(f"[illustrate-agent] {len(manifest)} illustration(s), {n} with redaction -> {p.illustrations}",
               file=sys.stderr)
@@ -363,6 +376,10 @@ def main() -> int:
     picks = [x for x in sel.get("picks", []) if x.get("ts")][: args.max]
     if not picks:
         print("[illustrate-agent] model picked no illustrations", file=sys.stderr)
+        write_json(p.spec, [])
+        p.illustrations.mkdir(parents=True, exist_ok=True)
+        write_json(p.manifest, {"illustrations": []})
+        state.record("illustrate", key, [p.spec, p.manifest], detail=file_hash(p.spec))
         return 0
     kinds = {f.get("ts"): f.get("kind") for f in frames_desc}
     for x in picks:
@@ -402,6 +419,7 @@ def main() -> int:
     for s in sel.get("skipped_chapters", []) or []:
         print(f"[illustrate-agent] no illustration for «{s.get('chapter')}»: {s.get('why')}", file=sys.stderr)
     print(f"[illustrate-agent] {len(manifest)} illustration(s) -> {p.illustrations}", file=sys.stderr)
+    state.record("illustrate", key, [p.spec, p.manifest] + [p.illustrations / i["path"] for i in manifest], detail=file_hash(p.spec))
     return 0
 
 
