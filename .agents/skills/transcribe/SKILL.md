@@ -137,6 +137,7 @@ Wrap paths containing spaces in angle brackets: `![…](<my video.illustrations/
 - Frame (or caption-voice) evidence AND address-pattern evidence = high. One of the two = medium, write the name with `(?)`. Neither = leave Name empty.
 - Audio-only sources: consistent role/content evidence (a label owns a known person's responsibilities) plus at least one address hit counts as high.
 - A shared room microphone files several people under one label: attribute single blocks via the **Overrides** table (`| Zeit | Name | Wortmeldung |`). Two labels given the same name merge.
+- Every uncertainty must be checkable by ear: after editing speakers.md run `python3 "${CLAUDE_SKILL_DIR}/scripts/grounding.py" "<base>"`. It replaces each «Open attributions» quote with the verbatim transcript sentence and its start time, and writes «Hörproben» (verbatim quotes with times) for every label that is unnamed, `(?)` or not high. `speakers_fill.py` runs it automatically.
 
 Then substitute the names deterministically:
 

@@ -22,6 +22,10 @@ Idempotent: a speakers.md whose labels are all named is left alone unless
 transcript and participants list - the stamp carries their hash). The human
 edits the same file; a re-run never overwrites a non-empty Name cell
 without --force.
+
+After every fill (and on a skip) grounding.py ties each uncertainty to the
+transcript: verbatim quote and sentence start time in «Open attributions»,
+and a «Hörproben» section with quotes to listen to per uncertain label.
 """
 from __future__ import annotations
 
@@ -169,8 +173,18 @@ def stamp_hash(p: Paths) -> None:
     the files as they are now (after --apply rewrote transcript and vtt)."""
     h = input_hash(p)
     text = p.speakers.read_text(encoding="utf-8")
-    text = STAMP_RE.sub(lambda m: m.group(0).replace("; the human", f", input {h}; the human", 1), text, count=1)
+    text = STAMP_RE.sub(lambda m: re.sub(r", input [0-9a-f]{12}", "", m.group(0))
+                        .replace("; the human", f", input {h}; the human", 1), text, count=1)
     p.speakers.write_text(text, encoding="utf-8")
+
+
+def ground(p: Paths, restamp: bool) -> None:
+    """Verbatim quote and exact time for every uncertainty (grounding.py, no model call)."""
+    import grounding
+    if grounding.ground_file(p):
+        print(f"[speakers-fill] quotes and times grounded in the transcript, Hörproben updated", file=sys.stderr)
+        if restamp and STAMP_RE.search(p.speakers.read_text(encoding="utf-8")):
+            stamp_hash(p)
 
 
 def main() -> int:
@@ -188,10 +202,6 @@ def main() -> int:
     if not p.speakers.is_file():
         print(f"[speakers-fill] no speakers file: {p.speakers}", file=sys.stderr)
         return 2
-    ok, reason = llm.available()
-    if not ok:
-        print(f"[speakers-fill] skipped: LLM not configured ({reason})", file=sys.stderr)
-        return 3
     sp = read_speakers(p.speakers)
     if not sp["labels"]:
         print("[speakers-fill] no labels table - nothing to do", file=sys.stderr)
@@ -200,13 +210,20 @@ def main() -> int:
     if not unnamed and not args.force and OPEN_HEADING in sp["text"]:
         print(f"[speakers-fill] all {len(sp['labels'])} labels named and open list present - skip (use --force)",
               file=sys.stderr)
+        ground(p, restamp=True)
         return 0
     stamp = STAMP_RE.search(sp["text"])
     last = HASH_RE.search(stamp.group(0)) if stamp else None
     if last and last.group(1) == input_hash(p) and not args.force:
         print(f"[speakers-fill] speakers.md, transcript and participants unchanged since the last fill - skip "
               f"(edit speakers.md or use --force)", file=sys.stderr)
+        ground(p, restamp=True)
         return 0
+    ok, reason = llm.available()
+    if not ok:
+        print(f"[speakers-fill] skipped: LLM not configured ({reason})", file=sys.stderr)
+        ground(p, restamp=False)
+        return 3
     blocks = read_transcript(p.transcript)
     if not blocks:
         print(f"[speakers-fill] no transcript blocks in {p.transcript}", file=sys.stderr)
@@ -225,6 +242,7 @@ def main() -> int:
     named, n_open = write_back(p.speakers, result, model, args.force)
     print(f"[speakers-fill] {named} label(s) named, {n_open} open contribution(s) -> {p.speakers}",
           file=sys.stderr)
+    ground(p, restamp=False)
     if args.apply:
         import speakers as speakers_mod
         mapping = speakers_mod.parse_mapping(p.speakers)

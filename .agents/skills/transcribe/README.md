@@ -282,6 +282,7 @@ Other knobs (passed to `scripts/run.py`):
 │   ├── cli.py               # shared help convention: -h, --help or no arguments print the full help
 │   ├── agent.py             # headless orchestrator: speakers → kompakt → illustrations → report → review.md
 │   ├── speakers_fill.py     # fills speakers.md, lists contributions filed under another label
+│   ├── grounding.py         # verbatim quote + sentence time per speaker uncertainty, «Hörproben» in speakers.md
 │   ├── kompakt.py           # compact transcript, chapters first, then per-chapter condensing
 │   ├── illustrate_agent.py  # picks frames, sets crop + caption, visual check of the crops
 │   ├── report.py            # frame descriptions + report (Übersicht, Summary, Analysis, Datenfluss)
