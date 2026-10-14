@@ -171,6 +171,8 @@ The whole pipeline runs without Claude or any other chat agent. `run.py` does th
 
 `pipeline.py` and `agent.py` options: `--stop-at-speakers` ends after the speaker stage so `speakers.md` can be corrected first (the next call continues), `--only speakers,kompakt,illustrate,report` runs a subset (`agent.py` only), `--force` redoes finished stages, `--redact` blacks out person-name lists in the crops (off by default; `TRANSCRIBE_REDACT=1` makes it the default; on a finished run it only adds the redaction boxes and re-renders the crops, selection and captions stay), `--no-redact` removes it again, `--no-frames` skips every image call. Each stage is idempotent and can also be called on its own (`speakers_fill.py`, `kompakt.py`, `illustrate_agent.py`, `report.py`). Every script prints its full help with options, examples and exit codes for `-h`, `--help` or a call without arguments; only `setup.py` (installer) and `llm.py` (configuration status) give the bare call its own meaning.
 
+4. Publish after the review (optional): tick the boxes in `<base>.review.md`, then `publish.py "<base>" --dry-run` and `publish.py "<base>"`. Each box carries the hash of the artefact it releases; a changed report, crop or `speakers.md` re-opens its box. The target page comes from `--parent ID` or `parent:` in `transcribe-publish.txt` (folder) / `<name>.publish.txt` (recording), the connection from `CONFLUENCE_URL`, `CONFLUENCE_TOKEN` and `CONFLUENCE_VERIFY_TLS` in `~/.config/transcribe/.env`.
+
 For a quick first test take a few minutes of a recording: `pipeline.py "<recording.mp4>" --start 0 --end 5:00`. A full 40-minute meeting takes about ten minutes for the agent stages.
 
 ## First run
@@ -275,6 +277,8 @@ Other knobs (passed to `scripts/run.py`):
 │   ├── setup.py             # preflight + installer + .env scaffolding + managed-venv provisioning
 │   ├── llm.py               # chat client for the agent stages (Azure OpenAI / Anthropic passthrough), --probe
 │   ├── pipeline.py          # one command: setup check → run.py → agent.py
+│   ├── review.py            # review gate: one box per artefact, reset when the artefact changes
+│   ├── publish.py           # Confluence page + attachments + hub row, only through the review gate
 │   ├── cli.py               # shared help convention: -h, --help or no arguments print the full help
 │   ├── agent.py             # headless orchestrator: speakers → kompakt → illustrations → report → review.md
 │   ├── speakers_fill.py     # fills speakers.md, lists contributions filed under another label

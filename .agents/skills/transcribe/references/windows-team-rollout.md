@@ -206,7 +206,8 @@ Erst danach den Stand für andere freigeben. Sprechertrennung und OCR bei Bedarf
 4. Entweder `pipeline.py` mit absolutem Aufnahmepfad, Sprache und `--local` aufrufen, oder `/transcribe` im Agenten mit Aufnahmepfad, Sprache und gewünschter Fragestellung. Für vertrauliche Aufnahmen lokale Backends ausdrücklich festlegen (`--local`).
 5. Bei mehreren Sprechern `pipeline.py … --stop-at-speakers` verwenden, die offenen Zuordnungen in `speakers.md` prüfen und korrigieren, dann denselben Befehl ohne `--stop-at-speakers` erneut aufrufen.
 6. Bericht und Transkript anhand `review.md` prüfen: Eigennamen, Zahlen, Sprecher, Bildausschnitte, Entscheidungen und Aufgaben nicht ungeprüft übernehmen. Unsicherheiten kennzeichnen.
-7. Nur die geprüften Ergebnisse an die berechtigten Empfänger weitergeben. Rohaufnahme, Transkript und temporäre Bilder gemäss Aufbewahrungsregel behandeln.
+7. Publizieren: In `<base>.review.md` jede Box ankreuzen, die geprüft ist, dann `publish.py <base> --dry-run` und `publish.py <base>`. Das Ziel steht in `transcribe-publish.txt` (Ordner) bzw. `<Name>.publish.txt` (Aufnahme) oder kommt mit `--parent ID`. Ändert sich ein geprüftes Artefakt danach, öffnet sich seine Box wieder, und `publish.py` lädt nichts hoch.
+8. Nur die geprüften Ergebnisse an die berechtigten Empfänger weitergeben. Rohaufnahme, Transkript und temporäre Bilder gemäss Aufbewahrungsregel behandeln.
 
 Wichtige Begleitdateien liegen standardmässig neben der lokalen Aufnahme: `.protocol.md`, `.transcript.md`, der Bericht `.md` und `.review.md`. Bei Sprechertrennung kommen `.speakers.md` und das modellgeschriebene `.transcript-kompakt.md` hinzu. Video/OCR erzeugt zusätzlich `.frames.json` und die Illustrationen unter `.illustrations\`.
 

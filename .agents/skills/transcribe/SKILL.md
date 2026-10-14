@@ -28,6 +28,8 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/pipeline.py" "<source>" --language de [--lo
 
 `pipeline.py` chains `setup.py --check`, `run.py` and `agent.py` for a local file or a URL (a URL is downloaded again on every call; re-run on the downloaded file or the printed `<base>`). `agent.py` runs `speakers_fill.py`, `kompakt.py`, `illustrate_agent.py` and `report.py` against the model set in `~/.config/transcribe/.env` (`AZURE_LLM_ENDPOINT`, `AZURE_LLM_KEY`, `AZURE_LLM_MODEL`; see `.env.example`). It writes the same companion files as the interactive path plus `<base>.review.md`, the list of human gates (speaker attributions, illustrations, report review). Every stage is idempotent; `--force` redoes, `--only` picks stages, `--stop-at-speakers` ends at the speaker gate. The report's `Datenfluss` line names the model and what it received.
 
+**Review gate and publishing:** `<base>.review.md` (written by `review.py`, refreshed by `agent.py` and `publish.py`) has one box per artefact with its hash; a person ticks them. `publish.py "<base>" [--parent ID] [--dry-run]` uploads page, crops and transcripts to Confluence only when every box is ticked. Never tick boxes on the user's behalf.
+
 **Choose headless when** an agent other than Claude runs the skill (Copilot, Codex), the run is unattended, or data must stay on an approved tenant deployment. **Choose interactive when** no model is configured or the user wants to steer the report. When `llm.py` reports a configured provider and the user did not ask for the interactive path, prefer `pipeline.py` (or `agent.py` after an existing `run.py` pass), then answer from the files it wrote (Step 5 reply format).
 
 ## When to use
