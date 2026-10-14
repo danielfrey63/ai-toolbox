@@ -398,6 +398,31 @@ class Contracts(unittest.TestCase):
             self.assertEqual(bundle.read("transcribe/.build-version"), b"1.2.3\n")
             self.assertNotIn("transcribe/hooks/hook.sh", bundle.namelist())
 
+    def test_git_archive_build_in_toolbox_and_standalone_layout(self):
+        import build_skill
+        for layout in ("toolbox", "standalone"):
+            with self.subTest(layout=layout):
+                repo = self.root / layout
+                root = repo / ".agents/skills/transcribe" if layout == "toolbox" else repo
+                root.mkdir(parents=True)
+                for name in ("SKILL.md", "INSTALL.md", "transcribe.py", "scripts/command.py", "scripts/config.py"):
+                    file = root / name
+                    file.parent.mkdir(parents=True, exist_ok=True)
+                    file.write_text("fixture", encoding="utf-8")
+                write_json(root / ".claude-plugin/plugin.json", {"version": "1.2.3"})
+                def git(*args):
+                    subprocess.run(["git", *args], cwd=repo, capture_output=True, check=True)
+                git("init", "-q")
+                git("add", ".")
+                git("-c", "core.hooksPath=" + str(self.root / "empty-hooks"), "-c", "user.name=Test",
+                    "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture")
+                output = self.root / (layout + ".skill")
+                with patch.object(build_skill, "ROOT", root), patch.object(sys, "argv", ["build_skill", "--output", str(output)]), contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(build_skill.main(), 0)
+                    old = output.stat().st_mtime_ns
+                    self.assertEqual(build_skill.main(), 0)
+                    self.assertEqual(output.stat().st_mtime_ns, old)
+
 
 if __name__ == "__main__":
     unittest.main()

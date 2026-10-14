@@ -19,7 +19,7 @@ def bundle(data: bytes) -> bytes:
         version = json.loads(files[".claude-plugin/plugin.json"])["version"]
         files[".build-version"] = (version + "\n").encode()
         kept = {n: content for n, content in files.items()
-                if not n.startswith(("hooks/", "commands/", ".claude-plugin/"))}
+                if not n.startswith(("hooks/", "commands/", ".claude-plugin/", ".codex-plugin/"))}
         required = {"SKILL.md", "INSTALL.md", "transcribe.py", "scripts/command.py", "scripts/config.py"}
         if not required <= kept.keys() or len(kept) > 200:
             raise ValueError("Archive entrypoints missing or upload file limit exceeded")
@@ -43,9 +43,8 @@ def main() -> int:
         return subprocess.check_output(["git", *args], cwd=ROOT)
     if git("status", "--porcelain", "--", ".").strip():
         ap.error("Skill has uncommitted files; commit them before building")
-    prefix = git("rev-parse", "--show-prefix").decode().strip().rstrip("/")
-    tree = "HEAD:" + prefix if prefix else "HEAD"
-    data = bundle(git("archive", "--format=zip", tree))
+    # git archive already scopes HEAD to cwd, in a monorepo or at repo root.
+    data = bundle(git("archive", "--format=zip", "HEAD"))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if not args.output.is_file() or args.output.read_bytes() != data:
         args.output.write_bytes(data)

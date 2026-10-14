@@ -13,8 +13,7 @@ htmlcov/
 .claude/settings.local.json
 /transcribe/
 
-# Secrets - the real .env (whisper.py / diarize.py read ./.env as a fallback,
-# so a repo-root .env could hold live keys). .env.example is the safe,
-# committed template and is NOT ignored.
+# Secrets may be selected explicitly with --config; never commit them.
+# .env.example is the generated, safe template and is NOT ignored.
 .env
 !.env.example
