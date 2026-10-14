@@ -40,7 +40,7 @@ python transcribe.py run --help-all
 
 Die Regressionstests verwenden temporäre Verzeichnisse und simulierte Provider; sie lesen keine produktiven Schlüssel und senden keine Aufnahmen. Zusätzlich einen kurzen echten Medienlauf mit bekanntem Inhalt prüfen. Performance-Messungen auf realen Aufnahmen durchführen; synthetische Sprachschleifen verfälschen Decoder-Laufzeiten.
 
-Die zusätzliche [Tiefenprüfung vom 14.10.2026](audit-2026-10-14.md) dokumentiert Fehlerbilder, Korrekturen und Grenzen der Abnahme.
+Die zusätzliche [Tiefenprüfung vom 14.10.2026](audit-2026-10-14.md) dokumentiert Fehlerbilder, Korrekturen und Grenzen der Abnahme. Die [unabhängige Evaluation vom selben Tag](evaluation-2026-10-14.md) bewertet Doku, Skripte, Konsistenz, Hilfe, Installierbarkeit, Einfachheit und Performance mit echten Läufen und listet die offenen Befunde nach Gewicht.
 
 ## Dokumentation erzeugen
 
