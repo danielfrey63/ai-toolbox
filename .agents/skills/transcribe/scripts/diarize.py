@@ -408,9 +408,10 @@ def diarize_pyannote_local(
     """Run pyannote.audio locally, fully on-device. Heavy on first use.
 
     The fragile ML stack never loads into this process: the work happens in
-    `pyannote_worker.py` inside the managed venv (~/.config/transcribe/venv),
-    which setup.ensure_venv() provisions idempotently on first use. See the
-    worker for the Windows hardening; see setup.VENV_PINS for the pin set.
+    `pyannote_worker.py` inside the speaker runtime
+    (~/.config/transcribe/venv-speakers), which setup.ensure_venv("speakers")
+    provisions idempotently on first use. See the worker for the Windows
+    hardening; see requirements/speakers.in for the pin set.
 
     Requires a HuggingFace token in $HF_TOKEN / $HUGGINGFACE_TOKEN plus
     license acceptance for BOTH gated repos on the Hugging Face website:

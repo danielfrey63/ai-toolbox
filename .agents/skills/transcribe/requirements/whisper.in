@@ -1,0 +1,4 @@
+# On-device transcription runtime (profile `local`). Torch-free: faster-whisper
+# runs on ctranslate2. Keep this unpinned so `scripts/lock.py --upgrade` picks
+# the newest release; requirements/whisper.lock is what actually gets installed.
+faster-whisper

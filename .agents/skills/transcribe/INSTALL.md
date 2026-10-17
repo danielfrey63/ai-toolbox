@@ -4,7 +4,7 @@ Diese Anleitung gilt für das eigenständige Repository, den Toolbox-Unterordner
 
 ## Voraussetzungen
 
-- Python ab 3.10 zum Starten des Installers: Windows `python`, macOS/Linux meist `python3`.
+- Python ab 3.10 zum Starten des Installers: Windows `python`, macOS/Linux meist `python3`. Unter macOS ist `python3` oft das System-Python 3.9; dann ein neueres wie `/opt/homebrew/bin/python3.14` verwenden. Der SessionStart-Hook sucht ein passendes und nennt es.
 - Ein Checkout oder Release des Skills. Bei Git-Installation einen festgelegten Commit verwenden; die vollständige Toolbox ist nicht erforderlich, wenn das gespiegelte Repository verfügbar ist.
 - Netzwerkzugriff für die erste Installation von Werkzeugen, Python-Paketen und Modellen. Für lokale Modelle werden keine Cloud-API-Keys benötigt. Sprechertrennung benötigt einen Hugging-Face-Token und die Annahme der Modelllizenz.
 - macOS benötigt für die automatische ffmpeg-Installation Homebrew. Linux und Windows verwenden Werkzeuge im Benutzerverzeichnis ohne Administratorrechte.
@@ -23,12 +23,12 @@ Eine Harness führt `install` nur aus, wenn `doctor` den gewünschten Zustand ni
 
 | Profil | Gewünschter Zustand |
 |---|---|
-| `local` | ffmpeg, ffprobe, yt-dlp und verwaltete lokale ML-Laufzeit |
-| `local-speakers` | Zusätzlich konfigurierter Hugging-Face-Zugang für Sprechertrennung |
+| `local` | ffmpeg, ffprobe, yt-dlp und verwaltete Whisper-Laufzeit mit bestandenem Funktionstest |
+| `local-speakers` | Zusätzlich Sprecher-Laufzeit (pyannote, torch) und konfigurierter Hugging-Face-Zugang |
 | `headless` | Lokale Laufzeit und konfigurierter Analyse-Endpunkt |
 | `publish` | Konfigurierter Confluence-Zugang und isolierte Markdown-Laufzeit |
 
-`doctor` prüft Konfiguration und installierte Laufzeit. Modelle werden beim ersten Gebrauch geladen; ein vorhandener Token beweist noch keine Modellberechtigung. Ein echter kurzer Testlauf prüft diese zusätzlich. `doctor --profile headless --probe` prüft den Text-Endpunkt mit einem echten Modellaufruf; Bildunterstützung lässt sich mit `python scripts/llm.py --probe --image test.png` prüfen.
+`doctor` prüft Konfiguration und installierte Laufzeit. Die Installation lässt jede Laufzeit einmal auf einer synthetischen Aufnahme laufen und meldet sie erst danach als bereit; `doctor --probe` wiederholt diesen Test. Installiert werden die geprüften Versionen aus `requirements/*.lock`. Modelle werden beim ersten Gebrauch geladen; ein vorhandener Token beweist noch keine Modellberechtigung. Ein echter kurzer Testlauf prüft diese zusätzlich. `doctor --profile headless --probe` prüft den Text-Endpunkt mit einem echten Modellaufruf; Bildunterstützung lässt sich mit `python scripts/llm.py --probe --image test.png` prüfen.
 
 Der Installer legt einen `transcribe`-Launcher unter `~/.transcribe/bin/` an. Dieses Verzeichnis kann in `PATH` aufgenommen werden. Die portable Form `python <skill>/transcribe.py` funktioniert auch ohne PATH-Änderung. Ein erneuter Installationslauf behält passende Dateien bei.
 

@@ -1,0 +1,7 @@
+# Known incompatibilities that upstream metadata does not declare. Each entry
+# names the failure; remove it once a release of the dependent fixes it and
+# `scripts/lock.py --upgrade` passes the runtime check without it.
+
+# faster-whisper 1.2.1 calls av.open(..., metadata_errors="ignore"); PyAV 19
+# removed that argument, so every local transcription failed with TypeError.
+av<19

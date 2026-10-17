@@ -1,0 +1,65 @@
+# Weekly: move requirements/*.lock to the newest compatible releases.
+# A candidate must pass the runtime check on Linux (lock.py --upgrade) and on
+# Windows and macOS (lock.py --verify) before it is pushed to the branch
+# deps/lock-refresh for a human to review and merge. Nothing lands on main
+# automatically; a rejected candidate fails the run and names the versions.
+name: Transcribe lock refresh
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -X utf8 -B scripts/lock.py --upgrade
+      - id: diff
+        run: |
+          if git diff --quiet -- requirements; then echo "changed=false" >> "$GITHUB_OUTPUT"; else echo "changed=true" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.diff.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: locks
+          path: requirements/*.lock
+  verify:
+    needs: resolve
+    if: needs.resolve.outputs.changed == 'true'
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@v4
+        with:
+          name: locks
+          path: requirements
+      - run: python -X utf8 -B scripts/lock.py --verify
+  publish:
+    needs: [resolve, verify]
+    if: needs.resolve.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: locks
+          path: requirements
+      - run: |
+          git config user.name "transcribe-lock-bot"
+          git config user.email "transcribe-lock-bot@users.noreply.github.com"
+          git checkout -B deps/lock-refresh
+          git add requirements/*.lock
+          git commit -m "chore(transcribe): refresh dependency locks"
+          git push --force origin deps/lock-refresh

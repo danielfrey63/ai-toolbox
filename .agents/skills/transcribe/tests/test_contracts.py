@@ -50,6 +50,7 @@ class Contracts(unittest.TestCase):
         self.addCleanup(self.env.stop)
         for key, value in {"CONFIG_DIR": config.user_dir(), "CONFIG_FILE": config.user_dir() / ".env",
                            "VENV_DIR": config.user_dir() / "venv", "VENV_MARKER": config.user_dir() / "venv/.provisioned.json",
+                           "SPEAKERS_VENV_DIR": config.user_dir() / "venv-speakers",
                            "TRANSCRIBE_BIN_DIR": config.bin_dir()}.items():
             p = patch.object(setup, key, value)
             p.start()
@@ -87,6 +88,51 @@ class Contracts(unittest.TestCase):
             setup.run_venv_worker("whisper_local_worker.py", ["synthetic.wav"])
         self.assertEqual(run.call_args.kwargs["env"]["TRANSCRIBE_WHISPER_MODEL"], "medium")
         self.assertEqual(run.call_args.kwargs["env"]["TRANSCRIBE_GPU_DUTY"], "0.5")
+
+    def test_workers_run_in_their_own_runtime(self):
+        seen = []
+        def venv(runtime="whisper"):
+            seen.append(runtime)
+            return Path(sys.executable)
+        with patch.object(setup, "ensure_venv", side_effect=venv), patch.object(setup.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="[]")):
+            setup.run_venv_worker("whisper_local_worker.py", ["synthetic.wav"])
+            setup.run_venv_worker("pyannote_worker.py", ["synthetic.wav"])
+        self.assertEqual(seen, ["whisper", "speakers"])
+
+    def test_lock_files_pin_complete_platform_neutral_sets(self):
+        for runtime in setup.RUNTIMES:
+            with self.subTest(runtime=runtime):
+                text = setup.lock_file(runtime).read_text(encoding="utf-8")
+                self.assertIn("python scripts/lock.py", text)
+                self.assertNotRegex(text, r"(/Users/|/home/|/tmp/|[A-Za-z]:\\)")
+                for line in text.splitlines():
+                    if line and not line.startswith((" ", "#")):
+                        self.assertRegex(line, r"^[A-Za-z0-9_.\-]+==\S+")
+        import lock
+        whisper = lock.versions(setup.lock_file("whisper").read_text(encoding="utf-8"))
+        speakers = lock.versions(setup.lock_file("speakers").read_text(encoding="utf-8"))
+        self.assertIn("faster-whisper", whisper)
+        self.assertNotIn("torch", whisper)
+        self.assertLess(int(whisper["av"].split(".")[0]), 19)
+        self.assertEqual(speakers["pyannote-audio"], "3.3.2")
+        self.assertEqual(lock.describe_changes("av==18.1.0\nx==1\n", "av==19.0.1\ny==2\n"),
+                         ["av: 18.1.0 -> 19.0.1", "x: 1 -> -", "y: - -> 2"])
+
+    def test_runtime_ready_only_after_check_for_current_lock(self):
+        lock_path = self.root / "whisper.lock"
+        lock_path.write_text("faster-whisper==1.2.1\n", encoding="utf-8")
+        setup.VENV_DIR.mkdir(parents=True)
+        def marker(**fields):
+            setup.VENV_MARKER.write_text(json.dumps({"signature": setup._venv_signature("whisper", False, "3.13"), "python": "3.13", **fields}), encoding="utf-8")
+        with patch.object(setup, "lock_file", return_value=lock_path), patch.object(setup, "venv_python", return_value=Path(sys.executable)), patch.object(setup, "_venv_base_interpreter_ok", return_value=True), patch.object(setup, "_venv_runtime_version", return_value="3.13"), patch.object(setup, "_venv_wheel_abi", return_value="3.13"), patch.object(setup, "_gpu_available", return_value=False):
+            marker(checked=False, check_error="runtime check failed: TypeError")
+            self.assertEqual(setup.venv_status(), {"ready": False, "reason": "runtime check failed: TypeError", "gpu": False})
+            marker(checked=True)
+            self.assertTrue(setup.venv_status()["ready"])
+            lock_path.write_text("faster-whisper==1.2.2\n", encoding="utf-8")
+            self.assertEqual(setup.venv_status()["reason"], "lock file or GPU availability changed")
+            lock_path.unlink()
+            self.assertIn("missing", setup.venv_status()["reason"])
 
     def test_worker_result_shapes_and_runtime_label(self):
         legacy = stt.worker_result('[{"start": 0, "end": 1, "text": "x"}]')
@@ -275,7 +321,7 @@ class Contracts(unittest.TestCase):
 
     def test_install_verify_cleanup_loop(self):
         ready = {"value": False}
-        def status():
+        def status(runtime="whisper"):
             return {"ready": ready["value"], "gpu": False}
         def provision(*args, **kwargs):
             ready["value"] = True

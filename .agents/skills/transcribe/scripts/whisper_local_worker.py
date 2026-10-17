@@ -30,8 +30,9 @@ produced garbage poisons the next one, so the model can lock into a
 repetition loop or drift into the wrong language and never recover.
 repair.py uses this when re-transcribing a collapsed passage.
 
-faster-whisper rides on ctranslate2 (torch-free), so it coexists with the
-pyannote stack in the same venv and uses the GPU when CUDA libs are present.
+faster-whisper rides on ctranslate2 (torch-free), so it has its own runtime
+apart from the pyannote stack (setup.RUNTIMES) and uses the GPU when
+ctranslate2 sees a CUDA device.
 large-v3-turbo on GPU transcribes ~35x realtime; the CPU fallback drops to
 the medium model with int8 quantization to stay usable.
 """
@@ -130,7 +131,12 @@ def main() -> int:
     from config import get
     model_name = get("TRANSCRIBE_WHISPER_MODEL")
     compute = get("TRANSCRIBE_GPU_COMPUTE")
+    import ctranslate2
     try:
+        # No CUDA device (macOS, CPU-only hosts): go straight to the CPU path
+        # instead of logging a misleading compute_type/CUDA failure first.
+        if ctranslate2.get_cuda_device_count() == 0:
+            raise RuntimeError("no CUDA device")
         try:
             model = WhisperModel(model_name, device="cuda", compute_type=compute)
         except (ValueError, RuntimeError) as exc:
@@ -140,7 +146,7 @@ def main() -> int:
         runtime = {"model": model_name, "device": "cuda", "compute": compute}
         desc = f"{model_name} / cuda {compute}"
     except Exception as exc:  # noqa: BLE001 - any CUDA failure -> CPU
-        log(f"CUDA unavailable ({type(exc).__name__}) - CPU fallback (medium/int8)")
+        log(f"CUDA unavailable ({exc or type(exc).__name__}) - CPU fallback (medium/int8)")
         # Runs in the managed venv as a separate process, so it re-resolves
         # the budget from the environment run.py exported (see cpu.py) rather
         # than importing it - keeps this worker free of host-side imports.

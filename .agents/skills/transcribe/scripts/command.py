@@ -29,8 +29,17 @@ def doctor(profile: str, probe: bool = False) -> dict:
             checks[name] = {"ready": bool(path), "path": path}
         checks["local_runtime"] = setup.venv_status()
     if profile == "local-speakers":
+        checks["speaker_runtime"] = setup.venv_status("speakers")
         checks["speaker_access"] = {"ready": bool(config.get("HF_TOKEN") or config.get("HUGGINGFACE_TOKEN")),
                                      "detail": "Hugging Face token and accepted model licence required; first use verifies access."}
+    if probe:
+        # The marker records the check made at provisioning; --probe repeats it
+        # against what is installed now (e.g. after a manual pip change).
+        for key, runtime in (("local_runtime", "whisper"), ("speaker_runtime", "speakers")):
+            if checks.get(key, {}).get("ready"):
+                with contextlib.redirect_stdout(sys.stderr):
+                    error = setup.run_runtime_check(setup.venv_python(runtime), runtime)
+                checks[key] = {**checks[key], "ready": error is None, "reason": error or ""}
     if profile == "headless":
         ok, reason = llm.available()
         checks["analysis"] = {"ready": ok, "detail": reason or llm.load_config().describe()}
@@ -92,10 +101,12 @@ def install(profile: str, non_interactive: bool) -> int:
             rc = setup.cmd_install(non_interactive=non_interactive)
             if rc:
                 return rc
-        if not setup.venv_status()["ready"]:
-            rc = setup.cmd_provision_venv()
-            if rc:
-                return rc
+        runtimes = ("whisper", "speakers") if profile == "local-speakers" else ("whisper",)
+        for runtime in runtimes:
+            if not setup.venv_status(runtime)["ready"]:
+                rc = setup.cmd_provision_venv(runtime=runtime)
+                if rc:
+                    return rc
     else:
         import publish
         if publish._markdown() is None and not publisher_ready():
@@ -201,7 +212,7 @@ def main(argv=None) -> int:
                            help="Never prompt for keys or confirmations; missing prerequisites fail with exit 2")
         else:
             p.add_argument("--json", action="store_true")
-            p.add_argument("--probe", action="store_true", help="Call the configured analysis deployment")
+            p.add_argument("--probe", action="store_true", help="Re-run the local runtime checks and call the configured analysis deployment")
     subs.add_parser("cleanup", help="Remove this checkout's CLI launcher; preserve models, configuration and recordings")
     c = subs.add_parser("config", help="Inspect effective parameters or generate their documentation")
     c.add_argument("action", choices=("show", "template", "docs", "options"), default="show", nargs="?")

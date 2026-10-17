@@ -124,7 +124,7 @@ What the skill does:
 - Sends the audio clip (or 20 MB chunks) to a cloud STT backend only when that backend is configured and reached in the cascade (Azure, `api.groq.com`, `api.openai.com`), or for cloud diarization (pyannote.ai, AssemblyAI).
 - Writes media, frames, audio and intermediates to a work dir under the system temp dir (or `--out-dir`), and the companion files next to the source or under `./transcribe/`.
 - Reads configuration through `scripts/config.py`: process environment, explicit `--config`, user file, defaults. Empty values are unset; the working directory is never searched. Secret-file permissions are checked by `doctor`.
-- Downloads `deno` and `uv` into `~/.transcribe/bin/` and builds the managed venv at `~/.config/transcribe/venv/` with a pinned ML stack (pyannote.audio, faster-whisper, torch; CUDA wheels when nvidia-smi is present). The Python running `run.py` is never modified.
+- Downloads `deno` and `uv` into `~/.transcribe/bin/` and builds two managed venvs from the lock files in `requirements/`: `~/.config/transcribe/venv/` for faster-whisper (torch-free) and, on first speaker separation or with profile `local-speakers`, `~/.config/transcribe/venv-speakers/` for pyannote.audio and torch. On CUDA hosts both receive the CUDA torch wheels. Each venv counts as ready only after `scripts/runtime_check.py` passed in it. The Python running `run.py` is never modified.
 
 What it does not do:
 
@@ -138,8 +138,9 @@ Claude **runs** these; read them only when debugging:
 
 - Root `transcribe.py` / `scripts/command.py` – public CLI. `pipeline.py` orchestrates; `run.py` remains the media-only specialist command.
 - `setup.py` – preflight, installer, uv bootstrap, venv provisioning.
+- `lock.py` – maintainer tool: regenerates and verifies `requirements/*.lock` (see `maintenance.md`).
 - `speakers.py --apply <base>` – substitutes names from `<base>.speakers.md` into transcript and VTT.
 - `illustrate.py` – illustration scouting and cropping (see `report-writing.md`).
 - `repair.py`, `crosscheck.py`, `ocr.py --render` – standalone re-runs of the corresponding stages.
 
-Internal modules (imported or spawned by `run.py`, not called directly): `download.py`, `frames.py`, `transcribe.py`, `stt.py`, `diarize.py`, `pyannote_worker.py` and `whisper_local_worker.py` (run inside the managed venv), `resources.py`, `cpu.py`, `version.py`, `joblock.py`.
+Internal modules (imported or spawned by `run.py`, not called directly): `download.py`, `frames.py`, `transcribe.py`, `stt.py`, `diarize.py`, `pyannote_worker.py`, `whisper_local_worker.py` and `runtime_check.py` (run inside the managed venvs), `resources.py`, `cpu.py`, `version.py`, `joblock.py`.

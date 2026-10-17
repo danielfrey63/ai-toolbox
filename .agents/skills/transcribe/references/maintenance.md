@@ -46,6 +46,20 @@ Das Protokoll nennt unter `Transcription runtime` Modell, Device, Compute-Typ un
 
 Die zusätzliche [Tiefenprüfung vom 14.10.2026](audit-2026-10-14.md) dokumentiert Fehlerbilder, Korrekturen und Grenzen der Abnahme. Die [unabhängige Evaluation vom selben Tag](evaluation-2026-10-14.md) bewertet Doku, Skripte, Konsistenz, Hilfe, Installierbarkeit, Einfachheit und Performance mit echten Läufen und listet die offenen Befunde nach Gewicht.
 
+## Abhängigkeiten
+
+Was installiert wird, steht vollständig in `requirements/whisper.lock` und `requirements/speakers.lock`, einschliesslich aller indirekten Pakete. Die Wünsche stehen in den `.in`-Dateien: `whisper.in` bleibt offen und folgt neuen Versionen, `speakers.in` hält die bewusst eingefrorenen pyannote-Pins. Bekannte Unverträglichkeiten, die die Paketmetadaten nicht deklarieren, stehen mit Begründung in `requirements/constraints.txt` (z. B. `av<19`, weil faster-whisper 1.2.1 ein von PyAV 19 entferntes Argument verwendet). Die Lockdateien sind universell und gelten für Linux, macOS und Windows.
+
+```text
+python scripts/lock.py             # nach einer Änderung an einer .in-Datei
+python scripts/lock.py --upgrade   # auf die neuesten verträglichen Versionen
+python scripts/lock.py --verify    # bestehende Locks auf diesem Rechner prüfen
+```
+
+`lock.py` ersetzt eine Lockdatei nur, wenn der Kandidat in einem Wegwerf-Venv installiert wurde und `scripts/runtime_check.py` dort bestanden hat. Ein abgelehnter Kandidat lässt die alte Datei stehen, listet die geänderten Versionen und endet mit Exit 1; dann die Ursache als Eintrag in `constraints.txt` festhalten und erneut laufen lassen. Der Funktionstest prüft den Whisper-Weg mit dem Modell `tiny` (Dekodierung, VAD, Decoder) und für die Sprecher-Laufzeit Importe und Audiodekodierung; das gesperrte pyannote-Modell braucht ein Token und bleibt aussen vor. CUDA-Builds von torch prüft er nicht.
+
+Der Workflow `.github/workflows/lock-refresh.yml` führt `--upgrade` wöchentlich unter Linux aus, wiederholt `--verify` unter Windows und macOS und pusht eine bestandene Aktualisierung auf den Branch `deps/lock-refresh`. Übernommen wird sie erst nach menschlicher Durchsicht. Wie `tests.yml` läuft er nur dort, wo der Skill an der Repository-Wurzel liegt und ein Actions-Runner verfügbar ist. Sonst `lock.py --upgrade` von Hand ausführen und das Ergebnis committen. Eine geänderte Lockdatei synchronisiert bestehende Installationen beim nächsten Lauf automatisch.
+
 ## Dokumentation erzeugen
 
 ```text
@@ -58,6 +72,6 @@ Die Ausgaben aktualisieren `.env.example`, `references/parameters.md` und `refer
 
 ## Spiegelung und Paket
 
-Die Toolbox bleibt die Entwicklungsquelle. Die Spiegelung ins Team-Repository bei SBB übernimmt das Toolbox-Skript `tools/mirror-skill/mirror-skill.sh transcribe`: es exportiert den Skill-Unterordner mit eigener History per `git subtree split` (deterministisch, gleiche Commits ergeben gleiche Hashes), prüft, dass der Zielbranch ein Vorfahre des Splits ist, und pusht nur vorwärts, inklusive Tag `v<version>` aus `plugin.json`. Ziel-Remote, URL und Branch stehen im Eintrag `mirror` des Skills in `tools/catalog.json`; auf der Spiegelseite wird nie committet. Ein `--dry-run` zeigt, was gepusht würde. Im Split liegen `SKILL.md`, `INSTALL.md`, `transcribe.py`, `scripts/` und `references/` an der Wurzel. Der CLI-Einstieg darf deshalb keine Toolbox-Pfade voraussetzen.
+Die Toolbox bleibt die Entwicklungsquelle. Die Spiegelung ins Team-Repository bei SBB übernimmt das Toolbox-Skript `tools/mirror-skill/mirror-skill.sh transcribe`: es exportiert den Skill-Unterordner mit eigener History per `git subtree split` (deterministisch, gleiche Commits ergeben gleiche Hashes), prüft, dass der Zielbranch ein Vorfahre des Splits ist, und pusht nur vorwärts, inklusive Tag `v<version>` aus `plugin.json`. Ziel-Remote, URL und Branch stehen im Eintrag `mirror` des Skills in `tools/catalog.json`; auf der Spiegelseite wird nie committet. Ein `--dry-run` zeigt, was gepusht würde. Im Split liegen `SKILL.md`, `INSTALL.md`, `transcribe.py`, `scripts/`, `requirements/` und `references/` an der Wurzel. Der CLI-Einstieg darf deshalb keine Toolbox-Pfade voraussetzen.
 
 `python scripts/build_skill.py` (Legacy-Wrapper: `scripts/build-skill.sh`) erzeugt aus dem committeten Stand ein `.skill`-Archiv. Tests und Entwicklungsunterlagen sind über `.gitattributes` ausgeschlossen; Installationsanleitung, Parameterreferenz und Laufzeit bleiben enthalten. Für Releases im Toolbox- und Split-Layout die portable CLI-Hilfe und die Regressionstests prüfen.

@@ -1,0 +1,9 @@
+# On-device speaker separation runtime (profile `local-speakers`). These pins
+# are deliberate: the pyannote stack broke repeatedly on Windows, so only its
+# transitive dependencies float with `scripts/lock.py --upgrade`.
+pyannote.audio==3.3.2   # 4.x is broken on Windows + extra gated repo
+huggingface_hub==0.25.2 # 1.x drops use_auth_token paths pyannote needs
+matplotlib              # imported unconditionally by pyannote 3.x
+soundfile               # in-memory decode, bypasses torchaudio backends
+torch==2.6.0            # CUDA hosts swap in the +cu124 build (setup.TORCH_PINS_GPU)
+torchaudio==2.6.0
