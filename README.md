@@ -178,6 +178,7 @@ ai-toolbox/
     ├── catalog.json             ← der Tool-Katalog
     ├── bump-version.{sh,ps1}    ← Versions-Bumper
     ├── githooks/                ← pre-commit / post-commit
+    ├── stay-alive/              ← Windows-Sitzung wach halten (kein Standby, kein Leerlauf-Timeout)
     └── terminal-paste-probe/    ← Diagnose: verschluckte Pastes in TUI-Apps (ConPTY-Test, Raw-Input-Logger)
 ```
 
