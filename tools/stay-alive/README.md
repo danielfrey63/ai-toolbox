@@ -1,6 +1,6 @@
 # Stay Alive
 
-`stay-alive.ps1` hält eine Windows-Sitzung (lokal oder in RDP) wach: kein Standby, kein Abschalten des Bildschirms, kein Leerlauf-Timeout. Nur Windows, darum keine bash-Variante.
+`stay-alive.ps1` hält eine Windows-Sitzung (lokal, RDP oder VDI) wach: kein Standby, kein Abschalten des Bildschirms, kein Leerlauf-Timeout, optional auch kein VPN-Leerlauf. Nur Windows, darum keine bash-Variante.
 
 ## Funktionsweise
 
@@ -13,7 +13,15 @@ Pro Durchlauf zeigt es die Leerlaufzeit vor und nach dem Anstoss. Die zweite Zah
 ```powershell
 pwsh -File tools\stay-alive\stay-alive.ps1
 pwsh -File tools\stay-alive\stay-alive.ps1 -IntervalSeconds 30
+# With VPN keep-alive (runs in Windows PowerShell 5.1 too)
+powershell -File tools\stay-alive\stay-alive.ps1 -KeepAliveHost intranet.example.com
 ```
+
+## VPN-Leerlauf (GlobalProtect, Cisco Secure Client)
+
+VPN-Gateways sehen weder Maus noch Tastatur. Sie trennen, wenn eine Zeit lang kein Verkehr durch den Tunnel geht (GlobalProtect «Inactivity Logout», Cisco «Idle Timeout»). Mit `-KeepAliveHost` baut das Skript alle `-KeepAliveMinutes` (Default 5) eine TCP-Verbindung zu einem internen Host auf (`-KeepAlivePort`, Default 443). Der Host muss nur über den Tunnel erreichbar sein; ein TCP-Handshake genügt, ohne HTTP, Proxy oder Zertifikate. In der Ausgabe steht dann `vpn ok`, bei Problemen gelb `vpn timeout` oder `vpn failed: …`.
+
+Gegen eine maximale Sitzungsdauer des Gateways (GlobalProtect «Login Lifetime», Cisco «Session Timeout») hilft das nicht. Welche Grenze greift, steht in der Warnmeldung bzw. im Client-Log.
 
 ## Warum nicht `SendKeys`
 
