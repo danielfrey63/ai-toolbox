@@ -28,6 +28,8 @@ param(
 $ErrorActionPreference = 'Stop'
 # Console output carries German umlauts; without this the default OEM codepage mangles them.
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
+# Get-LastActivity, Resolve-ProjectDir (shared with the session-move tools)
+. (Join-Path $PSScriptRoot '..\session-move\CCProjects.ps1')
 
 $projectsDir = Join-Path $env:USERPROFILE '.claude\projects'
 $trashDir = Join-Path $env:USERPROFILE '.claude\projects-trash'
@@ -83,30 +85,6 @@ function Move-SessionToTrash([System.IO.FileInfo]$transcript, [string]$label) {
         Write-Log "skipped $($transcript.Directory.Name)\$($transcript.Name): $($_.Exception.Message)"
         return $false
     }
-}
-
-# Last activity of a transcript: the newest inner "timestamp" beats the file mtime, because resume
-# pickers, cloud bridges and sync tools touch files without adding content - mtime alone would
-# re-protect old sessions forever. Files without inner timestamps (bridge stubs) fall back to mtime.
-# Byte-based tail read: Get-Content -Tail is prohibitively slow on multi-MB single-line transcripts.
-function Get-LastActivity([System.IO.FileInfo]$file) {
-    try {
-        $fs = [IO.File]::Open($file.FullName, 'Open', 'Read', 'ReadWrite')
-        try {
-            $len = [int][Math]::Min(262144, $fs.Length)
-            $fs.Seek(-$len, 'End') | Out-Null
-            $buf = New-Object byte[] $len
-            $read = 0
-            while ($read -lt $len) {
-                $n = $fs.Read($buf, $read, $len - $read)
-                if ($n -le 0) { break }
-                $read += $n
-            }
-        } finally { $fs.Close() }
-        $m = [regex]::Matches([Text.Encoding]::UTF8.GetString($buf), '"timestamp"\s*:\s*"([^"]+)"')
-        if ($m.Count -gt 0) { return ([datetime]$m[$m.Count - 1].Groups[1].Value).ToLocalTime() }
-    } catch {}
-    return $file.LastWriteTime
 }
 
 # Human-readable session label: the first real user message (what the resume picker shows). Injected
@@ -259,32 +237,11 @@ foreach ($projectDir in Get-ChildItem $projectsDir -Directory) {
 # strict prefix of - the kept copy carries no extra information and goes to trash. Diverged copies are
 # reported and left alone.
 $deduped = 0
-# Liveness per project dir - among equal-content copies the copy in the dir the user works in today
+# Liveness per project dir – among equal-content copies the copy in the dir the user works in today
 # must survive, or the session disappears from the resume picker. Neither the cwd recorded inside a
 # copy (may point one or two migrations back) nor the file mtime (touched by pickers and sync tools)
-# identifies the current location. The munged dir name itself is the only ground truth: walk existing
-# directories from the drive root and match munged component names to see whether the dir still
-# corresponds to an openable path.
-function Resolve-ProjectDir([string]$name) {
-    if ($name -notmatch '^([A-Za-z])--(.+)$') { return $null }
-    $root = "$($matches[1]):\"
-    if (-not (Test-Path -LiteralPath $root)) { return $null }
-    $stack = [Collections.Generic.Stack[object[]]]::new()
-    $stack.Push(@($root, $matches[2]))
-    while ($stack.Count -gt 0) {
-        $cur, $rest = $stack.Pop()
-        foreach ($child in Get-ChildItem -LiteralPath $cur -Directory -Force -ErrorAction SilentlyContinue) {
-            $m = $child.Name -replace '[^A-Za-z0-9]', '-'
-            if ($rest -ieq $m) { return $child.FullName }
-            # Munged names are ambiguous ("-" may be "\", " ", "." ...), so follow every child whose
-            # munged name is a component prefix of the remainder.
-            if ($rest.Length -gt $m.Length -and $rest.StartsWith("$m-", 'OrdinalIgnoreCase')) {
-                $stack.Push(@($child.FullName, $rest.Substring($m.Length + 1)))
-            }
-        }
-    }
-    return $null
-}
+# identifies the current location. The munged dir name itself is the only ground truth:
+# Resolve-ProjectDir walks existing directories from the drive root and matches munged components.
 $dirScore = @{}
 $dirPath = @{}
 foreach ($d in Get-ChildItem $projectsDir -Directory) {
