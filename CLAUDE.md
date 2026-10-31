@@ -34,6 +34,7 @@ Sobald ein Text **in Daniels Namen** entworfen wird (Chat, Mail, Teams) – in j
 - **Bei Unsicherheit fragen.** Lieber eine kurze Rückfrage als eine falsche Annahme – besonders bei Scope, Pfaden, destruktiven Aktionen und Architektur-Entscheidungen.
 - **Keine Duplikation.** Vor neuem Code prüfen, ob Konstante/Helfer/Klasse/Pattern bereits existiert. Wenn die bestehende Lösung nicht exakt passt: leicht abstrahieren und wiederverwenden statt kopieren und anpassen.
 - **Desired-State / Idempotenz.** ALLE Skripte (Setup, Build, Deploy, Migration, Cleanup, …) müssen beliebig oft ausführbar sein, ohne Seiteneffekte oder Fehler zu produzieren. Mutationen erfolgen nur, wenn der Zielzustand vom Ist-Zustand abweicht – vor jedem Schritt prüfen statt blind ausführen. Re-Runs nach Abbruch oder Teilerfolg dürfen nie schaden.
+- **Python-Abhängigkeiten nur in Environments.** Keine globalen `pip install` in die System- bzw. scoop-Python, auch keine Reparaturen wie `pip install --force-reinstall`. Wegwerf-Skripte laufen über `uv run --with <paket> python -I …`, Projekte bekommen ein eigenes `.venv`.
 - **Code-Änderungen mit Write/Edit, nie per Bash-Heredoc.** Quellcode und Konfigdateien werden mit den Datei-Tools (Write, Edit) geschrieben oder gepatcht. Bash-Heredocs (`python - <<'EOF'`, `cat <<EOF`) sind nur für Wegwerf-Skripte ohne Escape-Sequenzen geeignet: Der Tool-Transport wandelt Sequenzen wie `\x00`, `\x11` oder `\n` in echte Bytes um, was in Python-Quelltext zu Null-Bytes, Steuerzeichen und zerrissenen String-Literalen führt.
 - **Verbesserungs-Loop nach jedem Run.** Nach jeder Ausführung eines Skills, MCP-Servers oder Skripts werden aus den gemachten Erfahrungen automatisch konkrete Verbesserungsvorschläge generiert – Reibung, Fehlerfälle, Edge-Cases, Effizienz-Gewinne, Bugs, missverständliche Defaults, fehlende Idempotenz, schlechte Help-Texte. Jeder Vorschlag mit Zielort (welches Skript/welche Skill-Definition/welcher Tool-Code), kurzer Begründung, und falls möglich konkretem Diff/Patch-Vorschlag. Ausgabe direkt im Anschluss an den Run, nicht erst auf Nachfrage.
 
@@ -52,4 +53,4 @@ Sobald ein Text **in Daniels Namen** entworfen wird (Chat, Mail, Teams) – in j
 
 Die globale Settings-Baseline steht versioniert in `claude-settings.json` (dieses Repo) und wird mit `toolbox install --what claude-settings` nach `~/.claude/settings.json` gemerged. Braucht eine Aufgabe ein dort abgeschaltetes Tool, NICHT stillschweigend einen Workaround bauen: den User darauf hinweisen und die Reaktivierung nennen (Eintrag in `claude-settings.json` entfernen, `toolbox remove` + `install`, Session neu starten).
 
-<!-- APP_VERSION: 0.21.33 -->
+<!-- APP_VERSION: 0.22.35 -->
